@@ -995,7 +995,7 @@ function App() {
         : toPendingChecklistItems(sourceUpdate.checklist)
       if (scopedChecklist.length === 0) return
 
-      const patientIdentifier = `${patient.roomNumber} - ${patient.lastName}, ${patient.firstName}`
+      const patientIdentifier = `${patient.roomNumber} — ${patient.lastName.toUpperCase()}`
       const normalizedHistory = priorOrCurrent.map((entry) => ({
         date: entry.date,
         checklist: normalizeChecklistItems(entry.checklist),
@@ -3338,16 +3338,31 @@ function App() {
       return accumulator
     }, { pending: [], completed: [] }),
   [dailyUpdateForm.checklist])
-  const masterChecklistSections = useMemo(() =>
-    masterChecklistItems.reduce<{ pending: MasterChecklistItem[]; completed: MasterChecklistItem[] }>((accumulator, item) => {
-      if (item.completed) {
-        accumulator.completed.push(item)
-      } else {
-        accumulator.pending.push(item)
+  const masterChecklistGroupedByPatient = useMemo(() => {
+    const grouped = new Map<number, { patientIdentifier: string; pending: MasterChecklistItem[]; completed: MasterChecklistItem[] }>()
+
+    masterChecklistItems.forEach((item) => {
+      const existing = grouped.get(item.patientId)
+      if (existing) {
+        if (item.completed) {
+          existing.completed.push(item)
+        } else {
+          existing.pending.push(item)
+        }
+        return
       }
-      return accumulator
-    }, { pending: [], completed: [] }),
-  [masterChecklistItems])
+
+      grouped.set(item.patientId, {
+        patientIdentifier: item.patientIdentifier,
+        pending: item.completed ? [] : [item],
+        completed: item.completed ? [item] : [],
+      })
+    })
+
+    return Array.from(grouped.entries())
+      .map(([patientId, value]) => ({ patientId, ...value }))
+      .sort((a, b) => a.patientIdentifier.localeCompare(b.patientIdentifier, undefined, { numeric: true, sensitivity: 'base' }))
+  }, [masterChecklistItems])
 
   return (
     <div className='min-h-screen pb-20 sm:pb-0'>
@@ -3536,9 +3551,16 @@ function App() {
                   <p className='text-xs text-clay'>
                     Viewing checklist state for {formatDateShortMonthDay(masterChecklistDate)}. Pending items carry forward to future dates; completed items stay on their original completion date.
                   </p>
-                  <div className='space-y-2'>
-                    {masterChecklistSections.pending.map((item) => renderMasterChecklistItem(item, `master-pending-${item.patientId}-${item.viewDate}-${item.index}`))}
-                    {masterChecklistSections.completed.map((item) => renderMasterChecklistItem(item, `master-completed-${item.patientId}-${item.viewDate}-${item.index}`))}
+                  <div className='space-y-3'>
+                    {masterChecklistGroupedByPatient.map((group) => (
+                      <div key={`master-patient-${group.patientId}`} className='space-y-2'>
+                        <p className='text-sm font-semibold text-espresso'>{group.patientIdentifier}</p>
+                        <div className='space-y-2'>
+                          {group.pending.map((item) => renderMasterChecklistItem(item, `master-pending-${item.patientId}-${item.viewDate}-${item.index}`))}
+                          {group.completed.map((item) => renderMasterChecklistItem(item, `master-completed-${item.patientId}-${item.viewDate}-${item.index}`))}
+                        </div>
+                      </div>
+                    ))}
                     {masterChecklistItems.length === 0 ? (
                       <p className='text-xs text-clay'>No checklist items for this date.</p>
                     ) : null}
