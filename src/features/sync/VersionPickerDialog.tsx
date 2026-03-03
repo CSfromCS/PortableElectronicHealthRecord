@@ -8,6 +8,10 @@ type VersionPickerDialogProps = {
   mode?: 'conflict' | 'first-sync'
   versions: SyncVersion[]
   localDeviceTag: string
+  localVersionMeta?: {
+    changedAt: string | null
+    sizeBytes: number
+  } | null
   selectedVersion: string
   onSelectVersion: (value: string) => void
   onResolve: () => Promise<void>
@@ -21,11 +25,26 @@ const formatSize = (sizeBytes: number): string => {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+const formatDateTime = (isoString: string | null): string => {
+  if (!isoString) return '—'
+
+  const date = new Date(isoString)
+  if (Number.isNaN(date.getTime())) return '—'
+
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
 export function VersionPickerDialog({
   open,
   mode = 'conflict',
   versions,
   localDeviceTag,
+  localVersionMeta,
   selectedVersion,
   onSelectVersion,
   onResolve,
@@ -33,6 +52,7 @@ export function VersionPickerDialog({
   isResolving,
 }: VersionPickerDialogProps) {
   const isFirstSync = mode === 'first-sync'
+  const localSizeLabel = localVersionMeta ? formatSize(localVersionMeta.sizeBytes) : '—'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -61,6 +81,11 @@ export function VersionPickerDialog({
             </p>
             <p className='text-xs text-clay'>
               {isFirstSync ? 'Push local data to the room.' : 'Use this device state and overwrite remote.'}
+            </p>
+            <p className='text-xs text-clay'>
+              {formatDateTime(localVersionMeta?.changedAt ?? null)}
+              {' · '}
+              {localSizeLabel}
             </p>
           </button>
 

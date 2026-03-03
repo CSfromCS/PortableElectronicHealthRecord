@@ -92,6 +92,7 @@ import { VersionPickerDialog } from './features/sync/VersionPickerDialog'
 import {
   buildSyncConfig,
   getDefaultSyncEndpoint,
+  getLocalSyncVersionMeta,
   getSyncInsight,
   readSyncConfig,
   resolveConflictKeepLocal,
@@ -99,6 +100,7 @@ import {
   saveSyncConfig,
   syncNow,
   type ConflictResult,
+  type LocalSyncVersionMeta,
   type SyncConfig,
   type SyncInsight,
   type SyncNowResult,
@@ -449,6 +451,7 @@ function App() {
   const [selectedConflictVersion, setSelectedConflictVersion] = useState('local')
   const [syncConflictOpen, setSyncConflictOpen] = useState(false)
   const [syncConflictMode, setSyncConflictMode] = useState<'conflict' | 'first-sync'>('conflict')
+  const [localConflictVersionMeta, setLocalConflictVersionMeta] = useState<LocalSyncVersionMeta | null>(null)
   const [syncInsight, setSyncInsight] = useState<SyncInsight | null>(null)
   const [isSyncInsightLoading, setIsSyncInsightLoading] = useState(false)
   const touchPatientLastModified = useCallback(async (patientId?: number | null) => {
@@ -2864,10 +2867,18 @@ function App() {
       const result = await syncNow(syncConfig)
 
       if (isConflictSyncResult(result)) {
+        let nextLocalConflictVersionMeta: LocalSyncVersionMeta | null = null
+        try {
+          nextLocalConflictVersionMeta = await getLocalSyncVersionMeta(result.config)
+        } catch {
+          nextLocalConflictVersionMeta = null
+        }
+
         setSyncConfig(result.config)
         setConflictVersions(result.versions)
         setSelectedConflictVersion('local')
         setSyncConflictMode(result.kind)
+        setLocalConflictVersionMeta(nextLocalConflictVersionMeta)
         setSyncConflictOpen(true)
         setSyncStatus('conflict')
         setNotice(result.kind === 'first-sync'
@@ -2900,10 +2911,18 @@ function App() {
     try {
       const result = await syncNow(nextConfig)
       if (isConflictSyncResult(result)) {
+        let nextLocalConflictVersionMeta: LocalSyncVersionMeta | null = null
+        try {
+          nextLocalConflictVersionMeta = await getLocalSyncVersionMeta(result.config)
+        } catch {
+          nextLocalConflictVersionMeta = null
+        }
+
         setSyncConfig(result.config)
         setConflictVersions(result.versions)
         setSelectedConflictVersion('local')
         setSyncConflictMode(result.kind)
+        setLocalConflictVersionMeta(nextLocalConflictVersionMeta)
         setSyncConflictOpen(true)
         setSyncStatus('conflict')
         setNotice(result.kind === 'first-sync'
@@ -2939,6 +2958,7 @@ function App() {
       setConflictVersions([])
       setSyncConflictMode('conflict')
       setSelectedConflictVersion('local')
+      setLocalConflictVersionMeta(null)
       applySyncResult(result.config, result.message)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to resolve conflict.'
@@ -5401,7 +5421,8 @@ function App() {
                     ['Check sync status', 'Open Settings → Sync Status to confirm latest room upload time, which device uploaded it, and whether this device has local unsynced changes.'],
                     ['Sync during rounds', 'Tap Sync from the footer (phone) or header (desktop) whenever you finish key edits or before switching devices. Button states: Synced, ↑ Push ready, ↓ Updates available, ⚠ Conflict, or Syncing.'],
                     ['If conflict appears', 'A version picker opens whenever remote data is newer and this device also changed since the last sync. Choose one of the latest versions (or keep local) to continue.'],
-                    ['Keep backup safety', 'Sync excludes photos. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
+                    ['Keep backup safety', 'Sync includes profile, FRICH, vitals, medications, labs, and orders. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
+                    ['If only profile/FRICH pull in', 'This usually means the room still has a legacy snapshot from an older app build. Sync from an updated device once to upgrade the room snapshot, then sync again on the other device.'],
                   ] as [string, string][]).map(([title, detail], i) => (
                     <li key={i} className='flex gap-2.5 items-start'>
                       <span className='shrink-0 w-5 h-5 rounded-full bg-action-primary/15 text-action-primary text-[10px] font-bold flex items-center justify-center mt-0.5'>{i + 1}</span>
@@ -5742,6 +5763,7 @@ function App() {
           mode={syncConflictMode}
           versions={conflictVersions}
           localDeviceTag={syncConfig?.deviceTag ?? 'local-device'}
+          localVersionMeta={localConflictVersionMeta}
           selectedVersion={selectedConflictVersion}
           onSelectVersion={setSelectedConflictVersion}
           onResolve={resolveSyncConflict}

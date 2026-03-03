@@ -273,7 +273,8 @@ Then do a quick manual smoke test:
 
 - JSON backup/restore covers **text data only** — photo attachments are not included.
 - Import keeps currently stored photos; it does not recreate photos from the backup file.
-- Sync currently covers `patients` and `dailyUpdates` tables only.
+- Sync covers `patients`, `dailyUpdates`, `vitals`, `medications`, `labs`, and `orders`.
+- If a room still contains a legacy snapshot from an older build, pull may include only `patients` + `dailyUpdates` until an updated device pushes a fresh snapshot.
 - First sync against an existing room now requires explicit user choice (upload local data or download room data first) to avoid silent overwrite.
 - Conflict protection triggers whenever remote data is newer and local data also changed since last sync (including same-tag/device-name edge cases).
 - Offline support depends on the PWA service worker being registered on first load while online.

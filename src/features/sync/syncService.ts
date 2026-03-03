@@ -21,10 +21,10 @@ type SyncPayload = {
   deviceTag: string
   patients: Patient[]
   dailyUpdates: DailyUpdate[]
-  vitals: VitalEntry[]
-  medications: MedicationEntry[]
-  labs: LabEntry[]
-  orders: OrderEntry[]
+  vitals?: VitalEntry[]
+  medications?: MedicationEntry[]
+  labs?: LabEntry[]
+  orders?: OrderEntry[]
 }
 
 type RemoteDescription = {
@@ -51,6 +51,11 @@ export type SyncVersion = {
   sha: string
   pushedAt: string
   deviceTag: string
+  sizeBytes: number
+}
+
+export type LocalSyncVersionMeta = {
+  changedAt: string | null
   sizeBytes: number
 }
 
@@ -256,20 +261,36 @@ const isSyncPayload = (value: unknown): value is SyncPayload => {
   )
 }
 
+const getMissingSecondaryTables = (payload: SyncPayload): string[] => {
+  const missingTables: string[] = []
+
+  if (payload.vitals === undefined) {
+    missingTables.push('vitals')
+  }
+  if (payload.medications === undefined) {
+    missingTables.push('medications')
+  }
+  if (payload.labs === undefined) {
+    missingTables.push('labs')
+  }
+  if (payload.orders === undefined) {
+    missingTables.push('orders')
+  }
+
+  return missingTables
+}
+
+const buildLegacySnapshotWarning = (missingTables: string[]): string => {
+  if (missingTables.length === 0) return ''
+  return ` Legacy room snapshot does not include ${missingTables.join(', ')}.`
+}
+
 const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
   const patientsToStore = payload.patients.map((patient) => sanitizeImportedPatient(patient))
-  const vitalsToStore = payload.vitals ?? []
-  const medicationsToStore = payload.medications ?? []
-  const labsToStore = payload.labs ?? []
-  const ordersToStore = payload.orders ?? []
 
   await db.transaction('rw', [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders], async () => {
     await db.patients.clear()
     await db.dailyUpdates.clear()
-    await db.vitals.clear()
-    await db.medications.clear()
-    await db.labs.clear()
-    await db.orders.clear()
 
     if (patientsToStore.length > 0) {
       await db.patients.bulkPut(patientsToStore)
@@ -279,20 +300,32 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       await db.dailyUpdates.bulkPut(payload.dailyUpdates)
     }
 
-    if (vitalsToStore.length > 0) {
-      await db.vitals.bulkPut(vitalsToStore)
+    if (payload.vitals !== undefined) {
+      await db.vitals.clear()
+      if (payload.vitals.length > 0) {
+        await db.vitals.bulkPut(payload.vitals)
+      }
     }
 
-    if (medicationsToStore.length > 0) {
-      await db.medications.bulkPut(medicationsToStore)
+    if (payload.medications !== undefined) {
+      await db.medications.clear()
+      if (payload.medications.length > 0) {
+        await db.medications.bulkPut(payload.medications)
+      }
     }
 
-    if (labsToStore.length > 0) {
-      await db.labs.bulkPut(labsToStore)
+    if (payload.labs !== undefined) {
+      await db.labs.clear()
+      if (payload.labs.length > 0) {
+        await db.labs.bulkPut(payload.labs)
+      }
     }
 
-    if (ordersToStore.length > 0) {
-      await db.orders.bulkPut(ordersToStore)
+    if (payload.orders !== undefined) {
+      await db.orders.clear()
+      if (payload.orders.length > 0) {
+        await db.orders.bulkPut(payload.orders)
+      }
     }
   })
 }
@@ -481,6 +514,22 @@ export const getSyncInsight = async (currentConfig: SyncConfig): Promise<SyncIns
   }
 }
 
+export const getLocalSyncVersionMeta = async (currentConfig: SyncConfig): Promise<LocalSyncVersionMeta> => {
+  const config = {
+    ...currentConfig,
+    syncEndpoint: normalizeSyncEndpoint(currentConfig.syncEndpoint),
+  }
+
+  const payload = await exportSyncPayload(config.deviceTag)
+  const encryptedBlob = await encryptPayloadToBlob(payload, config.roomCode)
+  const changedAt = await getLatestLocalChangeAt()
+
+  return {
+    changedAt,
+    sizeBytes: encryptedBlob.length,
+  }
+}
+
 export const readSyncConfig = (): SyncConfig | null => {
   if (typeof window === 'undefined') return null
 
@@ -650,6 +699,7 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
 
     const remotePayload = await pullSnapshot(linkedConfig)
     await replaceSyncedTables(remotePayload)
+    const legacySnapshotWarning = buildLegacySnapshotWarning(getMissingSecondaryTables(remotePayload))
 
     const syncedConfig = {
       ...linkedConfig,
@@ -661,7 +711,7 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
     return {
       config: syncedConfig,
       operation: 'pull',
-      message: 'Pulled latest room data.',
+      message: `Pulled latest room data.${legacySnapshotWarning}`,
     }
   }
 
@@ -688,6 +738,7 @@ export const resolveConflictWithVersion = async (
   const lastSyncedAt = remoteCheck?.updatedAt ?? toIsoNow()
   const payload = await pullSnapshot(config, prepareVersionShaForPull(versionSha))
   await replaceSyncedTables(payload)
+  const legacySnapshotWarning = buildLegacySnapshotWarning(getMissingSecondaryTables(payload))
 
   const updatedConfig = {
     ...config,
@@ -698,7 +749,7 @@ export const resolveConflictWithVersion = async (
   return {
     config: updatedConfig,
     operation: 'pull',
-    message: 'Pulled selected room version.',
+    message: `Pulled selected room version.${legacySnapshotWarning}`,
   }
 }
 
