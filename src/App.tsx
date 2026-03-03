@@ -977,7 +977,9 @@ function App() {
   }, [allDailyUpdates])
 
   const masterChecklistItems = useMemo<MasterChecklistItem[]>(() => {
-    const sortedPatients = [...(patients ?? [])].sort((a, b) => {
+    const sortedPatients = (patients ?? [])
+      .filter((patient) => patient.status === 'active')
+      .sort((a, b) => {
       const byRoom = a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
       if (byRoom !== 0) return byRoom
       return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
@@ -1443,7 +1445,7 @@ function App() {
     [profileForm, selectedPatientId],
   )
 
-  const selectPatient = async (patient: Patient) => {
+  const selectPatient = async (patient: Patient, options?: { preserveSelectedTab?: boolean }) => {
     const patientId = patient.id ?? null
     if (patientId === null) return
 
@@ -1499,7 +1501,9 @@ function App() {
     setAttachmentFilter('all')
     setAttachmentTitle(buildDefaultPhotoTitle('profile'))
     setSelectedAttachmentId(null)
-    setSelectedTab('profile')
+    if (!options?.preserveSelectedTab) {
+      setSelectedTab('profile')
+    }
   }
 
   const toggleDischarge = async (patient: Patient) => {
@@ -3720,7 +3724,7 @@ function App() {
             {view === 'checklist' ? (
               <Card className='bg-warm-ivory border-clay shadow-sm'>
                 <CardHeader className='pb-2'>
-                  <CardTitle className='text-base text-espresso'>Master Checklist (All Patients)</CardTitle>
+                  <CardTitle className='text-base text-espresso'>Master Checklist (Active Patients)</CardTitle>
                 </CardHeader>
                 <CardContent className='space-y-3'>
                   <div className='space-y-1 max-w-60'>
@@ -3764,7 +3768,7 @@ function App() {
                       if (!Number.isFinite(nextId) || selectedPatient.id === nextId) return
                       const nextPatient = quickSwitchPatients.find((patient) => patient.id === nextId)
                       if (!nextPatient) return
-                      void selectPatient(nextPatient)
+                      void selectPatient(nextPatient, { preserveSelectedTab: true })
                     }}
                   >
                     <SelectTrigger
@@ -5348,7 +5352,7 @@ function App() {
                     ['Navigate on mobile', 'The bottom bar shows all 8 patient sections in a 2-row grid — tap any to switch. Use ← Back to return to the patient list.'],
                     ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different patient while staying on the same section.'],
                     ['Write daily notes', 'Open FRICH, pick today\'s date, fill F-R-I-C-H-M-O-N-D fields, plan, and checklist. Use Edit to revise or remove checklist items, and use the drag handle to reorder priorities (on mobile, press and hold the handle then drag). Tap Copy latest entry to carry forward yesterday\'s note with pending checklist items only.'],
-                    ['Review all checklist items', 'Open Checklist from the main navigation to see all patient checklist items for one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Edit, update status, and drag with the handle to reorder within each patient section (on mobile, press and hold then drag).'],
+                    ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Edit, update status, and drag with the handle to reorder within each patient section (on mobile, press and hold then drag).'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],
                     ['Back up your data', 'Go to Settings → Export backup regularly, especially before switching devices or browsers.'],
                   ] as [string, string][]).map(([title, detail], i) => (
