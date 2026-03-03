@@ -91,7 +91,7 @@ Each open patient has eight focused tabs:
 ### Settings
 
 - **Backup / restore** — export all text data as JSON; import replaces text data while keeping current on-device photos.
-- **Encrypted sync (optional)** — link devices with a shared room code and distinct device names, then sync encrypted patients + FRICHMOND updates through the configured proxy endpoint.
+- **Encrypted sync (optional)** — link devices with a shared room code, your user name, and distinct device names, then sync encrypted patients + FRICHMOND updates through the configured proxy endpoint.
 - **Sync status panel** — view latest room upload time/device and whether this device has local unsynced changes.
 - **Review all photos** — open a global photo manager that marks each photo as linked/orphan and supports reassign, delete, and export.
 - **Clear discharged patients** — bulk-remove patients marked as discharged.

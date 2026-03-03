@@ -7,6 +7,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { sha256Hex } from './crypto'
 
 export type SetupDeviceName = string
+export type SetupUsername = string
 
 type SyncSetupDialogProps = {
   open: boolean
@@ -14,8 +15,9 @@ type SyncSetupDialogProps = {
   submitLabel?: string
   initialRoomCode?: string
   initialDeviceName?: SetupDeviceName
+  initialUsername?: SetupUsername
   onOpenChange: (open: boolean) => void
-  onSubmit: (params: { roomCode: string; deviceName: SetupDeviceName }) => Promise<void>
+  onSubmit: (params: { roomCode: string; deviceName: SetupDeviceName; username: SetupUsername }) => Promise<void>
 }
 
 export function SyncSetupDialog({
@@ -24,11 +26,13 @@ export function SyncSetupDialog({
   submitLabel = 'Save & Sync',
   initialRoomCode = '',
   initialDeviceName = 'Phone',
+  initialUsername = '',
   onOpenChange,
   onSubmit,
 }: SyncSetupDialogProps) {
   const [roomCode, setRoomCode] = useState('')
   const [deviceName, setDeviceName] = useState<SetupDeviceName>('Phone')
+  const [username, setUsername] = useState<SetupUsername>('')
   const [roomTagPreview, setRoomTagPreview] = useState('-----')
   const [isSaving, setIsSaving] = useState(false)
   const [showRoomCode, setShowRoomCode] = useState(false)
@@ -52,19 +56,21 @@ export function SyncSetupDialog({
     const prefilledRoomCode = initialRoomCode.trim()
     setRoomCode(prefilledRoomCode)
     setDeviceName(initialDeviceName)
+    setUsername(initialUsername)
     setShowRoomCode(false)
 
     void refreshRoomTagPreview(prefilledRoomCode)
-  }, [initialDeviceName, initialRoomCode, open])
+  }, [initialDeviceName, initialRoomCode, initialUsername, open])
 
   const handleSubmit = async () => {
-    if (!roomCode.trim() || !deviceName.trim()) return
+    if (!roomCode.trim() || !deviceName.trim() || !username.trim()) return
 
     setIsSaving(true)
     try {
       await onSubmit({
         roomCode: roomCode.trim(),
         deviceName: deviceName.trim(),
+        username: username.trim(),
       })
       onOpenChange(false)
     } finally {
@@ -105,6 +111,17 @@ export function SyncSetupDialog({
             </div>
           </div>
           <div className='space-y-1'>
+            <Label htmlFor='sync-username'>Your name</Label>
+            <Input
+              id='sync-username'
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder='Juan Dela Cruz'
+              autoComplete='name'
+            />
+            <p className='text-xs text-clay'>Your name to as <strong>username</strong> to keep track.</p>
+          </div>
+          <div className='space-y-1'>
             <Label htmlFor='sync-device-name'>Device name</Label>
             <Input
               id='sync-device-name'
@@ -121,7 +138,7 @@ export function SyncSetupDialog({
           </div>
           <div className='flex justify-end gap-2 pt-2'>
             <Button variant='secondary' onClick={() => onOpenChange(false)} disabled={isSaving}>Cancel</Button>
-            <Button onClick={() => void handleSubmit()} disabled={isSaving || roomCode.trim().length === 0 || deviceName.trim().length === 0}>
+            <Button onClick={() => void handleSubmit()} disabled={isSaving || roomCode.trim().length === 0 || deviceName.trim().length === 0 || username.trim().length === 0}>
               {isSaving ? 'Saving...' : submitLabel}
             </Button>
           </div>

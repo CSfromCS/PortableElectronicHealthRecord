@@ -14,6 +14,7 @@ const SYNC_DATA_VERSION = 1
 const DEFAULT_SYNC_ENDPOINT = 'https://purh-sync-dfeeeqh8hhdhhfb0.southeastasia-01.azurewebsites.net'
 
 type DeviceName = string
+type SyncUsername = string
 
 type SyncPayload = {
   version: number
@@ -31,6 +32,7 @@ type RemoteDescription = {
   roomTag: string
   lastPushedAt: string
   lastPushedBy: string
+  username?: string
   blobSizeBytes: number
 }
 
@@ -74,6 +76,7 @@ export type SyncConfig = {
   roomCode: string
   roomHash: string
   roomTag: string
+  username: SyncUsername
   deviceName: DeviceName
   deviceTag: string
   gistId: string | null
@@ -121,6 +124,7 @@ const isSyncConfig = (value: unknown): value is SyncConfig => {
     typeof candidate.roomCode === 'string'
     && typeof candidate.roomHash === 'string'
     && typeof candidate.roomTag === 'string'
+    && (candidate.username === undefined || typeof candidate.username === 'string')
     && typeof candidate.deviceName === 'string'
     && candidate.deviceName.trim().length > 0
     && typeof candidate.deviceTag === 'string'
@@ -140,6 +144,7 @@ const parseDescription = (descriptionRaw: string): RemoteDescription | null => {
       || typeof candidate.lastPushedAt !== 'string'
       || typeof candidate.lastPushedBy !== 'string'
       || typeof candidate.blobSizeBytes !== 'number'
+      || (candidate.username !== undefined && typeof candidate.username !== 'string')
     ) {
       return null
     }
@@ -148,6 +153,7 @@ const parseDescription = (descriptionRaw: string): RemoteDescription | null => {
       roomTag: candidate.roomTag,
       lastPushedAt: candidate.lastPushedAt,
       lastPushedBy: candidate.lastPushedBy,
+      username: candidate.username,
       blobSizeBytes: candidate.blobSizeBytes,
     }
   } catch {
@@ -335,6 +341,7 @@ const buildDescription = (config: SyncConfig, blobSizeBytes: number): string => 
     roomTag: config.roomTag,
     lastPushedAt: toIsoNow(),
     lastPushedBy: config.deviceTag,
+    username: config.username,
     blobSizeBytes,
   }
 
@@ -540,8 +547,13 @@ export const readSyncConfig = (): SyncConfig | null => {
     const parsed = JSON.parse(rawValue) as unknown
     if (!isSyncConfig(parsed)) return null
 
+    const normalizedUsername = typeof parsed.username === 'string' && parsed.username.trim().length > 0
+      ? parsed.username.trim()
+      : parsed.deviceName
+
     return {
       ...parsed,
+      username: normalizedUsername,
       syncEndpoint: normalizeSyncEndpoint(parsed.syncEndpoint),
     }
   } catch {
@@ -564,6 +576,7 @@ export const saveSyncConfig = (config: SyncConfig): void => {
 export const buildSyncConfig = async (
   roomCode: string,
   deviceName: DeviceName,
+  username: SyncUsername,
   syncEndpoint?: string,
 ): Promise<SyncConfig> => {
   const normalizedRoomCode = roomCode.trim()
@@ -574,6 +587,10 @@ export const buildSyncConfig = async (
   if (!normalizedDeviceName) {
     throw new Error('Device name is required.')
   }
+  const normalizedUsername = username.trim()
+  if (!normalizedUsername) {
+    throw new Error('User name is required.')
+  }
 
   const roomHash = await sha256Hex(normalizedRoomCode)
   const roomTag = roomHash.slice(0, 5)
@@ -583,6 +600,7 @@ export const buildSyncConfig = async (
     roomCode: normalizedRoomCode,
     roomHash,
     roomTag,
+    username: normalizedUsername,
     deviceName: normalizedDeviceName,
     deviceTag,
     gistId: null,

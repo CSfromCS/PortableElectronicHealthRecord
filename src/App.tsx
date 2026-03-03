@@ -87,7 +87,7 @@ import {
   getPhotoGroupKey,
 } from './features/photos/photoUtils'
 import { SyncButton, type SyncStatus } from './features/sync/SyncButton'
-import { SyncSetupDialog, type SetupDeviceName } from './features/sync/SyncSetupDialog'
+import { SyncSetupDialog, type SetupDeviceName, type SetupUsername } from './features/sync/SyncSetupDialog'
 import { VersionPickerDialog } from './features/sync/VersionPickerDialog'
 import {
   buildSyncConfig,
@@ -2903,12 +2903,12 @@ function App() {
     }
   }, [applySyncResult, isSyncBusy, refreshSyncInsight, syncConfig])
 
-  const handleSyncSetupSubmit = useCallback(async ({ roomCode, deviceName }: { roomCode: string; deviceName: SetupDeviceName }) => {
-    const nextConfig = await buildSyncConfig(roomCode, deviceName, getDefaultSyncEndpoint())
+  const handleSyncSetupSubmit = useCallback(async ({ roomCode, deviceName, username }: { roomCode: string; deviceName: SetupDeviceName; username: SetupUsername }) => {
+    const nextConfig = await buildSyncConfig(roomCode, deviceName, username, getDefaultSyncEndpoint())
     saveSyncConfig(nextConfig)
     setSyncConfig(nextConfig)
     setSyncStatus('idle')
-    setNotice(`Sync configured for ${nextConfig.deviceTag}.`)
+    setNotice(`Sync configured for ${nextConfig.username} (${nextConfig.deviceTag}).`)
 
     setIsSyncBusy(true)
     setSyncStatus('syncing')
@@ -5199,6 +5199,7 @@ function App() {
 
                   <div className='grid gap-1.5 text-xs text-espresso'>
                     <p><strong>Device:</strong> {syncConfig?.deviceTag ?? 'Not configured'}</p>
+                    <p><strong>User:</strong> {syncConfig?.username ?? 'Not configured'}</p>
                     <p><strong>Latest local change:</strong> {formatSyncDateTime(latestLocalChangeAt)}</p>
                     <div className='h-px bg-clay/15 my-1' />
                     <p><strong>Last successful sync:</strong> {formatSyncDateTime(syncConfig?.lastSyncedAt)}</p>
@@ -5418,8 +5419,8 @@ function App() {
                 <ol className='space-y-2'>
                   {([
                     ['Prepare both devices', 'Open PUHRR on both devices and make sure both are connected to the internet during sync.'],
-                    ['Set up sync once', 'Tap the sync button (bottom-right in the mobile footer, top-right on desktop). Enter the same Room code on both devices, then type a Device name (recommended default: Phone). Keep each device name unique (example: Phone, Clerk-Laptop) so you can identify which device pushed each sync.'],
-                    ['Edit sync identity', 'Open Settings → Edit sync settings any time to change this device\'s room code or device name.'],
+                    ['Set up sync once', 'Tap the sync button (bottom-right in the mobile footer, top-right on desktop). Enter the same Room code on both devices, then type your Name and a Device name (recommended default: Phone). Keep each device name unique (example: Phone, Clerk-Laptop) so you can identify which device pushed each sync.'],
+                    ['Edit sync identity', 'Open Settings → Edit sync settings any time to change this device\'s room code, your name, or device name.'],
                     ['Run first sync', 'After setup, PUHRR runs an initial sync. Wait for the success state before closing the dialog.'],
                     ['Understand first sync choices', 'If a room already has data and this device has never synced, PUHRR asks you to pick Upload this device or Download room data first. It will not auto-overwrite.'],
                     ['Check sync status', 'Open Settings → Sync Status to confirm latest room upload time, which device uploaded it, and whether this device has local unsynced changes.'],
@@ -5757,6 +5758,7 @@ function App() {
           title={syncSetupMode === 'edit' ? 'Edit sync settings' : 'Set up sync'}
           submitLabel={syncSetupMode === 'edit' ? 'Update & Sync' : 'Save & Sync'}
           initialRoomCode={syncConfig?.roomCode ?? ''}
+          initialUsername={syncConfig?.username ?? ''}
           initialDeviceName={syncConfig?.deviceName ?? 'Phone'}
           onOpenChange={setSyncSetupOpen}
           onSubmit={handleSyncSetupSubmit}
