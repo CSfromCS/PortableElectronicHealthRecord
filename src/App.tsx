@@ -175,6 +175,7 @@ type MasterChecklistItem = {
   completed: boolean
   createdDate: string | null
   completedDate: string | null
+  lastFoundDate: string | null
 }
 
 type VitalFormState = {
@@ -382,6 +383,8 @@ function App() {
   const [editingMasterChecklistItem, setEditingMasterChecklistItem] = useState<{ patientId: number; index: number; text: string } | null>(null)
   const [draggingDailyChecklistItemIndex, setDraggingDailyChecklistItemIndex] = useState<number | null>(null)
   const [touchDailyChecklistTargetIndex, setTouchDailyChecklistTargetIndex] = useState<number | null>(null)
+  const [draggingMasterChecklistItem, setDraggingMasterChecklistItem] = useState<{ patientId: number; index: number } | null>(null)
+  const [touchMasterChecklistTarget, setTouchMasterChecklistTarget] = useState<{ patientId: number; index: number } | null>(null)
   const [vitalForm, setVitalForm] = useState<VitalFormState>(() => initialVitalForm())
   const [editingVitalId, setEditingVitalId] = useState<number | null>(null)
   const [vitalDraftId, setVitalDraftId] = useState<number | null>(null)
@@ -1004,10 +1007,12 @@ function App() {
       scopedChecklist.forEach((item, index) => {
         let createdDate: string | null = null
         let completedDate: string | null = null
+        let lastFoundDate: string | null = null
 
         normalizedHistory.forEach((historyEntry) => {
           const matchedHistoryItem = historyEntry.checklist.find((historyItem) => historyItem.text === item.text)
           if (!matchedHistoryItem) return
+          lastFoundDate = historyEntry.date
           if (createdDate === null) {
             createdDate = historyEntry.date
           }
@@ -1025,6 +1030,7 @@ function App() {
           completed: item.completed,
           createdDate,
           completedDate,
+          lastFoundDate,
         })
       })
     })
@@ -1848,6 +1854,143 @@ function App() {
     })
   }, [updateMasterChecklist])
 
+  const reorderMasterChecklistItem = useCallback((patientId: number, sourceIndex: number, targetIndex: number) => {
+    void updateMasterChecklist(patientId, (previous) => {
+      const sourceItem = previous[sourceIndex]
+      const targetItem = previous[targetIndex]
+      if (!sourceItem || !targetItem || sourceIndex === targetIndex || sourceItem.completed !== targetItem.completed) return previous
+
+      const matchingIndices = previous.reduce<number[]>((accumulator, item, index) => {
+        if (item.completed === sourceItem.completed) {
+          accumulator.push(index)
+        }
+        return accumulator
+      }, [])
+      const sourcePosition = matchingIndices.indexOf(sourceIndex)
+      const targetPosition = matchingIndices.indexOf(targetIndex)
+      if (sourcePosition < 0 || targetPosition < 0) return previous
+
+      const matchingItems = matchingIndices.map((index) => previous[index])
+      const [movedItem] = matchingItems.splice(sourcePosition, 1)
+      matchingItems.splice(targetPosition, 0, movedItem)
+
+      const nextChecklist = [...previous]
+      matchingIndices.forEach((index, itemPosition) => {
+        nextChecklist[index] = matchingItems[itemPosition]
+      })
+
+      return nextChecklist
+    })
+  }, [updateMasterChecklist])
+
+  const resetMasterChecklistDragState = useCallback(() => {
+    setDraggingMasterChecklistItem(null)
+    setTouchMasterChecklistTarget(null)
+  }, [])
+
+  const startMasterChecklistDrag = useCallback((event: DragEvent<HTMLButtonElement>, patientId: number, index: number) => {
+    event.dataTransfer.effectAllowed = 'move'
+    setDraggingMasterChecklistItem({ patientId, index })
+  }, [])
+
+  const endMasterChecklistDrag = useCallback(() => {
+    resetMasterChecklistDragState()
+  }, [resetMasterChecklistDragState])
+
+  const startMasterChecklistTouchDrag = useCallback((event: TouchEvent<HTMLButtonElement>, patientId: number, index: number) => {
+    event.preventDefault()
+    setDraggingMasterChecklistItem({ patientId, index })
+    setTouchMasterChecklistTarget({ patientId, index })
+  }, [])
+
+  const updateMasterChecklistTouchTarget = useCallback((event: TouchEvent<HTMLButtonElement>) => {
+    if (!draggingMasterChecklistItem) return
+
+    const touchPoint = event.touches[0]
+    if (!touchPoint) return
+
+    const targetElement = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
+    const checklistItemContainer = targetElement?.closest('[data-master-checklist-patient-id][data-master-checklist-index]')
+    if (!(checklistItemContainer instanceof HTMLElement)) {
+      setTouchMasterChecklistTarget(null)
+      return
+    }
+
+    const parsedPatientId = Number.parseInt(checklistItemContainer.dataset.masterChecklistPatientId ?? '', 10)
+    const parsedTargetIndex = Number.parseInt(checklistItemContainer.dataset.masterChecklistIndex ?? '', 10)
+    if (!Number.isInteger(parsedPatientId) || !Number.isInteger(parsedTargetIndex)) {
+      setTouchMasterChecklistTarget(null)
+      return
+    }
+
+    const sourceItem = masterChecklistItems.find((item) => (
+      item.patientId === draggingMasterChecklistItem.patientId && item.index === draggingMasterChecklistItem.index
+    ))
+    const targetItem = masterChecklistItems.find((item) => item.patientId === parsedPatientId && item.index === parsedTargetIndex)
+    if (!sourceItem || !targetItem || sourceItem.patientId !== targetItem.patientId || sourceItem.completed !== targetItem.completed) {
+      setTouchMasterChecklistTarget(null)
+      return
+    }
+
+    event.preventDefault()
+    setTouchMasterChecklistTarget({ patientId: parsedPatientId, index: parsedTargetIndex })
+  }, [draggingMasterChecklistItem, masterChecklistItems])
+
+  const endMasterChecklistTouchDrag = useCallback(() => {
+    if (
+      draggingMasterChecklistItem
+      && touchMasterChecklistTarget
+      && (
+        draggingMasterChecklistItem.patientId !== touchMasterChecklistTarget.patientId
+        || draggingMasterChecklistItem.index !== touchMasterChecklistTarget.index
+      )
+    ) {
+      reorderMasterChecklistItem(
+        draggingMasterChecklistItem.patientId,
+        draggingMasterChecklistItem.index,
+        touchMasterChecklistTarget.index,
+      )
+    }
+
+    resetMasterChecklistDragState()
+  }, [draggingMasterChecklistItem, reorderMasterChecklistItem, resetMasterChecklistDragState, touchMasterChecklistTarget])
+
+  const cancelMasterChecklistTouchDrag = useCallback(() => {
+    resetMasterChecklistDragState()
+  }, [resetMasterChecklistDragState])
+
+  const allowMasterChecklistDrop = useCallback((event: DragEvent<HTMLDivElement>, patientId: number, targetIndex: number) => {
+    if (
+      !draggingMasterChecklistItem
+      || draggingMasterChecklistItem.patientId !== patientId
+      || draggingMasterChecklistItem.index === targetIndex
+    ) return
+
+    const sourceItem = masterChecklistItems.find((item) => (
+      item.patientId === draggingMasterChecklistItem.patientId && item.index === draggingMasterChecklistItem.index
+    ))
+    const targetItem = masterChecklistItems.find((item) => item.patientId === patientId && item.index === targetIndex)
+    if (!sourceItem || !targetItem || sourceItem.completed !== targetItem.completed) return
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+  }, [draggingMasterChecklistItem, masterChecklistItems])
+
+  const dropMasterChecklistItem = useCallback((event: DragEvent<HTMLDivElement>, patientId: number, targetIndex: number) => {
+    event.preventDefault()
+    if (
+      !draggingMasterChecklistItem
+      || draggingMasterChecklistItem.patientId !== patientId
+      || draggingMasterChecklistItem.index === targetIndex
+    ) {
+      resetMasterChecklistDragState()
+      return
+    }
+
+    reorderMasterChecklistItem(patientId, draggingMasterChecklistItem.index, targetIndex)
+    resetMasterChecklistDragState()
+  }, [draggingMasterChecklistItem, reorderMasterChecklistItem, resetMasterChecklistDragState])
+
   const requestEditMasterChecklistItem = useCallback((item: MasterChecklistItem) => {
     setEditingMasterChecklistItem({ patientId: item.patientId, index: item.index, text: item.text })
   }, [])
@@ -1864,11 +2007,18 @@ function App() {
   }, [editingMasterChecklistItem, updateMasterChecklistItemText])
 
   const renderMasterChecklistItem = useCallback((item: MasterChecklistItem, key: string) => (
-    <div key={key} className={`space-y-1 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'}`}>
+    <div
+      key={key}
+      data-master-checklist-patient-id={item.patientId}
+      data-master-checklist-index={item.index}
+      className={`space-y-1 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingMasterChecklistItem?.patientId === item.patientId && draggingMasterChecklistItem.index === item.index ? 'opacity-60' : ''} ${touchMasterChecklistTarget?.patientId === item.patientId && touchMasterChecklistTarget.index === item.index && draggingMasterChecklistItem !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
+      onDragOver={(event) => allowMasterChecklistDrop(event, item.patientId, item.index)}
+      onDrop={(event) => dropMasterChecklistItem(event, item.patientId, item.index)}
+    >
       <div className='flex items-start gap-2'>
         <input
           type='checkbox'
-          className='mt-1 h-4 w-4 accent-action-primary'
+          className='self-center h-4 w-4 accent-action-primary'
           checked={item.completed}
           onChange={(event) => updateMasterChecklistItemCompletion(item.patientId, item.index, event.target.checked)}
           aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
@@ -1876,16 +2026,30 @@ function App() {
         <div className='flex-1'>
           <p className={`whitespace-pre-wrap text-sm ${item.completed ? 'text-clay line-through' : 'text-espresso'}`}>{item.text}</p>
           <p className='text-[11px] text-clay'>
-            {item.patientIdentifier}
-            {item.createdDate ? ` • Created: ${formatDateShortMonthDay(item.createdDate)}` : ''}
+            {item.createdDate ? `Created: ${formatDateShortMonthDay(item.createdDate)}` : ''}
+            {item.lastFoundDate ? ` • Latest: ${formatDateShortMonthDay(item.lastFoundDate)}` : ''}
             {item.completedDate ? ` • Completed: ${formatDateShortMonthDay(item.completedDate)}` : ''}
           </p>
         </div>
-        <Button type='button' variant='ghost' className='h-6 px-2 text-xs' onClick={() => moveMasterChecklistItem(item.patientId, item.index, 'up')} aria-label='Move checklist item up'>
-          <span aria-hidden='true'>↑</span>
-        </Button>
-        <Button type='button' variant='ghost' className='h-6 px-2 text-xs' onClick={() => moveMasterChecklistItem(item.patientId, item.index, 'down')} aria-label='Move checklist item down'>
-          <span aria-hidden='true'>↓</span>
+        <Button
+          type='button'
+          variant='ghost'
+          className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
+          aria-label='Drag checklist item to reorder'
+          draggable
+          onDragStart={(event) => startMasterChecklistDrag(event, item.patientId, item.index)}
+          onDragEnd={endMasterChecklistDrag}
+          onTouchStart={(event) => startMasterChecklistTouchDrag(event, item.patientId, item.index)}
+          onTouchMove={updateMasterChecklistTouchTarget}
+          onTouchEnd={endMasterChecklistTouchDrag}
+          onTouchCancel={cancelMasterChecklistTouchDrag}
+          onKeyDown={(event) => {
+            if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+            event.preventDefault()
+            moveMasterChecklistItem(item.patientId, item.index, event.key === 'ArrowUp' ? 'up' : 'down')
+          }}
+        >
+          <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
         </Button>
         <Button type='button' variant='ghost' className='h-6 px-2 text-xs' onClick={() => requestEditMasterChecklistItem(item)}>
           Edit
@@ -1895,7 +2059,7 @@ function App() {
         </Button>
       </div>
     </div>
-  ), [moveMasterChecklistItem, removeMasterChecklistItem, requestEditMasterChecklistItem, updateMasterChecklistItemCompletion])
+  ), [allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, moveMasterChecklistItem, removeMasterChecklistItem, requestEditMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
@@ -5164,7 +5328,7 @@ function App() {
                     ['Navigate on mobile', 'The bottom bar shows all 8 patient sections in a 2-row grid — tap any to switch. Use ← Back to return to the patient list.'],
                     ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different patient while staying on the same section.'],
                     ['Write daily notes', 'Open FRICH, pick today\'s date, fill F-R-I-C-H-M-O-N-D fields, plan, and checklist. Use Edit to revise or remove checklist items, and use the drag handle to reorder priorities (on mobile, press and hold the handle then drag). Tap Copy latest entry to carry forward yesterday\'s note with pending checklist items only.'],
-                    ['Review all checklist items', 'Open Checklist from the main navigation to see all patient checklist items for one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Edit, reorder, and update status there when needed.'],
+                    ['Review all checklist items', 'Open Checklist from the main navigation to see all patient checklist items for one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Edit, update status, and drag with the handle to reorder within each patient section (on mobile, press and hold then drag).'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],
                     ['Back up your data', 'Go to Settings → Export backup regularly, especially before switching devices or browsers.'],
                   ] as [string, string][]).map(([title, detail], i) => (
