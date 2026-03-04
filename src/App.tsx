@@ -1222,12 +1222,9 @@ function App() {
     const compareByRoom = (a: Patient, b: Patient) =>
       a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
 
-    return [...(patients ?? [])].sort((a, b) => {
-      if (a.status !== b.status) {
-        return a.status === 'active' ? -1 : 1
-      }
-      return compareByRoom(a, b)
-    })
+    return (patients ?? [])
+      .filter((patient) => patient.status === 'active')
+      .sort(compareByRoom)
   }, [patients])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -3762,7 +3759,7 @@ function App() {
               <Card className='border-0 bg-transparent shadow-none sm:bg-white/80 sm:border-clay/25 sm:shadow-md sm:ring-1 sm:ring-clay/10'>
                 <CardHeader className='sticky top-0 z-20 py-2 px-0 pb-2 bg-warm-ivory/97 backdrop-blur-sm border-b border-clay/15 mx-0 sm:static sm:py-3 sm:px-4 sm:pb-0 sm:bg-transparent sm:backdrop-blur-none sm:border-b-0'>
                   <Select
-                    value={selectedPatient.id?.toString() ?? ''}
+                    value={selectedPatient.status === 'active' ? (selectedPatient.id?.toString() ?? '') : ''}
                     onValueChange={(value) => {
                       const nextId = Number.parseInt(value, 10)
                       if (!Number.isFinite(nextId) || selectedPatient.id === nextId) return
@@ -3772,7 +3769,6 @@ function App() {
                     }}
                   >
                     <SelectTrigger
-                      aria-label='Switch focused patient'
                         className='h-auto w-full sm:w-fit max-w-full border-0 bg-transparent px-0 py-0 text-xl font-bold tracking-tight text-espresso shadow-none ring-0 focus:ring-0 focus:ring-offset-0 sm:text-base sm:font-semibold [&>svg]:text-espresso/70'
                     >
                       <SelectValue placeholder='Switch focused patient' />
@@ -5351,7 +5347,7 @@ function App() {
                     ['Add a patient', 'Fill in the form on the Patients tab (room, name, age, sex, service) and tap Add patient.'],
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
                     ['Navigate on mobile', 'The bottom bar shows all 8 patient sections in a 2-row grid — tap any to switch. Use ← Back to return to the patient list.'],
-                    ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different patient while staying on the same section.'],
+                    ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. Discharged patients are hidden from this quick-switch list.'],
                     ['Write daily notes', 'Open FRICH, pick today\'s date, fill F-R-I-C-H-M-O-N-D fields, plan, and checklist. Use Edit to revise or remove checklist items, and use the drag handle to reorder priorities (on mobile, press and hold the handle then drag). Tap Copy latest entry to carry forward yesterday\'s note with pending checklist items only.'],
                     ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Edit, update status, and drag with the handle to reorder within each patient section (on mobile, press and hold then drag).'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],
