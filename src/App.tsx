@@ -4352,7 +4352,7 @@ function App() {
                         </div>
                         {patientVitals && patientVitals.length > 0 ? (
                           <ul className='space-y-1'>
-                            {patientVitals.map((entry) => (
+                            {[...patientVitals].reverse().map((entry) => (
                               <li key={entry.id} className='flex items-center justify-between gap-2 text-sm py-1 border-b border-clay/30 last:border-0'>
                                 {editingVitalId === entry.id ? (
                                   <span className='text-clay italic'>(Editing above...)</span>
