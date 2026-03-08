@@ -56,7 +56,7 @@ Each open patient has eight focused tabs:
 | **FRICHMOND** | Daily progress notes (Fluid, Respiratory, Infectious, Cardiovascular, Hema, Metabolic, Output, Neuro, Drugs), assessment/plan, and a per-date checklist where items can be edited/reordered and only pending items carry forward on copy |
 | **Vitals** | Temp, BP, HR, RR, O₂ saturation with history |
 | **Labs** | CBC, urinalysis, Blood Chemistry, ABG (with auto-calculated pO2/FiO2 and conditional Desired FiO2 when FiO2 > 21% or pO2 < 60; target PaO2 = 60), and Others (custom label + freeform result); trend comparison applies to structured templates, while Others stays plain |
-| **Medications** | Active medication list with status tracking |
+| **Medications** | Structured medication list with status tracking and drag-to-reorder support |
 | **Orders** | Doctor's orders — add, edit status, remove in one place |
 | **Photos** | Camera capture or gallery pick, organized by section category |
 | **Reporting** | Profile/FRICHMOND/vitals/labs/orders/census exports with lab instance selection and comparison support |

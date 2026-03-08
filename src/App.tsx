@@ -393,6 +393,8 @@ function App() {
   const [vitalDirty, setVitalDirty] = useState(false)
   const [medicationForm, setMedicationForm] = useState<MedicationFormState>(() => initialMedicationForm())
   const [editingMedicationId, setEditingMedicationId] = useState<number | null>(null)
+  const [draggingMedicationIndex, setDraggingMedicationIndex] = useState<number | null>(null)
+  const [touchMedicationTargetIndex, setTouchMedicationTargetIndex] = useState<number | null>(null)
   const [orderForm, setOrderForm] = useState<OrderFormState>(() => initialOrderForm())
   const [editingOrderId, setEditingOrderId] = useState<number | null>(null)
   const [orderDraftId, setOrderDraftId] = useState<number | null>(null)
@@ -775,10 +777,15 @@ function App() {
 
     grouped.forEach((list) => {
       list.sort((a, b) => {
-        if (a.status !== b.status) {
-          return a.status === 'active' ? -1 : 1
+        const aOrder = a.sortOrder ?? Number.MAX_SAFE_INTEGER
+        const bOrder = b.sortOrder ?? Number.MAX_SAFE_INTEGER
+        if (aOrder !== bOrder) {
+          return aOrder - bOrder
         }
-        return b.createdAt.localeCompare(a.createdAt)
+        if (a.createdAt !== b.createdAt) {
+          return b.createdAt.localeCompare(a.createdAt)
+        }
+        return (a.id ?? 0) - (b.id ?? 0)
       })
     })
 
@@ -2450,11 +2457,22 @@ function App() {
     setVitalForm(initialVitalForm())
   }
 
+  const getNextMedicationSortOrder = useCallback(async (patientId: number) => {
+    const patientMedications = await db.medications.where('patientId').equals(patientId).toArray()
+    const maxSortOrder = patientMedications.reduce((currentMax, entry, index) => {
+      return Math.max(currentMax, entry.sortOrder ?? index)
+    }, -1)
+    return maxSortOrder + 1
+  }, [])
+
   const addStructuredMedication = async () => {
     if (selectedPatientId === null || !medicationForm.medication.trim()) return
 
+    const nextSortOrder = await getNextMedicationSortOrder(selectedPatientId)
+
     await db.medications.add({
       patientId: selectedPatientId,
+      sortOrder: nextSortOrder,
       medication: medicationForm.medication.trim(),
       dose: medicationForm.dose.trim(),
       route: medicationForm.route.trim(),
@@ -2726,6 +2744,111 @@ function App() {
     setEditingMedicationId(null)
     setMedicationForm(initialMedicationForm())
   }
+
+  const reorderStructuredMedication = useCallback(async (sourceIndex: number, targetIndex: number) => {
+    if (selectedPatientId === null || sourceIndex === targetIndex) return
+
+    const sourceEntry = selectedPatientStructuredMeds[sourceIndex]
+    const targetEntry = selectedPatientStructuredMeds[targetIndex]
+    if (!sourceEntry || !targetEntry) return
+
+    const reorderedEntries = [...selectedPatientStructuredMeds]
+    const [movedEntry] = reorderedEntries.splice(sourceIndex, 1)
+    reorderedEntries.splice(targetIndex, 0, movedEntry)
+
+    await db.transaction('rw', [db.medications], async () => {
+      await Promise.all(reorderedEntries.map((entry, index) => {
+        if (entry.id === undefined) return Promise.resolve(0)
+        return db.medications.update(entry.id, { sortOrder: index })
+      }))
+    })
+
+    await touchPatientLastModified(selectedPatientId)
+  }, [selectedPatientId, selectedPatientStructuredMeds, touchPatientLastModified])
+
+  const startMedicationDrag = useCallback((event: DragEvent<HTMLButtonElement>, index: number) => {
+    event.dataTransfer.effectAllowed = 'move'
+    setDraggingMedicationIndex(index)
+  }, [])
+
+  const resetMedicationDragState = useCallback(() => {
+    setDraggingMedicationIndex(null)
+    setTouchMedicationTargetIndex(null)
+  }, [])
+
+  const endMedicationDrag = useCallback(() => {
+    resetMedicationDragState()
+  }, [resetMedicationDragState])
+
+  const startMedicationTouchDrag = useCallback((event: TouchEvent<HTMLButtonElement>, index: number) => {
+    event.preventDefault()
+    setDraggingMedicationIndex(index)
+    setTouchMedicationTargetIndex(index)
+  }, [])
+
+  const updateMedicationTouchTarget = useCallback((event: TouchEvent<HTMLButtonElement>) => {
+    if (draggingMedicationIndex === null) return
+
+    const touchPoint = event.touches[0]
+    if (!touchPoint) return
+
+    const targetElement = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
+    const medicationItemContainer = targetElement?.closest('[data-medication-index]')
+    if (!(medicationItemContainer instanceof HTMLElement)) {
+      setTouchMedicationTargetIndex(null)
+      return
+    }
+
+    const parsedTargetIndex = Number.parseInt(medicationItemContainer.dataset.medicationIndex ?? '', 10)
+    if (!Number.isInteger(parsedTargetIndex)) {
+      setTouchMedicationTargetIndex(null)
+      return
+    }
+
+    event.preventDefault()
+    setTouchMedicationTargetIndex(parsedTargetIndex)
+  }, [draggingMedicationIndex])
+
+  const endMedicationTouchDrag = useCallback(() => {
+    if (
+      draggingMedicationIndex !== null
+      && touchMedicationTargetIndex !== null
+      && draggingMedicationIndex !== touchMedicationTargetIndex
+    ) {
+      void reorderStructuredMedication(draggingMedicationIndex, touchMedicationTargetIndex)
+    }
+
+    resetMedicationDragState()
+  }, [draggingMedicationIndex, reorderStructuredMedication, resetMedicationDragState, touchMedicationTargetIndex])
+
+  const cancelMedicationTouchDrag = useCallback(() => {
+    resetMedicationDragState()
+  }, [resetMedicationDragState])
+
+  const allowMedicationDrop = useCallback((event: DragEvent<HTMLLIElement>, targetIndex: number) => {
+    if (draggingMedicationIndex === null || draggingMedicationIndex === targetIndex) return
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+  }, [draggingMedicationIndex])
+
+  const dropMedicationItem = useCallback((event: DragEvent<HTMLLIElement>, targetIndex: number) => {
+    event.preventDefault()
+    if (draggingMedicationIndex === null || draggingMedicationIndex === targetIndex) {
+      resetMedicationDragState()
+      return
+    }
+
+    void reorderStructuredMedication(draggingMedicationIndex, targetIndex)
+    resetMedicationDragState()
+  }, [draggingMedicationIndex, reorderStructuredMedication, resetMedicationDragState])
+
+  const moveMedicationByDirection = useCallback((index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (targetIndex < 0 || targetIndex >= selectedPatientStructuredMeds.length) return
+
+    void reorderStructuredMedication(index, targetIndex)
+  }, [reorderStructuredMedication, selectedPatientStructuredMeds.length])
 
   const addStructuredLab = async () => {
     if (selectedPatientId === null) return
@@ -3172,6 +3295,7 @@ function App() {
       await db.medications.bulkAdd([
         {
           patientId: samplePatientId,
+          sortOrder: 0,
           medication: 'Ceftriaxone',
           dose: '2 g',
           route: 'IV',
@@ -3182,6 +3306,7 @@ function App() {
         },
         {
           patientId: samplePatientId,
+          sortOrder: 1,
           medication: 'Azithromycin',
           dose: '500 mg',
           route: 'PO',
@@ -3192,6 +3317,7 @@ function App() {
         },
         {
           patientId: samplePatientId,
+          sortOrder: 2,
           medication: 'Amlodipine',
           dose: '10 mg',
           route: 'PO',
@@ -3202,6 +3328,7 @@ function App() {
         },
         {
           patientId: samplePatientId,
+          sortOrder: 3,
           medication: 'Metformin',
           dose: '500 mg',
           route: 'PO',
@@ -4457,19 +4584,49 @@ function App() {
                         </div>
                         {selectedPatientStructuredMeds.length > 0 ? (
                           <ul className='space-y-1'>
-                            {selectedPatientStructuredMeds.map((entry) => (
-                              <li key={entry.id} className='flex items-center justify-between gap-2 text-sm py-1 border-b border-clay/30 last:border-0'>
+                            {selectedPatientStructuredMeds.map((entry, index) => (
+                              <li
+                                key={entry.id}
+                                data-medication-index={index}
+                                className={cn(
+                                  'flex items-center justify-between gap-2 rounded-sm border-b border-clay/30 py-1 text-sm last:border-0',
+                                  draggingMedicationIndex === index && 'opacity-60',
+                                  touchMedicationTargetIndex === index && draggingMedicationIndex !== null && 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent',
+                                )}
+                                onDragOver={(event) => allowMedicationDrop(event, index)}
+                                onDrop={(event) => dropMedicationItem(event, index)}
+                              >
                                 {editingMedicationId === entry.id ? (
                                   <span className='text-clay italic'>(Editing above...)</span>
                                 ) : (
                                   <>
-                                      <span className='whitespace-pre-wrap'>
-                                        <MentionText
-                                          text={`${entry.medication} ${entry.dose} ${entry.route} ${entry.frequency}${entry.note ? ` — ${entry.note}` : ''} • ${entry.status}`}
-                                          attachmentByTitle={mentionableAttachmentByTitle}
-                                          onOpenPhotoById={openPhotoById}
-                                        />
-                                      </span>
+                                    <span className='whitespace-pre-wrap flex-1'>
+                                      <MentionText
+                                        text={`${entry.medication} ${entry.dose} ${entry.route} ${entry.frequency}${entry.note ? ` — ${entry.note}` : ''} • ${entry.status}`}
+                                        attachmentByTitle={mentionableAttachmentByTitle}
+                                        onOpenPhotoById={openPhotoById}
+                                      />
+                                    </span>
+                                    <Button
+                                      type='button'
+                                      variant='ghost'
+                                      className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
+                                      aria-label='Drag medication to reorder'
+                                      draggable
+                                      onDragStart={(event) => startMedicationDrag(event, index)}
+                                      onDragEnd={endMedicationDrag}
+                                      onTouchStart={(event) => startMedicationTouchDrag(event, index)}
+                                      onTouchMove={updateMedicationTouchTarget}
+                                      onTouchEnd={endMedicationTouchDrag}
+                                      onTouchCancel={cancelMedicationTouchDrag}
+                                      onKeyDown={(event) => {
+                                        if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+                                        event.preventDefault()
+                                        moveMedicationByDirection(index, event.key === 'ArrowUp' ? 'up' : 'down')
+                                      }}
+                                    >
+                                      <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
+                                    </Button>
                                     <Button size='sm' variant='edit' onClick={() => startEditingMedication(entry)}>Edit</Button>
                                   </>
                                 )}
@@ -5386,7 +5543,7 @@ function App() {
                     ['FRICH', 'Date-based F-R-I-C-H-M-O-N-D daily notes, assessment, plan, and checklist'],
                     ['Vitals', 'Structured BP/HR/RR/Temp/SpO2 log with date & time entries'],
                     ['Labs', 'CBC, UA, Blood Chem, ABG templates + free-text with date/time'],
-                    ['Meds', 'Structured medication list: drug, dose, route, frequency, status'],
+                    ['Meds', 'Structured medication list: drug, dose, route, frequency, status, plus drag-to-reorder'],
                     ['Orders', "Doctor's orders with date, time, service & status tracking"],
                     ['Photos', 'Categorized image attachments with grouped uploads & carousel'],
                     ['Report', 'Copy-ready text exports for handoffs, census, vitals & labs'],
@@ -5414,6 +5571,7 @@ function App() {
                     'All patient exports: select and reorder active patients before generating Multiple Census or Multiple Vitals.',
                     'Photos: upload multiple images at once — they are grouped into one block. Tap the block to open a swipeable carousel.',
                     'Settings → Review all photos lets you find linked/orphan photos and reassign, delete, or export each photo.',
+                    'Meds: use the drag handle to match medication order with the standing order sheet (on mobile, press and hold then drag).',
                     'Orders: use Edit on any order to update its status (active, carried out, discontinued) or remove it.',
                     'The report preview popup supports manual text selection — select only what you need, or use Copy full text.',
                   ] as string[]).map((tip, i) => (

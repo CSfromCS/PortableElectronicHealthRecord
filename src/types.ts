@@ -62,6 +62,7 @@ export interface VitalEntry {
 export interface MedicationEntry {
   id?: number
   patientId: number
+  sortOrder?: number
   medication: string
   dose: string
   route: string
