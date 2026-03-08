@@ -106,7 +106,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil } from 'lucide-react'
 
 type PatientFormState = {
   roomNumber: string
@@ -1803,8 +1803,14 @@ function App() {
       >
         <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
       </Button>
-      <Button type='button' variant='ghost' className='h-6 px-2 text-xs' onClick={() => requestEditDailyChecklistItem(index)}>
-        Edit
+      <Button
+        type='button'
+        variant='ghost'
+        className='h-6 w-6 shrink-0 p-0 text-clay'
+        aria-label='Edit checklist item'
+        onClick={() => requestEditDailyChecklistItem(index)}
+      >
+        <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
       </Button>
     </div>
   ), [allowDailyChecklistDrop, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, moveDailyChecklistItemByDirection, requestEditDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistTouchTarget])
@@ -2010,6 +2016,13 @@ function App() {
     setEditingMasterChecklistItem(null)
   }, [editingMasterChecklistItem, updateMasterChecklistItemText])
 
+  const removeEditedMasterChecklistItem = useCallback(() => {
+    if (!editingMasterChecklistItem) return
+
+    removeMasterChecklistItem(editingMasterChecklistItem.patientId, editingMasterChecklistItem.index)
+    setEditingMasterChecklistItem(null)
+  }, [editingMasterChecklistItem, removeMasterChecklistItem])
+
   const renderMasterChecklistItem = useCallback((item: MasterChecklistItem, key: string) => (
     <div
       key={key}
@@ -2055,15 +2068,18 @@ function App() {
         >
           <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
         </Button>
-        <Button type='button' variant='ghost' className='h-6 px-2 text-xs' onClick={() => requestEditMasterChecklistItem(item)}>
-          Edit
-        </Button>
-        <Button type='button' variant='ghost' className='h-6 px-2 text-xs' onClick={() => removeMasterChecklistItem(item.patientId, item.index)}>
-          Remove
+        <Button
+          type='button'
+          variant='ghost'
+          className='h-6 w-6 shrink-0 p-0 text-clay'
+          aria-label='Edit checklist item'
+          onClick={() => requestEditMasterChecklistItem(item)}
+        >
+          <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
         </Button>
       </div>
     </div>
-  ), [allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, moveMasterChecklistItem, removeMasterChecklistItem, requestEditMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistTouchTarget])
+    ), [allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, moveMasterChecklistItem, requestEditMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
@@ -5348,8 +5364,8 @@ function App() {
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
                     ['Navigate on mobile', 'The bottom bar shows all 8 patient sections in a 2-row grid — tap any to switch. Use ← Back to return to the patient list.'],
                     ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. Discharged patients are hidden from this quick-switch list.'],
-                    ['Write daily notes', 'Open FRICH, pick today\'s date, fill F-R-I-C-H-M-O-N-D fields, plan, and checklist. Use Edit to revise or remove checklist items, and use the drag handle to reorder priorities (on mobile, press and hold the handle then drag). Tap Copy latest entry to carry forward yesterday\'s note with pending checklist items only.'],
-                    ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Edit, update status, and drag with the handle to reorder within each patient section (on mobile, press and hold then drag).'],
+                    ['Write daily notes', 'Open FRICH, pick today\'s date, fill F-R-I-C-H-M-O-N-D fields, plan, and checklist. Use the pencil button to revise or remove checklist items, and use the drag handle to reorder priorities (on mobile, press and hold the handle then drag). Tap Copy latest entry to carry forward yesterday\'s note with pending checklist items only.'],
+                    ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Use the pencil button to edit or remove items, update status, and drag with the handle to reorder within each patient section (on mobile, press and hold then drag).'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],
                     ['Back up your data', 'Go to Settings → Export backup regularly, especially before switching devices or browsers.'],
                   ] as [string, string][]).map(([title, detail], i) => (
@@ -5742,6 +5758,7 @@ function App() {
                 placeholder='Checklist item'
               />
               <div className='flex gap-2 justify-end'>
+                <Button variant='destructive' className='mr-auto' onClick={removeEditedMasterChecklistItem}>Remove</Button>
                 <Button variant='secondary' onClick={() => setEditingMasterChecklistItem(null)}>Cancel</Button>
                 <Button onClick={saveEditedMasterChecklistItem}>Save</Button>
               </div>
