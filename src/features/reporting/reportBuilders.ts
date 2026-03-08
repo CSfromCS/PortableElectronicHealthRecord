@@ -186,6 +186,12 @@ export const buildStructuredLabLines = (entries: LabEntry[]) => {
 }
 
 const buildLabReportBlocks = (entries: LabEntry[]) => {
+  const formatDateMMDDSlash = (isoDate: string) => {
+    const [, month, day] = isoDate.split('-')
+    if (!month || !day) return isoDate
+    return `${month}/${day}`
+  }
+
   const sorted = [...entries].sort((a, b) => {
     if (a.date !== b.date) return b.date.localeCompare(a.date)
     const aTime = a.time ?? ''
@@ -223,8 +229,8 @@ const buildLabReportBlocks = (entries: LabEntry[]) => {
       const newerTime = formatClock(newer.time ?? '00:00')
       const olderTime = formatClock(older.time ?? '00:00')
       const headerLine = newer.date === older.date
-        ? `${formatDateMMDD(newer.date)} ${olderTime} vs ${newerTime}`
-        : `${formatDateMMDD(older.date)} ${olderTime} vs ${formatDateMMDD(newer.date)} ${newerTime}`
+        ? `${formatDateMMDD(newer.date)} ${newerTime} vs ${olderTime}`
+        : `${formatDateMMDD(newer.date)} vs ${formatDateMMDD(older.date)}`
 
       const newerStamp = toDateTimeStamp(newer.date, newer.time, newer.createdAt)
       const olderStamp = toDateTimeStamp(older.date, older.time, older.createdAt)
@@ -251,7 +257,7 @@ const buildLabReportBlocks = (entries: LabEntry[]) => {
       : entry.templateId === UST_ABG_TEMPLATE_ID
         ? 'ABG'
         : (template?.name ?? entry.templateId)
-    const dateLine = `${formatDateMMDD(entry.date)} ${formatClock(entry.time ?? '00:00')}`
+    const dateLine = formatDateMMDDSlash(entry.date)
     const body = formatLabSingleReport(
       entry.templateId as 'ust-cbc' | 'ust-urinalysis' | 'ust-electrolytes' | 'ust-abg' | 'others',
       entry.results ?? {},
