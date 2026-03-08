@@ -2058,7 +2058,7 @@ function App() {
         <Button
           type='button'
           variant='ghost'
-          className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
+          className='self-center h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
           aria-label='Drag checklist item to reorder'
           draggable
           onDragStart={(event) => startMasterChecklistDrag(event, item.patientId, item.index)}
@@ -2078,7 +2078,7 @@ function App() {
         <Button
           type='button'
           variant='ghost'
-          className='h-6 w-6 shrink-0 p-0 text-clay'
+          className='self-center h-6 w-6 shrink-0 p-0 text-clay'
           aria-label='Edit checklist item'
           onClick={() => requestEditMasterChecklistItem(item)}
         >
