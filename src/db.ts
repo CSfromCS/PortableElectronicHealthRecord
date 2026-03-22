@@ -72,4 +72,15 @@ db.version(2).stores({
   await Promise.all(updates)
 })
 
+db.version(3).stores({
+  patients: '++id, lastName, roomNumber, service, status, admitDate',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+})
+
 export { db }

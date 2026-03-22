@@ -358,8 +358,24 @@ const isConflictSyncResult = (result: SyncNowResult): result is ConflictResult =
 }
 
 const comparePhotosByNewest = (a: PhotoAttachment, b: PhotoAttachment) => {
+  if (
+    a.uploadGroupId &&
+    b.uploadGroupId &&
+    a.uploadGroupId === b.uploadGroupId &&
+    a.selectionOrderInGroup !== undefined &&
+    b.selectionOrderInGroup !== undefined &&
+    a.selectionOrderInGroup !== b.selectionOrderInGroup
+  ) {
+    return a.selectionOrderInGroup - b.selectionOrderInGroup
+  }
+
   if (a.createdAt !== b.createdAt) {
     return b.createdAt.localeCompare(a.createdAt)
+  }
+
+  const byTitle = a.title.localeCompare(b.title)
+  if (byTitle !== 0) {
+    return byTitle
   }
 
   const aId = a.id ?? Number.MIN_SAFE_INTEGER
@@ -368,7 +384,7 @@ const comparePhotosByNewest = (a: PhotoAttachment, b: PhotoAttachment) => {
     return bId - aId
   }
 
-  return b.title.localeCompare(a.title)
+  return 0
 }
 
 const comparePhotoGroupsByNewest = (a: PhotoAttachmentGroup, b: PhotoAttachmentGroup) => {
@@ -2229,13 +2245,14 @@ function App() {
       const title = attachmentTitle.trim() || buildDefaultPhotoTitle(attachmentCategory)
       const uploadGroupId = buildPhotoUploadGroupId()
       const preparedAttachments = await Promise.all(
-        files.map(async (file) => {
+        files.map(async (file, selectionOrderInGroup) => {
           const compressed = await compressImageFile(file)
           return {
             patientId: selectedPatientId,
             category: attachmentCategory,
             title,
             uploadGroupId,
+            selectionOrderInGroup,
             mimeType: compressed.mimeType,
             width: compressed.width,
             height: compressed.height,
@@ -5642,7 +5659,7 @@ function App() {
                     'Large note text boxes include an expand button when content overflows; tap again to collapse back to default height.',
                     'FRICH exports include a daily vitals range line (BP, HR, RR, Temp, SpO2%) for the selected date.',
                     'All patient exports: select and reorder active patients before generating Multiple Census or Multiple Vitals.',
-                    'Photos: upload multiple images at once — they are grouped into one block. Tap the block to open a carousel, then use Previous/Next, keyboard arrows, Home/End, or thumbnails to jump quickly in large sets.',
+                    'Photos: upload multiple images at once — they are grouped into one block and keep your picker selection order. Tap the block to open a carousel, then use Previous/Next, keyboard arrows, Home/End, or thumbnails to jump quickly in large sets.',
                     'Settings → Review all photos lets you find linked/orphan photos and reassign, delete, or export each photo.',
                     'Meds: use the drag handle to match medication order with the standing order sheet (on mobile, press and hold then drag).',
                     'Orders: use Edit on any order to update its status (active, carried out, discontinued) or remove it.',

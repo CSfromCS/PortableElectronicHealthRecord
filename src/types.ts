@@ -109,6 +109,7 @@ export interface PhotoAttachment {
   category: PhotoCategory
   title: string
   uploadGroupId?: string
+  selectionOrderInGroup?: number
   mimeType: string
   width: number
   height: number
