@@ -3916,7 +3916,7 @@ function App() {
                     >
                       <SelectValue placeholder='Switch focused patient' />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position='item-aligned' className='max-h-[70vh]'>
                       {quickSwitchPatients.map((patient) => {
                         if (patient.id === undefined) return null
 
@@ -5520,7 +5520,7 @@ function App() {
                     ['Add a patient', 'Fill in the form on the Patients tab (room, name, age, sex, service) and tap Add patient.'],
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
                     ['Navigate on mobile', 'The bottom bar shows all 8 patient sections in a 2-row grid — tap any to switch. Use ← Back to return to the patient list.'],
-                    ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. Discharged patients are hidden from this quick-switch list.'],
+                    ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. Discharged patients are hidden from this quick-switch list, and you can scroll through the list when many active patients are present.'],
                     ['Write daily notes', 'Open FRICH, pick today\'s date, fill F-R-I-C-H-M-O-N-D fields, plan, and checklist. Use the pencil button to revise or remove checklist items, and use the drag handle to reorder priorities (on mobile, press and hold the handle then drag). Tap Copy latest entry to carry forward yesterday\'s note with pending checklist items only.'],
                     ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Use the pencil button to edit or remove items, update status, and drag with the handle to reorder within each patient section (on mobile, press and hold then drag).'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],
