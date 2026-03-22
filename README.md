@@ -83,7 +83,7 @@ Each open patient has eight focused tabs:
 - Attach one or multiple photos per upload, categorized by section (Profile, FRICHMOND, Vitals, Medications, Labs, Orders).
 - Each upload batch uses one shared title + category and appears as one gallery block with a photo-count badge.
 - Photo title is auto-prefilled as `Category + date/time`; editable before saving.
-- Tapping a gallery block opens an in-app carousel for that upload set.
+- Tapping a gallery block opens an in-app carousel for that upload set with Previous/Next buttons, keyboard shortcuts (Left/Right + Home/End), and thumbnail jump navigation for large groups.
 - Use `@photo-title` mentions in long-form notes to link directly to an attached photo.
 - Compressed copies stored in IndexedDB for offline viewing.
 - Deleting a photo removes only the in-app copy — the original phone gallery file is untouched.

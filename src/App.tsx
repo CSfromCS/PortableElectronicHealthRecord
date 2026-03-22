@@ -357,6 +357,28 @@ const isConflictSyncResult = (result: SyncNowResult): result is ConflictResult =
   return 'kind' in result && (result.kind === 'conflict' || result.kind === 'first-sync')
 }
 
+const comparePhotosByNewest = (a: PhotoAttachment, b: PhotoAttachment) => {
+  if (a.createdAt !== b.createdAt) {
+    return b.createdAt.localeCompare(a.createdAt)
+  }
+
+  const aId = a.id ?? Number.MIN_SAFE_INTEGER
+  const bId = b.id ?? Number.MIN_SAFE_INTEGER
+  if (aId !== bId) {
+    return bId - aId
+  }
+
+  return b.title.localeCompare(a.title)
+}
+
+const comparePhotoGroupsByNewest = (a: PhotoAttachmentGroup, b: PhotoAttachmentGroup) => {
+  if (a.createdAt !== b.createdAt) {
+    return b.createdAt.localeCompare(a.createdAt)
+  }
+
+  return b.groupId.localeCompare(a.groupId)
+}
+
 const ensurePatientLastModified = (patient: Patient): Patient => {
   return {
     ...patient,
@@ -1053,7 +1075,7 @@ function App() {
   const reviewablePhotoAttachments = useMemo(() => {
     return (photoAttachments ?? [])
       .filter((entry): entry is ReviewablePhotoAttachment => entry.id !== undefined)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .sort(comparePhotosByNewest)
   }, [photoAttachments])
 
   const selectedPatientAllAttachments = useMemo(() => {
@@ -1061,7 +1083,7 @@ function App() {
 
     return (photoAttachments ?? [])
       .filter((entry) => entry.patientId === selectedPatientId)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .sort(comparePhotosByNewest)
   }, [photoAttachments, selectedPatientId])
 
   const selectedPatientAttachmentGroups = useMemo(() => {
@@ -1093,9 +1115,9 @@ function App() {
     return Array.from(groupsById.values())
       .map((group) => ({
         ...group,
-        entries: [...group.entries].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+        entries: [...group.entries].sort(comparePhotosByNewest),
       }))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .sort(comparePhotoGroupsByNewest)
   }, [attachmentFilter, selectedPatientAllAttachments])
 
   const mentionableAttachments = useMemo(() => {
@@ -1170,7 +1192,7 @@ function App() {
       })
 
     for (const entries of grouped.values()) {
-      const sortedEntries = [...entries].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      const sortedEntries = [...entries].sort(comparePhotosByNewest)
       const currentIndex = sortedEntries.findIndex((entry) => entry.id === selectedAttachmentId)
       if (currentIndex >= 0) {
         return {
@@ -1197,6 +1219,57 @@ function App() {
     const nextIndex = (selectedAttachmentCarousel.currentIndex + offset + total) % total
     setSelectedAttachmentId(selectedAttachmentCarousel.entries[nextIndex].id)
   }, [selectedAttachmentCarousel])
+
+  const jumpToCarouselIndex = useCallback((targetIndex: number) => {
+    if (!selectedAttachmentCarousel) return
+
+    const boundedIndex = Math.max(0, Math.min(targetIndex, selectedAttachmentCarousel.entries.length - 1))
+    const entry = selectedAttachmentCarousel.entries[boundedIndex]
+    if (!entry) return
+    setSelectedAttachmentId(entry.id)
+  }, [selectedAttachmentCarousel])
+
+  useEffect(() => {
+    if (!selectedAttachmentCarouselEntry) return
+
+    const handleCarouselKeyDown = (event: KeyboardEvent) => {
+      const target = event.target
+      if (target instanceof HTMLElement) {
+        const tagName = target.tagName.toLowerCase()
+        if (tagName === 'input' || tagName === 'textarea' || target.isContentEditable) {
+          return
+        }
+      }
+
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        moveCarousel('previous')
+        return
+      }
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        moveCarousel('next')
+        return
+      }
+
+      if (event.key === 'Home') {
+        event.preventDefault()
+        jumpToCarouselIndex(0)
+        return
+      }
+
+      if (event.key === 'End' && selectedAttachmentCarousel) {
+        event.preventDefault()
+        jumpToCarouselIndex(selectedAttachmentCarousel.entries.length - 1)
+      }
+    }
+
+    window.addEventListener('keydown', handleCarouselKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleCarouselKeyDown)
+    }
+  }, [jumpToCarouselIndex, moveCarousel, selectedAttachmentCarousel, selectedAttachmentCarouselEntry])
 
   const visiblePatients = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -5569,7 +5642,7 @@ function App() {
                     'Large note text boxes include an expand button when content overflows; tap again to collapse back to default height.',
                     'FRICH exports include a daily vitals range line (BP, HR, RR, Temp, SpO2%) for the selected date.',
                     'All patient exports: select and reorder active patients before generating Multiple Census or Multiple Vitals.',
-                    'Photos: upload multiple images at once — they are grouped into one block. Tap the block to open a swipeable carousel.',
+                    'Photos: upload multiple images at once — they are grouped into one block. Tap the block to open a carousel, then use Previous/Next, keyboard arrows, Home/End, or thumbnails to jump quickly in large sets.',
                     'Settings → Review all photos lets you find linked/orphan photos and reassign, delete, or export each photo.',
                     'Meds: use the drag handle to match medication order with the standing order sheet (on mobile, press and hold then drag).',
                     'Orders: use Edit on any order to update its status (active, carried out, discontinued) or remove it.',
@@ -5698,24 +5771,59 @@ function App() {
                   <p className='text-sm text-clay'>Preview unavailable.</p>
                 )}
                 {selectedAttachmentCarousel && selectedAttachmentCarousel.entries.length > 1 ? (
-                  <div className='flex items-center justify-between gap-2'>
-                    <Button
-                      variant='secondary'
-                      onClick={() => moveCarousel('previous')}
-                    >
-                      <ChevronLeft className='mr-1 h-4 w-4' />
-                      Previous
-                    </Button>
-                    <p className='text-xs text-clay'>
-                      {selectedAttachmentCarousel.currentIndex + 1} of {selectedAttachmentCarousel.entries.length}
-                    </p>
-                    <Button
-                      variant='secondary'
-                      onClick={() => moveCarousel('next')}
-                    >
-                      Next
-                      <ChevronRight className='ml-1 h-4 w-4' />
-                    </Button>
+                  <div className='space-y-2'>
+                    <div className='flex items-center justify-between gap-2'>
+                      <Button
+                        variant='secondary'
+                        onClick={() => moveCarousel('previous')}
+                      >
+                        <ChevronLeft className='mr-1 h-4 w-4' />
+                        Previous
+                      </Button>
+                      <p className='text-xs text-clay'>
+                        {selectedAttachmentCarousel.currentIndex + 1} of {selectedAttachmentCarousel.entries.length}
+                      </p>
+                      <Button
+                        variant='secondary'
+                        onClick={() => moveCarousel('next')}
+                      >
+                        Next
+                        <ChevronRight className='ml-1 h-4 w-4' />
+                      </Button>
+                    </div>
+                    <ScrollArea className='w-full rounded border border-clay/25 bg-white'>
+                      <div className='flex gap-1.5 p-1.5'>
+                        {selectedAttachmentCarousel.entries.map((entry, index) => {
+                          const previewUrl = attachmentPreviewUrls[entry.id]
+                          const isActive = index === selectedAttachmentCarousel.currentIndex
+
+                          return (
+                            <button
+                              key={`carousel-thumb-${entry.id}`}
+                              type='button'
+                              className={cn(
+                                'h-14 w-14 shrink-0 overflow-hidden rounded border transition-colors',
+                                isActive ? 'border-action-primary ring-1 ring-action-primary/40' : 'border-clay/30 hover:border-clay/60',
+                              )}
+                              aria-label={`Jump to photo ${index + 1}`}
+                              onClick={() => jumpToCarouselIndex(index)}
+                            >
+                              {previewUrl ? (
+                                <img
+                                  src={previewUrl}
+                                  alt={entry.title || `Photo ${index + 1}`}
+                                  className='h-full w-full object-cover'
+                                  loading='lazy'
+                                />
+                              ) : (
+                                <div className='h-full w-full bg-warm-ivory' />
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </ScrollArea>
+                    <p className='text-[11px] text-clay'>Tip: use Left/Right arrows, Home/End, or tap any thumbnail to jump.</p>
                   </div>
                 ) : null}
                 <div className='text-sm text-espresso space-y-1'>
