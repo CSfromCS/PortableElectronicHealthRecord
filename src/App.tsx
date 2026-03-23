@@ -407,6 +407,7 @@ function App() {
   const cameraPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const galleryPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const outputPreviewTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const carouselThumbnailButtonRefs = useRef<Record<number, HTMLButtonElement>>({})
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
@@ -1286,6 +1287,19 @@ function App() {
       window.removeEventListener('keydown', handleCarouselKeyDown)
     }
   }, [jumpToCarouselIndex, moveCarousel, selectedAttachmentCarousel, selectedAttachmentCarouselEntry])
+
+  useEffect(() => {
+    if (!selectedAttachmentCarouselEntry) return
+
+    const activeThumbnailButton = carouselThumbnailButtonRefs.current[selectedAttachmentCarouselEntry.id]
+    if (!activeThumbnailButton) return
+
+    activeThumbnailButton.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'center',
+    })
+  }, [selectedAttachmentCarouselEntry])
 
   const visiblePatients = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -5659,7 +5673,7 @@ function App() {
                     'Large note text boxes include an expand button when content overflows; tap again to collapse back to default height.',
                     'FRICH exports include a daily vitals range line (BP, HR, RR, Temp, SpO2%) for the selected date.',
                     'All patient exports: select and reorder active patients before generating Multiple Census or Multiple Vitals.',
-                    'Photos: upload multiple images at once — they are grouped into one block and keep your picker selection order. Tap the block to open a carousel, then use < / >, keyboard arrows, Home/End, or thumbnails to jump quickly in large sets.',
+                    'Photos: upload multiple images at once — they are grouped into one block and keep your picker selection order. Tap the block to open a carousel, then use < / >, keyboard arrows, Home/End, thumbnails, or swipe the thumbnail row on phone to jump quickly in large sets.',
                     'Settings → Review all photos lets you find linked/orphan photos and reassign, delete, or export each photo.',
                     'Meds: use the drag handle to match medication order with the standing order sheet (on mobile, press and hold then drag).',
                     'Orders: use Edit on any order to update its status (active, carried out, discontinued) or remove it.',
@@ -5812,8 +5826,8 @@ function App() {
                         {'>'}
                       </Button>
                     </div>
-                    <ScrollArea className='w-full rounded border border-clay/25 bg-white'>
-                      <div className='flex gap-1.5 p-1.5'>
+                    <div className='w-full overflow-x-auto overflow-y-hidden rounded border border-clay/25 bg-white touch-pan-x'>
+                      <div className='flex w-max min-w-full gap-1.5 p-1.5'>
                         {selectedAttachmentCarousel.entries.map((entry, index) => {
                           const previewUrl = attachmentPreviewUrls[entry.id]
                           const isActive = index === selectedAttachmentCarousel.currentIndex
@@ -5822,6 +5836,14 @@ function App() {
                             <button
                               key={`carousel-thumb-${entry.id}`}
                               type='button'
+                              ref={(element) => {
+                                if (element) {
+                                  carouselThumbnailButtonRefs.current[entry.id] = element
+                                  return
+                                }
+
+                                delete carouselThumbnailButtonRefs.current[entry.id]
+                              }}
                               className={cn(
                                 'h-14 w-14 shrink-0 overflow-hidden rounded border transition-colors',
                                 isActive ? 'border-action-primary ring-1 ring-action-primary/40' : 'border-clay/30 hover:border-clay/60',
@@ -5843,7 +5865,7 @@ function App() {
                           )
                         })}
                       </div>
-                    </ScrollArea>
+                    </div>
                   </div>
                 ) : null}
                 <div className='flex gap-2 flex-wrap'>
