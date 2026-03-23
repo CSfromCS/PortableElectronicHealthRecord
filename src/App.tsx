@@ -5659,7 +5659,7 @@ function App() {
                     'Large note text boxes include an expand button when content overflows; tap again to collapse back to default height.',
                     'FRICH exports include a daily vitals range line (BP, HR, RR, Temp, SpO2%) for the selected date.',
                     'All patient exports: select and reorder active patients before generating Multiple Census or Multiple Vitals.',
-                    'Photos: upload multiple images at once — they are grouped into one block and keep your picker selection order. Tap the block to open a carousel, then use Previous/Next, keyboard arrows, Home/End, or thumbnails to jump quickly in large sets.',
+                    'Photos: upload multiple images at once — they are grouped into one block and keep your picker selection order. Tap the block to open a carousel, then use < / >, keyboard arrows, Home/End, or thumbnails to jump quickly in large sets.',
                     'Settings → Review all photos lets you find linked/orphan photos and reassign, delete, or export each photo.',
                     'Meds: use the drag handle to match medication order with the standing order sheet (on mobile, press and hold then drag).',
                     'Orders: use Edit on any order to update its status (active, carried out, discontinued) or remove it.',
@@ -5770,20 +5770,24 @@ function App() {
         </Dialog>
 
         <Dialog open={selectedAttachmentCarouselEntry !== null} onOpenChange={(open) => { if (!open) setSelectedAttachmentId(null) }}>
-          <DialogContent className='flex flex-col gap-3 p-4 max-h-[92vh] max-w-3xl'>
+          <DialogContent className='flex flex-col gap-2 p-3 w-[95vw] max-w-3xl h-[95vh] max-h-[95vh] md:gap-3 md:p-4 md:h-[92vh] md:max-h-[92vh]'>
             <DialogHeader>
-              <DialogTitle>Photo attachment carousel</DialogTitle>
+              <DialogTitle>
+                {selectedAttachmentCarouselEntry
+                  ? `[${formatPhotoCategory(selectedAttachmentCarouselEntry.category)}] ${selectedAttachmentCarouselEntry.title || 'Untitled'}`
+                  : 'Photo attachment'}
+              </DialogTitle>
             </DialogHeader>
             {selectedAttachmentCarouselEntry ? (
               <>
                 {attachmentPreviewUrls[selectedAttachmentCarouselEntry.id] ? (
-                  <ScrollArea className='max-h-[64vh] rounded border border-clay/30 bg-warm-ivory'>
+                  <div className='flex-1 min-h-0 rounded border border-clay/30 bg-warm-ivory'>
                     <img
                       src={attachmentPreviewUrls[selectedAttachmentCarouselEntry.id]}
                       alt={selectedAttachmentCarouselEntry.title || 'Attachment preview'}
-                      className='w-full h-auto'
+                      className='h-full w-full object-contain'
                     />
-                  </ScrollArea>
+                  </div>
                 ) : (
                   <p className='text-sm text-clay'>Preview unavailable.</p>
                 )}
@@ -5793,9 +5797,9 @@ function App() {
                       <Button
                         variant='secondary'
                         onClick={() => moveCarousel('previous')}
+                        aria-label='Previous photo'
                       >
-                        <ChevronLeft className='mr-1 h-4 w-4' />
-                        Previous
+                        {'<'}
                       </Button>
                       <p className='text-xs text-clay'>
                         {selectedAttachmentCarousel.currentIndex + 1} of {selectedAttachmentCarousel.entries.length}
@@ -5803,9 +5807,9 @@ function App() {
                       <Button
                         variant='secondary'
                         onClick={() => moveCarousel('next')}
+                        aria-label='Next photo'
                       >
-                        Next
-                        <ChevronRight className='ml-1 h-4 w-4' />
+                        {'>'}
                       </Button>
                     </div>
                     <ScrollArea className='w-full rounded border border-clay/25 bg-white'>
@@ -5840,15 +5844,8 @@ function App() {
                         })}
                       </div>
                     </ScrollArea>
-                    <p className='text-[11px] text-clay'>Tip: use Left/Right arrows, Home/End, or tap any thumbnail to jump.</p>
                   </div>
                 ) : null}
-                <div className='text-sm text-espresso space-y-1'>
-                  <p><strong>Category:</strong> {formatPhotoCategory(selectedAttachmentCarouselEntry.category)}</p>
-                  <p><strong>Size:</strong> {formatBytes(selectedAttachmentCarouselEntry.byteSize)} ({selectedAttachmentCarouselEntry.width}×{selectedAttachmentCarouselEntry.height})</p>
-                  <p><strong>Added:</strong> {new Date(selectedAttachmentCarouselEntry.createdAt).toLocaleString()}</p>
-                  <p><strong>Title:</strong> {selectedAttachmentCarouselEntry.title || '-'}</p>
-                </div>
                 <div className='flex gap-2 flex-wrap'>
                   <Button variant='destructive' onClick={() => void deletePhotoAttachment(selectedAttachmentCarouselEntry.id)}>
                     Remove from app
