@@ -1,5 +1,5 @@
 # RoundingApp — Sync PRD
-## Azure Function Proxy + GitHub Gist Storage
+## Cloudflare Worker Proxy + GitHub Gist Storage
 
 ---
 
@@ -12,7 +12,7 @@ The problem: the clerk uses their **phone** during rounds (bedside data entry) a
 This spec adds **push/pull sync** between devices through a shared encrypted cloud store.
 
 ### What's in scope
-- Syncing the `patients` and `dailyUpdates` Dexie stores between devices
+- Syncing the `patients`, `dailyUpdates`, `vitals`, `medications`, `labs`, and `orders` Dexie stores between devices
 - Encryption so the cloud store never sees plaintext patient data
 - Version history (last 5 snapshots) so the user can recover from bad syncs
 - Conflict resolution when both devices have unsaved changes
@@ -28,21 +28,21 @@ This spec adds **push/pull sync** between devices through a shared encrypted clo
 
 ```
 PWA (phone or laptop)
-  → exports patients + dailyUpdates from Dexie as JSON
+  → exports the six synced Dexie tables as JSON
   → encrypts JSON with room code (AES-256-GCM, key derived via PBKDF2)
-  → POST encrypted blob to Azure Function
-    → Azure Function injects GitHub PAT
+  → POST encrypted blob to Cloudflare Worker
+    → Worker injects GitHub PAT
     → forwards to GitHub Gist API (creates/updates a secret Gist)
-  → other device GETs via same Azure Function
+  → other device GETs via the same Worker
   → decrypts with room code
   → replaces local Dexie data with remote snapshot
 ```
 
-**Why Azure Function?** The PWA can't call the GitHub API directly because the Personal Access Token would be visible in client-side JavaScript. The Azure Function is a thin proxy — its only job is adding the `Authorization` header. It never sees plaintext patient data.
+**Why a Cloudflare Worker?** The PWA can't call the GitHub API directly because the Personal Access Token would be visible in client-side JavaScript. The Worker adds the `Authorization` header and maintains a room-tag-to-Gist-ID KV index. It never sees plaintext patient data.
 
-**Why GitHub Gist?** Free, has built-in version history (every update creates a git revision), no infrastructure to manage, and 1MB file size limit is fine for ~100KB of JSON. The clerk's Azure credits cover the Function App (effectively $0/month at this scale).
+**Why GitHub Gist?** It has built-in version history (every update creates a git revision), requires little infrastructure, and its size limit is sufficient for the encrypted text snapshot.
 
-**Why not Azure Blob Storage?** It was the original plan, but Gist gives us version history for free, which matters when the scariest failure mode is "I synced the wrong direction and overwrote my good data."
+**Why not object storage?** Gist provides revision history, which matters when the scariest failure mode is "I synced the wrong direction and overwrote my good data."
 
 ---
 
@@ -50,7 +50,7 @@ PWA (phone or laptop)
 
 ### What gets synced
 
-The entire contents of two Dexie stores, as a single JSON object:
+The entire contents of the six synced Dexie stores, as a single JSON object:
 
 ```
 {
@@ -58,7 +58,11 @@ The entire contents of two Dexie stores, as a single JSON object:
   exportedAt: "<ISO datetime>",
   deviceTag: "a3f2b-Phone",
   patients: [ ...full patients array from Dexie... ],
-  dailyUpdates: [ ...full dailyUpdates array from Dexie... ]
+  dailyUpdates: [ ...full dailyUpdates array from Dexie... ],
+  vitals: [ ...full vitals array from Dexie... ],
+  medications: [ ...full medications array from Dexie... ],
+  labs: [ ...full labs array from Dexie... ],
+  orders: [ ...full orders array from Dexie... ]
 }
 ```
 
@@ -70,13 +74,13 @@ This is **full-state sync**. Every push uploads the complete database snapshot. 
 
 - Photos and photo references (existing photo system is untouched)
 - App settings / preferences
-- Anything outside the `patients` and `dailyUpdates` Dexie stores
+- Anything outside the six synced text tables
 
 ---
 
 ## Encryption
 
-All patient data is encrypted client-side before it leaves the device. The Azure Function and GitHub only ever see an opaque encrypted blob.
+All patient data is encrypted client-side before it leaves the device. The Cloudflare Worker and GitHub only ever see an opaque encrypted blob.
 
 **Scheme**: AES-256-GCM with key derived from the room code via PBKDF2 (100,000 iterations, SHA-256). Random salt and IV per encryption, packed alongside the ciphertext.
 
@@ -129,7 +133,7 @@ This lets a device check "is there new data?" with a cheap metadata fetch, witho
 
 ---
 
-## Azure Function Endpoints
+## Cloudflare Worker Endpoints
 
 Five thin proxy endpoints. Each just adds the GitHub PAT header and forwards to the Gist API.
 
@@ -292,7 +296,7 @@ New localStorage key storing: roomCode, roomHash, roomTag, deviceName, deviceTag
 
 ### No changes to existing Dexie schema
 
-The sync exports whatever is in `patients` and `dailyUpdates`. It doesn't add new stores or indexes. The photo system is untouched.
+The sync exports the existing `patients`, `dailyUpdates`, `vitals`, `medications`, `labs`, and `orders` tables. It doesn't add stores or indexes. The photo system is untouched.
 
 ### New UI components
 
@@ -303,31 +307,32 @@ The sync exports whatever is in `patients` and `dailyUpdates`. It doesn't add ne
 
 ---
 
-## Azure Setup Requirements
+## Cloudflare Setup Requirements
 
-The developer (you) needs to set up before the coding AI builds the app-side sync:
+The deployed sync service requires:
 
 1. **GitHub PAT** (fine-grained) with Gist read/write permission only
-2. **Azure Function App** (Node.js 20, consumption plan, southeastasia region)
-3. **CORS** configured for the PWA's GitHub Pages domain + localhost
-4. **GitHub PAT** stored as an Azure Function app setting (`GITHUB_TOKEN`)
-5. Five functions deployed: push, check, pull, versions, find
+2. **Cloudflare Worker** deployed at `https://puhr-sync.csfromcs.workers.dev`
+3. **CORS** `ALLOWED_ORIGIN` configured as `https://puhrr.christiansarabia.com` with no trailing slash
+4. **GitHub PAT** stored as the Worker secret `GITHUB_TOKEN`
+5. **Cloudflare KV** namespace bound to the Worker as `ROOMS`
+6. Worker routes deployed for push, check, pull, versions, find, and health
 
-The functions are simple HTTP proxies — no npm dependencies beyond the Azure Functions runtime. Total code across all five is roughly 200 lines.
+The Worker is a small HTTP proxy with no application backend or plaintext storage. KV stores only the room-tag-to-Gist-ID lookup.
 
-**Monthly cost**: $0. Azure consumption plan gives 1M free executions/month. At ~10 syncs/day you'll use about 0.1% of that. GitHub Gists are free.
+**Cost**: Expected usage is within the Cloudflare Workers/KV free allowances; verify current provider limits before increasing usage.
 
 ---
 
 ## Security Notes
 
-**Protected**: All patient data is AES-256-GCM encrypted before leaving the device. The Azure Function and GitHub see only opaque blobs. The room code never leaves the browser.
+**Protected**: All patient data is AES-256-GCM encrypted before leaving the device. The Cloudflare Worker and GitHub see only opaque blobs. The room code never leaves the browser.
 
 **Unprotected**: The Gist description contains timestamps, device tags, and blob sizes — no patient data, but an observer could see that sync activity exists.
 
 **Risk**: If someone guesses the room code, they can decrypt the data. For a personal tool used by one person, a reasonable passphrase is sufficient. The Gist is secret (not listed publicly) and requires the GitHub PAT to access.
 
-**Token rotation**: The GitHub PAT should be set to expire (90 days matches a rotation). Set a calendar reminder to regenerate and update the Azure app setting.
+**Token rotation**: The GitHub PAT should be set to expire (90 days matches a rotation). Set a calendar reminder to regenerate it and update the Worker secret.
 
 **Data retention**: Consider setting the Gist to be deleted at the end of the rotation, or periodically rotating to a new Gist. Patient data should not persist in the cloud indefinitely.
 

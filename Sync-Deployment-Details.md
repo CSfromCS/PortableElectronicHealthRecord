@@ -1,10 +1,12 @@
 # Sync Deployment Details — For Coding AI Context
 
-## Azure Function Endpoints (LIVE)
+## Cloudflare Worker Endpoints (LIVE)
 
-Base URL: `https://purh-sync-dfeeeqh8hhdhhfb0.southeastasia-01.azurewebsites.net`
+Base URL: `https://puhr-sync.csfromcs.workers.dev`
 
-All endpoints use `/api/{name}` (no `/sync/` prefix).
+The Worker accepts both `/api/{name}` and `/api/sync/{name}` paths. The PWA uses `/api/sync/{name}`.
+
+Set `ALLOWED_ORIGIN` to the browser origin with no trailing slash: `https://puhrr.christiansarabia.com`. A value ending in `/` does not match the browser's `Origin` header and causes CORS failures.
 
 | Method | URL | Purpose |
 |---|---|---|
@@ -51,6 +53,8 @@ Response:
 ]
 ```
 
+The current Worker may return GitHub-native `{ "version", "committedAt" }` rows. The PWA supports both forms and enriches GitHub-native rows by pulling and decrypting up to five revisions. Returning the four-field form above avoids those additional pulls.
+
 ### GET /api/find
 Response: `{ "gistId": "abc123..." }` or 404 if not found
 
@@ -59,7 +63,7 @@ Response: `{ "gistId": "abc123..." }` or 404 if not found
 Refer to `SyncPlan.md` for full requirements. Summary:
 
 1. **Crypto module** — AES-256-GCM encrypt/decrypt using Web Crypto API, PBKDF2 key derivation from room code, SHA-256 hash for roomTag
-2. **Sync service** — exports `patients` + `dailyUpdates` as JSON, encrypts, pushes/pulls via the endpoints above
+2. **Sync service** — exports patients, daily updates, vitals, medications, labs, and orders as JSON, then encrypts and pushes/pulls via the endpoints above
 3. **Sync UI** — setup dialog (room code + device name), sync button in header, version picker for conflicts
 4. **Only text data syncs** — the existing photo system is untouched, photos stay on-device
 5. **Full-state sync** — every push/pull is the complete database, no per-record diffing

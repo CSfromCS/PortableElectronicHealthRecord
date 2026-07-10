@@ -5693,13 +5693,14 @@ function App() {
                 <ol className='space-y-2'>
                   {([
                     ['Prepare both devices', 'Open PUHRR on both devices and make sure both are connected to the internet during sync.'],
-                    ['Set up sync once', 'Tap the sync button (bottom-right in the mobile footer, top-right on desktop). Enter the same Room code on both devices, then type your Name and a Device name (recommended default: Phone). Keep each device name unique (example: Phone, Clerk-Laptop) so you can identify which device pushed each sync.'],
+                    ['Set up sync once', 'Tap the sync button (bottom-right in the mobile footer, top-right on desktop). Enter the same Room key on both devices, then type your Name and a Device name (recommended default: Phone). Keep each device name unique (example: Phone, Clerk-Laptop) so you can identify which device pushed each sync.'],
                     ['Edit sync identity', 'Open Settings → Edit sync settings any time to change this device\'s room code, your name, or device name.'],
                     ['Run first sync', 'After setup, PUHRR runs an initial sync. Wait for the success state before closing the dialog.'],
                     ['Understand first sync choices', 'If a room already has data and this device has never synced, PUHRR asks you to pick Upload this device or Download room data first. It will not auto-overwrite.'],
                     ['Check sync status', 'Open Settings → Sync Status to confirm latest room upload time, which device uploaded it, and whether this device has local unsynced changes.'],
                     ['Sync during rounds', 'Tap Sync from the footer (phone) or header (desktop) whenever you finish key edits or before switching devices. Button states: Synced, ↑ Push ready, ↓ Updates available, ⚠ Conflict, or Syncing.'],
-                    ['If conflict appears', 'A version picker opens whenever remote data is newer and this device also changed since the last sync. Choose one of the latest versions (or keep local) to continue.'],
+                    ['If conflict appears', 'A version picker opens whenever remote data is newer and this device also changed since the last sync. Choose a room version or keep local. Choosing an older version restores it and uploads it as the room’s latest snapshot.'],
+                    ['If sync cannot connect', 'PUHRR stops without uploading when room lookup or conflict checks fail. Check the connection and retry; a failed check is never treated as an empty room.'],
                     ['Keep backup safety', 'Sync includes profile, FRICH, vitals, medications, labs, and orders. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
                     ['If only profile/FRICH pull in', 'This usually means the room still has a legacy snapshot from an older app build. Sync from an updated device once to upgrade the room snapshot, then sync again on the other device.'],
                   ] as [string, string][]).map(([title, detail], i) => (

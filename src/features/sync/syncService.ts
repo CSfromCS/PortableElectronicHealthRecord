@@ -11,7 +11,10 @@ import { decryptBlobToPayload, encryptPayloadToBlob, sha256Hex } from './crypto'
 
 const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
 const SYNC_DATA_VERSION = 1
-const DEFAULT_SYNC_ENDPOINT = 'https://purh-sync-dfeeeqh8hhdhhfb0.southeastasia-01.azurewebsites.net'
+const DEFAULT_SYNC_ENDPOINT = 'https://puhr-sync.csfromcs.workers.dev'
+const LEGACY_SYNC_HOSTS = new Set([
+  'purh-sync-dfeeeqh8hhdhhfb0.southeastasia-01.azurewebsites.net',
+])
 
 type DeviceName = string
 type SyncUsername = string
@@ -49,6 +52,11 @@ type SyncPullResponse = {
   blob: string
 }
 
+type LegacySyncVersion = {
+  version: string
+  committedAt: string
+}
+
 export type SyncVersion = {
   sha: string
   pushedAt: string
@@ -70,6 +78,12 @@ const isSyncVersion = (value: unknown): value is SyncVersion => {
     && typeof candidate.deviceTag === 'string'
     && typeof candidate.sizeBytes === 'number'
   )
+}
+
+const isLegacySyncVersion = (value: unknown): value is LegacySyncVersion => {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.version === 'string' && typeof candidate.committedAt === 'string'
 }
 
 export type SyncConfig = {
@@ -113,7 +127,16 @@ const normalizeSyncEndpoint = (endpoint?: string): string => {
     return DEFAULT_SYNC_ENDPOINT
   }
 
-  return endpoint.trim().replace(/\/$/, '')
+  const normalizedEndpoint = endpoint.trim().replace(/\/+$/, '')
+
+  try {
+    const url = new URL(normalizedEndpoint)
+    return LEGACY_SYNC_HOSTS.has(url.hostname.toLowerCase())
+      ? DEFAULT_SYNC_ENDPOINT
+      : normalizedEndpoint
+  } catch {
+    return DEFAULT_SYNC_ENDPOINT
+  }
 }
 
 const isSyncConfig = (value: unknown): value is SyncConfig => {
@@ -348,13 +371,58 @@ const buildDescription = (config: SyncConfig, blobSizeBytes: number): string => 
   return JSON.stringify(description)
 }
 
+class SyncRequestError extends Error {
+  readonly status: number
+  readonly body: unknown
+
+  constructor(status: number, message: string, body: unknown) {
+    super(message)
+    this.name = 'SyncRequestError'
+    this.status = status
+    this.body = body
+  }
+}
+
 const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(url, init)
-  if (!response.ok) {
-    throw new Error(`Sync request failed (${response.status}).`)
+  let response: Response
+  try {
+    response = await fetch(url, init)
+  } catch {
+    throw new Error('Unable to reach the sync service. Sync stopped without uploading data.')
   }
 
-  return response.json() as Promise<T>
+  const responseText = await response.text()
+  let responseBody: unknown = null
+  if (responseText) {
+    try {
+      responseBody = JSON.parse(responseText) as unknown
+    } catch {
+      responseBody = responseText
+    }
+  }
+
+  if (!response.ok) {
+    const serverMessage = typeof responseBody === 'string'
+      ? responseBody
+      : responseBody && typeof responseBody === 'object' && typeof (responseBody as Record<string, unknown>).message === 'string'
+        ? String((responseBody as Record<string, unknown>).message)
+        : ''
+    const messageSuffix = serverMessage ? ` ${serverMessage}` : ''
+    throw new SyncRequestError(
+      response.status,
+      `Sync request failed (${response.status}).${messageSuffix}`,
+      responseBody,
+    )
+  }
+
+  if (!responseText) {
+    throw new Error('Sync service returned an empty response.')
+  }
+  if (typeof responseBody === 'string') {
+    throw new Error('Sync service returned an invalid JSON response.')
+  }
+
+  return responseBody as T
 }
 
 const findRoomGist = async (config: SyncConfig): Promise<string | null> => {
@@ -365,8 +433,9 @@ const findRoomGist = async (config: SyncConfig): Promise<string | null> => {
     return typeof response.gistId === 'string' && response.gistId.length > 0
       ? response.gistId
       : null
-  } catch {
-    return null
+  } catch (error) {
+    if (error instanceof SyncRequestError && error.status === 404) return null
+    throw error
   }
 }
 
@@ -386,6 +455,10 @@ const pushSnapshot = async (config: SyncConfig): Promise<SyncResult> => {
       blob: encryptedBlob,
     }),
   })
+
+  if (typeof response.gistId !== 'string' || response.gistId.length === 0) {
+    throw new Error('Sync push returned an invalid Gist ID.')
+  }
 
   const nextConfigWithoutSyncTime: SyncConfig = {
     ...config,
@@ -410,7 +483,10 @@ const pushSnapshot = async (config: SyncConfig): Promise<SyncResult> => {
   }
 }
 
-const pullSnapshot = async (config: SyncConfig, sha?: string): Promise<SyncPayload> => {
+const pullSnapshotWithMeta = async (
+  config: SyncConfig,
+  sha?: string,
+): Promise<{ payload: SyncPayload; blobSizeBytes: number }> => {
   if (!config.gistId) {
     throw new Error('Sync is not linked to a room gist yet.')
   }
@@ -431,19 +507,19 @@ const pullSnapshot = async (config: SyncConfig, sha?: string): Promise<SyncPaylo
     throw new Error('Remote payload version is unsupported. Please update PUHRR on both devices.')
   }
 
-  return payload
+  return { payload, blobSizeBytes: response.blob.length }
+}
+
+const pullSnapshot = async (config: SyncConfig, sha?: string): Promise<SyncPayload> => {
+  return (await pullSnapshotWithMeta(config, sha)).payload
 }
 
 const checkRemote = async (config: SyncConfig): Promise<SyncCheckResponse | null> => {
   if (!config.gistId) return null
 
-  try {
-    return await fetchJson<SyncCheckResponse>(
-      `${config.syncEndpoint}/api/sync/check?gistId=${encodeURIComponent(config.gistId)}`,
-    )
-  } catch {
-    return null
-  }
+  return fetchJson<SyncCheckResponse>(
+    `${config.syncEndpoint}/api/sync/check?gistId=${encodeURIComponent(config.gistId)}`,
+  )
 }
 
 const prepareVersionShaForPull = (versionSha: string): string | undefined => {
@@ -453,18 +529,81 @@ const prepareVersionShaForPull = (versionSha: string): string | undefined => {
 const getRemoteVersions = async (config: SyncConfig, count = 5): Promise<SyncVersion[]> => {
   if (!config.gistId) return []
 
+  const versionCount = Math.min(Math.max(Math.trunc(count), 1), 10)
+  const response = await fetchJson<unknown>(
+    `${config.syncEndpoint}/api/sync/versions?gistId=${encodeURIComponent(config.gistId)}&count=${versionCount}`,
+  )
+
+  if (!Array.isArray(response)) {
+    throw new Error('Sync service returned an invalid version history response.')
+  }
+
+  const versions = await Promise.all(response.slice(0, versionCount).map(async (version): Promise<SyncVersion> => {
+    if (isSyncVersion(version)) return version
+    if (!isLegacySyncVersion(version)) {
+      throw new Error('Sync service returned an incompatible version history entry.')
+    }
+
+    const snapshot = await pullSnapshotWithMeta(config, version.version)
+    return {
+      sha: version.version,
+      pushedAt: snapshot.payload.exportedAt || version.committedAt,
+      deviceTag: snapshot.payload.deviceTag,
+      sizeBytes: snapshot.blobSizeBytes,
+    }
+  }))
+
+  return versions.sort((first, second) => second.pushedAt.localeCompare(first.pushedAt))
+}
+
+const buildFirstSyncResult = async (config: SyncConfig): Promise<ConflictResult> => {
+  const remoteCheck = await checkRemote(config)
+  if (!remoteCheck) {
+    throw new Error('Existing sync room could not be checked.')
+  }
+
+  const remoteDescription = parseDescription(remoteCheck.description)
+  if (remoteDescription && remoteDescription.roomTag !== config.roomTag) {
+    throw new Error('Remote sync room does not match this room code.')
+  }
+
+  const versionsFromServer = await getRemoteVersions(config, 5)
+  const versions = versionsFromServer.length > 0
+    ? versionsFromServer
+    : [{
+      sha: 'latest',
+      pushedAt: remoteDescription?.lastPushedAt ?? remoteCheck.updatedAt,
+      deviceTag: remoteDescription?.lastPushedBy ?? 'remote room version',
+      sizeBytes: remoteDescription?.blobSizeBytes ?? 0,
+    }]
+
+  return {
+    kind: 'first-sync',
+    config,
+    versions,
+    remoteDeviceTag: remoteDescription?.lastPushedBy ?? 'remote room version',
+    remotePushedAt: remoteDescription?.lastPushedAt ?? remoteCheck.updatedAt,
+  }
+}
+
+const getExistingRoomGistId = (error: unknown): string | null => {
+  if (!(error instanceof SyncRequestError) || error.status !== 409) return null
+  if (!error.body || typeof error.body !== 'object') return null
+
+  const gistId = (error.body as Record<string, unknown>).gistId
+  return typeof gistId === 'string' && gistId.length > 0 ? gistId : null
+}
+
+const pushOrJoinExistingRoom = async (config: SyncConfig): Promise<SyncNowResult> => {
   try {
-    const response = await fetchJson<unknown>(
-      `${config.syncEndpoint}/api/sync/versions?gistId=${encodeURIComponent(config.gistId)}&count=${count}`,
-    )
+    return await pushSnapshot(config)
+  } catch (error) {
+    const existingGistId = getExistingRoomGistId(error)
+    if (!existingGistId) throw error
 
-    if (!Array.isArray(response)) return []
-
-    return response
-      .filter(isSyncVersion)
-      .sort((first, second) => second.pushedAt.localeCompare(first.pushedAt))
-  } catch {
-    return []
+    const linkedConfig = { ...config, gistId: existingGistId }
+    saveSyncConfig(linkedConfig)
+    return buildFirstSyncResult(linkedConfig)
   }
 }
 
@@ -551,11 +690,15 @@ export const readSyncConfig = (): SyncConfig | null => {
       ? parsed.username.trim()
       : parsed.deviceName
 
-    return {
+    const normalizedConfig = {
       ...parsed,
       username: normalizedUsername,
       syncEndpoint: normalizeSyncEndpoint(parsed.syncEndpoint),
     }
+    if (normalizedConfig.syncEndpoint !== parsed.syncEndpoint) {
+      window.localStorage.setItem(SYNC_CONFIG_STORAGE_KEY, JSON.stringify(normalizedConfig))
+    }
+    return normalizedConfig
   } catch {
     return null
   }
@@ -622,37 +765,15 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
     if (foundGistId) {
       linkedConfig = { ...linkedConfig, gistId: foundGistId }
       saveSyncConfig(linkedConfig)
-
-      const remoteCheck = await checkRemote(linkedConfig)
-      if (remoteCheck) {
-        const remoteDescription = parseDescription(remoteCheck.description)
-        const versionsFromServer = await getRemoteVersions(linkedConfig, 5)
-        const versions = versionsFromServer.length > 0
-          ? versionsFromServer
-          : [{
-            sha: 'latest',
-            pushedAt: remoteDescription?.lastPushedAt ?? remoteCheck.updatedAt,
-            deviceTag: remoteDescription?.lastPushedBy ?? 'remote room version',
-            sizeBytes: remoteDescription?.blobSizeBytes ?? 0,
-          }]
-        return {
-          kind: 'first-sync',
-          config: linkedConfig,
-          versions,
-          remoteDeviceTag: remoteDescription?.lastPushedBy ?? 'remote room version',
-          remotePushedAt: remoteDescription?.lastPushedAt ?? remoteCheck.updatedAt,
-        }
-      }
-
-      return pushSnapshot(linkedConfig)
+      return buildFirstSyncResult(linkedConfig)
     }
 
-    return pushSnapshot(linkedConfig)
+    return pushOrJoinExistingRoom(linkedConfig)
   }
 
   const remoteCheck = await checkRemote(linkedConfig)
   if (!remoteCheck) {
-    return pushSnapshot(linkedConfig)
+    throw new Error('Linked sync room could not be checked.')
   }
 
   const remoteDescription = parseDescription(remoteCheck.description)
@@ -661,22 +782,7 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
   }
 
   if (!linkedConfig.lastSyncedAt) {
-    const versionsFromServer = await getRemoteVersions(linkedConfig, 5)
-    const versions = versionsFromServer.length > 0
-      ? versionsFromServer
-      : [{
-        sha: 'latest',
-        pushedAt: remoteDescription?.lastPushedAt ?? remoteCheck.updatedAt,
-        deviceTag: remoteDescription?.lastPushedBy ?? 'remote room version',
-        sizeBytes: remoteDescription?.blobSizeBytes ?? 0,
-      }]
-    return {
-      kind: 'first-sync',
-      config: linkedConfig,
-      versions,
-      remoteDeviceTag: remoteDescription?.lastPushedBy ?? 'remote room version',
-      remotePushedAt: remoteDescription?.lastPushedAt ?? remoteCheck.updatedAt,
-    }
+    return buildFirstSyncResult(linkedConfig)
   }
 
   const remotePushedAt = remoteDescription?.lastPushedAt ?? remoteCheck.updatedAt
@@ -753,14 +859,26 @@ export const resolveConflictWithVersion = async (
   versionSha: string,
 ): Promise<SyncResult> => {
   const remoteCheck = await checkRemote(config)
-  const lastSyncedAt = remoteCheck?.updatedAt ?? toIsoNow()
-  const payload = await pullSnapshot(config, prepareVersionShaForPull(versionSha))
+  if (!remoteCheck) {
+    throw new Error('Linked sync room could not be checked.')
+  }
+
+  const preparedVersionSha = prepareVersionShaForPull(versionSha)
+  const payload = await pullSnapshot(config, preparedVersionSha)
   await replaceSyncedTables(payload)
   const legacySnapshotWarning = buildLegacySnapshotWarning(getMissingSecondaryTables(payload))
 
+  if (preparedVersionSha) {
+    const restoredResult = await pushSnapshot(config)
+    return {
+      ...restoredResult,
+      message: `Restored the selected room version as the latest snapshot.${legacySnapshotWarning}`,
+    }
+  }
+
   const updatedConfig = {
     ...config,
-    lastSyncedAt,
+    lastSyncedAt: remoteCheck.updatedAt,
   }
   saveSyncConfig(updatedConfig)
 

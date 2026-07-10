@@ -62,8 +62,8 @@ export function VersionPickerDialog({
         </DialogHeader>
         <p className='text-sm text-clay'>
           {isFirstSync
-            ? 'A room snapshot already exists. Choose whether to upload this device now or download room data first.'
-            : 'Both devices changed since last sync. Pick one version to keep.'}
+            ? 'A room snapshot already exists. Upload this device or choose a room version to restore.'
+            : 'Both devices changed since last sync. Pick one version to keep; an older version becomes the room’s latest snapshot.'}
         </p>
         <div className='space-y-2 max-h-[52vh] overflow-y-auto pr-1'>
           <button
