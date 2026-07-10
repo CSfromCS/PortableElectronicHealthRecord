@@ -7,10 +7,11 @@ import type {
   Patient,
   VitalEntry,
 } from '@/types'
+import { normalizeDailyUpdate } from '@/features/problems/problemUtils'
 import { decryptBlobToPayload, encryptPayloadToBlob, sha256Hex } from './crypto'
 
 const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
-const SYNC_DATA_VERSION = 1
+const SYNC_DATA_VERSION = 2
 const DEFAULT_SYNC_ENDPOINT = 'https://puhr-sync.csfromcs.workers.dev'
 const LEGACY_SYNC_HOSTS = new Set([
   'purh-sync-dfeeeqh8hhdhhfb0.southeastasia-01.azurewebsites.net',
@@ -316,6 +317,7 @@ const buildLegacySnapshotWarning = (missingTables: string[]): string => {
 
 const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
   const patientsToStore = payload.patients.map((patient) => sanitizeImportedPatient(patient))
+  const dailyUpdatesToStore = payload.dailyUpdates.map((update) => normalizeDailyUpdate(update))
 
   await db.transaction('rw', [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders], async () => {
     await db.patients.clear()
@@ -325,8 +327,8 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       await db.patients.bulkPut(patientsToStore)
     }
 
-    if (payload.dailyUpdates.length > 0) {
-      await db.dailyUpdates.bulkPut(payload.dailyUpdates)
+    if (dailyUpdatesToStore.length > 0) {
+      await db.dailyUpdates.bulkPut(dailyUpdatesToStore)
     }
 
     if (payload.vitals !== undefined) {

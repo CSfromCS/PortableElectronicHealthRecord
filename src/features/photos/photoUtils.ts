@@ -2,7 +2,7 @@ import type { PhotoAttachment, PhotoCategory } from '../../types'
 
 export const PHOTO_CATEGORY_OPTIONS: { value: PhotoCategory; label: string }[] = [
   { value: 'profile', label: 'Profile' },
-  { value: 'frichmond', label: 'FRICHMOND' },
+  { value: 'problems', label: 'Problems' },
   { value: 'vitals', label: 'Vitals' },
   { value: 'medications', label: 'Medications' },
   { value: 'labs', label: 'Labs' },

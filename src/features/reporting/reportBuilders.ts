@@ -23,6 +23,7 @@ import type {
   MedicationEntry,
   OrderEntry,
   Patient,
+  ProblemBlock,
   VitalEntry,
 } from '@/types'
 
@@ -40,16 +41,7 @@ type ProfileSummaryInput = {
 }
 
 type DailySummaryInput = {
-  fluid: string
-  respiratory: string
-  infectious: string
-  cardio: string
-  hema: string
-  metabolic: string
-  output: string
-  neuro: string
-  drugs: string
-  other: string
+  problems: ProblemBlock[]
   assessment: string
   plans: string
   checklist: { text: string; completed: boolean }[]
@@ -402,7 +394,7 @@ export const toProfileSummary = (
   return lines.join('\n')
 }
 
-export const toDailySummary = (
+export const toProblemsSummary = (
   patient: Patient,
   update: DailySummaryInput,
   vitalsEntries: VitalEntry[],
@@ -410,27 +402,21 @@ export const toDailySummary = (
 ) => {
   const vitalsLine = buildDailyVitalsRangeLine(vitalsEntries, dailyDate)
   const checklistItems = (update.checklist ?? []).filter((item) => (item.text ?? '').trim().length > 0)
-  const pendingChecklistItems = checklistItems.filter((item) => !item.completed)
-  const completedChecklistItems = checklistItems.filter((item) => item.completed)
+  const problems = (update.problems ?? []).filter((problem) => problem.title.trim() || problem.notes.trim())
+  const problemLines = problems.flatMap((problem, index) => [
+    `${index + 1}. ${problem.title.trim() || 'Untitled problem'}`,
+    problem.notes.trim(),
+  ].filter(Boolean))
 
   const lines = [
     `${formatPatientHeader(patient)} — ${formatDateMMDDYYYY(dailyDate)}`,
     vitalsLine,
-    update.fluid ? `F: ${update.fluid}` : '',
-    update.respiratory ? `R: ${update.respiratory}` : '',
-    update.infectious ? `I: ${update.infectious}` : '',
-    update.cardio ? `C: ${update.cardio}` : '',
-    update.hema ? `H: ${update.hema}` : '',
-    update.metabolic ? `M: ${update.metabolic}` : '',
-    update.output ? `O: ${update.output}` : '',
-    update.neuro ? `N: ${update.neuro}` : '',
-    update.drugs ? `D: ${update.drugs}` : '',
-    update.other ? `Other: ${update.other}` : '',
+    problems.length > 0 ? 'Problems:' : '',
+    ...problemLines,
     update.assessment ? `Assessment: ${update.assessment}` : '',
     update.plans ? `Plan: ${update.plans}` : '',
     checklistItems.length > 0 ? 'Checklist:' : '',
-    ...pendingChecklistItems.map((item) => `- [ ] ${item.text.trim()}`),
-    ...completedChecklistItems.map((item) => `- [x] ${item.text.trim()}`),
+    ...checklistItems.map((item) => `- [${item.completed ? 'x' : ' '}] ${item.text.trim()}`),
   ]
 
   return lines.filter(Boolean).join('\n')

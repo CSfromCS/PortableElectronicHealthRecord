@@ -53,25 +53,26 @@ Each open patient has eight focused tabs:
 | Tab | Purpose |
 |---|---|
 | **Profile** | Demographics plus case-review notes (clinical summary, chief complaint, HPI, PMH, PE), diagnosis, and clinical details |
-| **FRICHMOND** | Daily progress notes (Fluid, Respiratory, Infectious, Cardiovascular, Hema, Metabolic, Output, Neuro, Drugs), assessment/plan, and a per-date checklist where items can be edited/reordered and only pending items carry forward on copy |
+| **Problems** | Ordered, user-defined problem blocks with a title and free-text notes, plus assessment/plan and a per-date checklist |
 | **Vitals** | Temp, BP, HR, RR, O₂ saturation with history |
 | **Labs** | CBC, urinalysis, Blood Chemistry, ABG (with auto-calculated pO2/FiO2 and conditional Desired FiO2 when FiO2 > 21% or pO2 < 60; target PaO2 = 60), and Others (custom label + freeform result); trend comparison applies to structured templates, while Others stays plain |
 | **Medications** | Structured medication list with status tracking and drag-to-reorder support |
 | **Orders** | Doctor's orders — add, edit status, remove in one place |
 | **Photos** | Camera capture or gallery pick, organized by section category |
-| **Reporting** | Profile/FRICHMOND/vitals/labs/orders/census exports with lab instance selection and comparison support |
+| **Reporting** | Profile/problems/vitals/labs/orders/census exports with lab instance selection and comparison support |
 
 ### Master Checklist (Active Patients)
 
 - Date picker shows checklist state for the chosen date across active patients only.
 - Incomplete items carry forward to future dates; completed items stay on their original completion date.
 - Each row shows patient identifier plus created/completed dates (if present), displayed in short format (e.g., `Feb 10`).
-- Checklist entries can be marked done/pending, edited, removed, and reordered from either FRICHMOND or Master Checklist view.
+- Completing a checklist item moves it to the bottom; reopening it moves it before the first completed item.
+- Checklist entries can be marked done/pending, edited, removed, and freely reordered from either Problems or Master Checklist view.
 
 ### Reporting & Export
 
 - **Profile summary** follows room/name header, main/referral service split, `Dx`, and optional `Notes` blocks.
-- **FRICHMOND summary** uses `ROOM - LASTNAME, First — MM-DD-YYYY`, removes orders, includes daily vitals min–max ranges, and appends checklist items as `- [ ]` (pending) / `- [x]` (completed).
+- **Problems summary** uses `ROOM - LASTNAME, First — MM-DD-YYYY`, includes numbered problem blocks and daily vitals min–max ranges, and preserves problem/checklist order.
 - **Vitals summary** supports multi-patient selection and date/time window filtering.
 - **Labs summary** supports arbitrary instance selection per patient; comparison mode runs only when exactly 2 instances of the same non-Others lab template are selected.
 - **Orders summary** supports date/time filtering using order date/time fields and preserves order text exactly as entered.
@@ -80,7 +81,7 @@ Each open patient has eight focused tabs:
 
 ### Photos
 
-- Attach one or multiple photos per upload, categorized by section (Profile, FRICHMOND, Vitals, Medications, Labs, Orders).
+- Attach one or multiple photos per upload, categorized by section (Profile, Problems, Vitals, Medications, Labs, Orders).
 - Each upload batch uses one shared title + category and appears as one gallery block with a photo-count badge.
 - Photos inside the same upload batch preserve the order returned by your picker selection.
 - Photo title is auto-prefilled as `Category + date/time`; editable before saving.
@@ -92,7 +93,7 @@ Each open patient has eight focused tabs:
 ### Settings
 
 - **Backup / restore** — export all text data as JSON; import replaces text data while keeping current on-device photos.
-- **Encrypted sync (optional)** — link devices with a shared room key, your user name, and distinct device names, then sync encrypted patient, FRICHMOND, vitals, medication, lab, and order data through the Cloudflare Worker proxy.
+- **Encrypted sync (optional)** — link devices with a shared room key, your user name, and distinct device names, then sync encrypted patient, problems, vitals, medication, lab, and order data through the Cloudflare Worker proxy.
 - **Sync status panel** — view latest room upload time/device and whether this device has local unsynced changes.
 - **Review all photos** — open a global photo manager that marks each photo as linked/orphan and supports reassign, delete, and export.
 - **Clear discharged patients** — bulk-remove patients marked as discharged.
@@ -229,7 +230,7 @@ public/
 | Store | Contents |
 |---|---|
 | `patients` | Demographics, diagnosis, clinical details, status |
-| `dailyUpdates` | FRICHMOND notes per patient per day |
+| `dailyUpdates` | Ordered problem notes, assessment/plan, and checklist per patient per day |
 | `vitals` | Vital signs history |
 | `medications` | Medication list entries |
 | `labs` | Lab results |
@@ -263,7 +264,7 @@ npm run build
 Then do a quick manual smoke test:
 
 1. Open the app — confirm it loads with title **PUHRR**.
-2. Add a patient, enter a FRICHMOND note, check a generated summary.
+2. Add a patient, enter and reorder problem blocks, then check the generated Problems summary.
 3. Confirm no errors in the browser console.
 4. *(Optional)* Disable network in DevTools → confirm the app still loads and data is accessible.
 5. *(Optional)* Install via browser menu → confirm it opens in standalone mode.

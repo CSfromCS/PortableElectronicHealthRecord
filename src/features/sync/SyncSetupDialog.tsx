@@ -119,7 +119,7 @@ export function SyncSetupDialog({
               placeholder='Juan Dela Cruz'
               autoComplete='name'
             />
-            <p className='text-xs text-clay'>Your name to as <strong>username</strong> to keep track.</p>
+            <p className='text-xs text-clay'>Your name, used as a <strong>username</strong> to identify who made changes.</p>
           </div>
           <div className='space-y-1'>
             <Label htmlFor='sync-device-name'>Device name</Label>

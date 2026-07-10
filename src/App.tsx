@@ -45,11 +45,11 @@ import {
   buildStructuredLabLines,
   formatOrderEntry,
   toCensusEntry,
-  toDailySummary,
   toLabsSummary,
   toMedicationsSummary,
   toOrdersSummary,
   toProfileSummary,
+  toProblemsSummary,
   toSelectedPatientCensusReport,
   toSelectedPatientsVitalsSummary,
   toVitalsLogSummary,
@@ -77,6 +77,8 @@ import {
   type PhotoAttachmentGroup,
   type ReviewablePhotoAttachment,
 } from './features/photos/photoMentions'
+import { ProblemListEditor } from './features/problems/ProblemListEditor'
+import { normalizeDailyUpdate, normalizeProblemBlocks } from './features/problems/problemUtils'
 import {
   PHOTO_CATEGORY_OPTIONS,
   buildDefaultPhotoTitle,
@@ -235,16 +237,7 @@ type ReportingSection = {
 }
 
 const initialDailyUpdateForm: DailyUpdateFormState = {
-  fluid: '',
-  respiratory: '',
-  infectious: '',
-  cardio: '',
-  hema: '',
-  metabolic: '',
-  output: '',
-  neuro: '',
-  drugs: '',
-  other: '',
+  problems: [],
   assessment: '',
   plans: '',
   checklist: [],
@@ -262,6 +255,31 @@ const toPendingChecklistItems = (items: DailyChecklistItem[] | undefined) =>
   normalizeChecklistItems(items)
     .filter((item) => !item.completed)
     .map((item) => ({ ...item, completed: false }))
+
+const reorderChecklistItems = (items: DailyChecklistItem[], sourceIndex: number, targetIndex: number) => {
+  if (sourceIndex === targetIndex || !items[sourceIndex] || !items[targetIndex]) return items
+  const nextItems = [...items]
+  const [movedItem] = nextItems.splice(sourceIndex, 1)
+  nextItems.splice(targetIndex, 0, movedItem)
+  return nextItems
+}
+
+const setChecklistItemCompletion = (items: DailyChecklistItem[], index: number, completed: boolean) => {
+  const currentItem = items[index]
+  if (!currentItem || currentItem.completed === completed) return items
+
+  const nextItems = [...items]
+  nextItems.splice(index, 1)
+  const updatedItem = { ...currentItem, completed }
+  if (completed) {
+    nextItems.push(updatedItem)
+    return nextItems
+  }
+
+  const firstCompletedIndex = nextItems.findIndex((item) => item.completed)
+  nextItems.splice(firstCompletedIndex < 0 ? nextItems.length : firstCompletedIndex, 0, updatedItem)
+  return nextItems
+}
 
 const selectLatestDailyUpdate = (updates: DailyUpdate[]) => {
   if (updates.length === 0) return null
@@ -452,7 +470,7 @@ function App() {
   const [pendingLatestDailyUpdate, setPendingLatestDailyUpdate] = useState<DailyUpdate | null>(null)
   const [deleteDailyConfirmOpen, setDeleteDailyConfirmOpen] = useState(false)
   const [pendingDeleteDailyUpdate, setPendingDeleteDailyUpdate] = useState<DailyUpdate | null>(null)
-  const [selectedTab, setSelectedTab] = useState<'profile' | 'frichmond' | 'vitals' | 'labs' | 'medications' | 'orders' | 'photos' | 'reporting'>('profile')
+  const [selectedTab, setSelectedTab] = useState<'profile' | 'problems' | 'vitals' | 'labs' | 'medications' | 'orders' | 'photos' | 'reporting'>('profile')
   const [notice, setNotice] = useState('')
   const [noticeIsDecaying, setNoticeIsDecaying] = useState(false)
   const [clipboardCopied, setClipboardCopied] = useState(false)
@@ -1386,41 +1404,25 @@ function App() {
       return
     }
 
-    setDailyUpdateId(update.id)
+    const normalizedUpdate = normalizeDailyUpdate(update)
+    setDailyUpdateId(normalizedUpdate.id)
     setDailyUpdateForm({
-      fluid: update.fluid,
-      respiratory: update.respiratory,
-      infectious: update.infectious,
-      cardio: update.cardio,
-      hema: update.hema,
-      metabolic: update.metabolic,
-      output: update.output,
-      neuro: update.neuro,
-      drugs: update.drugs,
-      other: update.other,
-      assessment: update.assessment,
-      plans: update.plans,
-      checklist: normalizeChecklistItems(update.checklist),
+      problems: normalizeProblemBlocks(normalizedUpdate.problems),
+      assessment: normalizedUpdate.assessment,
+      plans: normalizedUpdate.plans,
+      checklist: normalizeChecklistItems(normalizedUpdate.checklist),
     })
     setDailyChecklistDraft('')
     setDailyDirty(false)
   }, [])
 
   const applyDailyUpdateToForm = useCallback((update: DailyUpdate) => {
+    const normalizedUpdate = normalizeDailyUpdate(update)
     setDailyUpdateForm({
-      fluid: update.fluid,
-      respiratory: update.respiratory,
-      infectious: update.infectious,
-      cardio: update.cardio,
-      hema: update.hema,
-      metabolic: update.metabolic,
-      output: update.output,
-      neuro: update.neuro,
-      drugs: update.drugs,
-      other: update.other,
-      assessment: update.assessment,
-      plans: update.plans,
-      checklist: toPendingChecklistItems(update.checklist),
+      problems: normalizeProblemBlocks(normalizedUpdate.problems),
+      assessment: normalizedUpdate.assessment,
+      plans: normalizedUpdate.plans,
+      checklist: toPendingChecklistItems(normalizedUpdate.checklist),
     })
     setDailyChecklistDraft('')
     setDailyDirty(true)
@@ -1694,9 +1696,7 @@ function App() {
   const updateDailyChecklistItemCompletion = useCallback((index: number, completed: boolean) => {
     setDailyUpdateForm((previous) => ({
       ...previous,
-      checklist: previous.checklist.map((item, itemIndex) => (
-        itemIndex === index ? { ...item, completed } : item
-      )),
+      checklist: setChecklistItemCompletion(previous.checklist, index, completed),
     }))
     setDailyDirty(true)
   }, [])
@@ -1745,32 +1745,9 @@ function App() {
 
   const reorderDailyChecklistItem = useCallback((sourceIndex: number, targetIndex: number) => {
     setDailyUpdateForm((previous) => {
-      const sourceItem = previous.checklist[sourceIndex]
-      const targetItem = previous.checklist[targetIndex]
-      if (!sourceItem || !targetItem || sourceIndex === targetIndex || sourceItem.completed !== targetItem.completed) return previous
-
-      const matchingIndices = previous.checklist.reduce<number[]>((accumulator, item, index) => {
-        if (item.completed === sourceItem.completed) {
-          accumulator.push(index)
-        }
-        return accumulator
-      }, [])
-      const sourcePosition = matchingIndices.indexOf(sourceIndex)
-      const targetPosition = matchingIndices.indexOf(targetIndex)
-      if (sourcePosition < 0 || targetPosition < 0) return previous
-
-      const matchingItems = matchingIndices.map((index) => previous.checklist[index])
-      const [movedItem] = matchingItems.splice(sourcePosition, 1)
-      matchingItems.splice(targetPosition, 0, movedItem)
-
-      const nextChecklist = [...previous.checklist]
-      matchingIndices.forEach((index, itemPosition) => {
-        nextChecklist[index] = matchingItems[itemPosition]
-      })
-
       return {
         ...previous,
-        checklist: nextChecklist,
+        checklist: reorderChecklistItems(previous.checklist, sourceIndex, targetIndex),
       }
     })
     setDailyDirty(true)
@@ -1817,7 +1794,7 @@ function App() {
 
     const sourceItem = dailyUpdateForm.checklist[draggingDailyChecklistItemIndex]
     const targetItem = dailyUpdateForm.checklist[parsedTargetIndex]
-    if (!sourceItem || !targetItem || sourceItem.completed !== targetItem.completed) {
+    if (!sourceItem || !targetItem) {
       setTouchDailyChecklistTargetIndex(null)
       return
     }
@@ -1847,7 +1824,7 @@ function App() {
 
     const sourceItem = dailyUpdateForm.checklist[draggingDailyChecklistItemIndex]
     const targetItem = dailyUpdateForm.checklist[targetIndex]
-    if (!sourceItem || !targetItem || sourceItem.completed !== targetItem.completed) return
+    if (!sourceItem || !targetItem) return
 
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
@@ -1865,16 +1842,9 @@ function App() {
   }, [draggingDailyChecklistItemIndex, reorderDailyChecklistItem, resetDailyChecklistDragState])
 
   const moveDailyChecklistItemByDirection = useCallback((index: number, direction: 'up' | 'down') => {
-    const currentItem = dailyUpdateForm.checklist[index]
-    if (!currentItem) return
-
-    const step = direction === 'up' ? -1 : 1
-    for (let candidateIndex = index + step; candidateIndex >= 0 && candidateIndex < dailyUpdateForm.checklist.length; candidateIndex += step) {
-      if (dailyUpdateForm.checklist[candidateIndex]?.completed === currentItem.completed) {
-        reorderDailyChecklistItem(index, candidateIndex)
-        return
-      }
-    }
+    const targetIndex = direction === 'up' ? index - 1 : index + 1
+    if (targetIndex < 0 || targetIndex >= dailyUpdateForm.checklist.length) return
+    reorderDailyChecklistItem(index, targetIndex)
   }, [dailyUpdateForm.checklist, reorderDailyChecklistItem])
 
   const renderDailyChecklistItem = useCallback((item: DailyChecklistItem, index: number) => (
@@ -1926,9 +1896,7 @@ function App() {
   ), [allowDailyChecklistDrop, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, moveDailyChecklistItemByDirection, requestEditDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistTouchTarget])
 
   const updateMasterChecklistItemCompletion = useCallback((patientId: number, index: number, completed: boolean) => {
-    void updateMasterChecklist(patientId, (previous) => previous.map((item, itemIndex) => (
-      itemIndex === index ? { ...item, completed } : item
-    )))
+    void updateMasterChecklist(patientId, (previous) => setChecklistItemCompletion(previous, index, completed))
   }, [updateMasterChecklist])
 
   const removeMasterChecklistItem = useCallback((patientId: number, index: number) => {
@@ -1946,61 +1914,14 @@ function App() {
 
   const moveMasterChecklistItem = useCallback((patientId: number, index: number, direction: 'up' | 'down') => {
     void updateMasterChecklist(patientId, (previous) => {
-      const currentItem = previous[index]
-      if (!currentItem) return previous
-
-      let swapIndex = -1
-      if (direction === 'up') {
-        for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
-          if (previous[candidateIndex]?.completed === currentItem.completed) {
-            swapIndex = candidateIndex
-            break
-          }
-        }
-      } else {
-        for (let candidateIndex = index + 1; candidateIndex < previous.length; candidateIndex += 1) {
-          if (previous[candidateIndex]?.completed === currentItem.completed) {
-            swapIndex = candidateIndex
-            break
-          }
-        }
-      }
-
-      if (swapIndex < 0) return previous
-
-      const nextChecklist = [...previous]
-      ;[nextChecklist[index], nextChecklist[swapIndex]] = [nextChecklist[swapIndex], nextChecklist[index]]
-      return nextChecklist
+      const targetIndex = direction === 'up' ? index - 1 : index + 1
+      if (targetIndex < 0 || targetIndex >= previous.length) return previous
+      return reorderChecklistItems(previous, index, targetIndex)
     })
   }, [updateMasterChecklist])
 
   const reorderMasterChecklistItem = useCallback((patientId: number, sourceIndex: number, targetIndex: number) => {
-    void updateMasterChecklist(patientId, (previous) => {
-      const sourceItem = previous[sourceIndex]
-      const targetItem = previous[targetIndex]
-      if (!sourceItem || !targetItem || sourceIndex === targetIndex || sourceItem.completed !== targetItem.completed) return previous
-
-      const matchingIndices = previous.reduce<number[]>((accumulator, item, index) => {
-        if (item.completed === sourceItem.completed) {
-          accumulator.push(index)
-        }
-        return accumulator
-      }, [])
-      const sourcePosition = matchingIndices.indexOf(sourceIndex)
-      const targetPosition = matchingIndices.indexOf(targetIndex)
-      if (sourcePosition < 0 || targetPosition < 0) return previous
-
-      const matchingItems = matchingIndices.map((index) => previous[index])
-      const [movedItem] = matchingItems.splice(sourcePosition, 1)
-      matchingItems.splice(targetPosition, 0, movedItem)
-
-      const nextChecklist = [...previous]
-      matchingIndices.forEach((index, itemPosition) => {
-        nextChecklist[index] = matchingItems[itemPosition]
-      })
-
-      return nextChecklist
-    })
+    void updateMasterChecklist(patientId, (previous) => reorderChecklistItems(previous, sourceIndex, targetIndex))
   }, [updateMasterChecklist])
 
   const resetMasterChecklistDragState = useCallback(() => {
@@ -2047,7 +1968,7 @@ function App() {
       item.patientId === draggingMasterChecklistItem.patientId && item.index === draggingMasterChecklistItem.index
     ))
     const targetItem = masterChecklistItems.find((item) => item.patientId === parsedPatientId && item.index === parsedTargetIndex)
-    if (!sourceItem || !targetItem || sourceItem.patientId !== targetItem.patientId || sourceItem.completed !== targetItem.completed) {
+    if (!sourceItem || !targetItem || sourceItem.patientId !== targetItem.patientId) {
       setTouchMasterChecklistTarget(null)
       return
     }
@@ -2086,15 +2007,9 @@ function App() {
       || draggingMasterChecklistItem.index === targetIndex
     ) return
 
-    const sourceItem = masterChecklistItems.find((item) => (
-      item.patientId === draggingMasterChecklistItem.patientId && item.index === draggingMasterChecklistItem.index
-    ))
-    const targetItem = masterChecklistItems.find((item) => item.patientId === patientId && item.index === targetIndex)
-    if (!sourceItem || !targetItem || sourceItem.completed !== targetItem.completed) return
-
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
-  }, [draggingMasterChecklistItem, masterChecklistItems])
+  }, [draggingMasterChecklistItem])
 
   const dropMasterChecklistItem = useCallback((event: DragEvent<HTMLDivElement>, patientId: number, targetIndex: number) => {
     event.preventDefault()
@@ -2392,6 +2307,7 @@ function App() {
           patientId: selectedPatientId,
           date: dailyDate,
           ...dailyUpdateForm,
+          problems: normalizeProblemBlocks(dailyUpdateForm.problems),
           checklist: normalizeChecklistItems(dailyUpdateForm.checklist),
           lastUpdated: new Date().toISOString(),
         })
@@ -3261,7 +3177,7 @@ function App() {
           await db.patients.bulkPut(parsed.patients.map((patient) => ensurePatientLastModified(patient)))
         }
         if (parsed.dailyUpdates.length > 0) {
-          await db.dailyUpdates.bulkPut(parsed.dailyUpdates)
+          await db.dailyUpdates.bulkPut(parsed.dailyUpdates.map((update) => normalizeDailyUpdate(update)))
         }
         if ((parsed.vitals ?? []).length > 0) {
           await db.vitals.bulkPut(parsed.vitals ?? [])
@@ -3473,16 +3389,23 @@ function App() {
       await db.dailyUpdates.add({
         patientId: samplePatientId,
         date: today,
-        fluid: 'D5 0.3 NaCl 1L over 8h + oral hydration encouraged.',
-        respiratory: 'Cough less frequent, no accessory muscle use, saturating well on room air.',
-        infectious: 'Afebrile for >24h. Continue antibiotics; monitor culture results.',
-        cardio: 'Hemodynamically stable. No chest pain or palpitations.',
-        hema: 'Leukocytosis downtrending. No bleeding manifestations.',
-        metabolic: 'Capillary glucose acceptable on current regimen.',
-        output: 'Urine output adequate; no bowel issues reported.',
-        neuro: 'Alert, oriented x3, no focal neurologic deficits.',
-        drugs: 'Ceftriaxone 2 g IV q24h, Azithromycin 500 mg PO OD, Amlodipine 10 mg PO OD, Metformin 500 mg PO BID.',
-        other: 'Ambulates with minimal assistance; tolerates soft diet.',
+        problems: [
+          {
+            id: `sample-cap-${samplePatientId}`,
+            title: 'Community-acquired pneumonia, moderate risk',
+            notes: 'Cough less frequent, afebrile for >24h, no accessory muscle use, and saturating well on room air. Continue antibiotics and monitor culture results.',
+          },
+          {
+            id: `sample-hypertension-${samplePatientId}`,
+            title: 'Hypertension',
+            notes: 'Hemodynamically stable on Amlodipine 10 mg PO OD. No chest pain or palpitations.',
+          },
+          {
+            id: `sample-diabetes-${samplePatientId}`,
+            title: 'Type 2 diabetes mellitus',
+            notes: 'Capillary glucose acceptable on Metformin 500 mg PO BID.',
+          },
+        ],
         assessment: 'CAP, clinically improving with stable cardiorespiratory parameters.',
         plans: 'Continue current antibiotics today then reassess de-escalation.\nRepeat CBC/electrolytes tomorrow.\nCoordinate discharge planning once clinically stable.',
         checklist: [
@@ -3650,9 +3573,9 @@ function App() {
             },
             {
               id: 'daily-summary',
-              label: 'FRICH',
-              outputTitle: 'FRICHMOND',
-              buildText: () => toDailySummary(selectedPatient, dailyUpdateForm, patientVitals ?? [], dailyDate),
+              label: 'Problems',
+              outputTitle: 'Problems List',
+              buildText: () => toProblemsSummary(selectedPatient, dailyUpdateForm, patientVitals ?? [], dailyDate),
             },
             {
               id: 'vitals-log',
@@ -3760,34 +3683,19 @@ function App() {
     ? `${selectedPatient.roomNumber} - ${selectedPatient.lastName}`
     : 'Patient'
   const canShowFocusedPatientNavButton = selectedPatient?.status === 'active'
-  const dailyChecklistSections = useMemo(() =>
-    dailyUpdateForm.checklist.reduce<{ pending: Array<{ item: DailyChecklistItem; index: number }>; completed: Array<{ item: DailyChecklistItem; index: number }> }>((accumulator, item, index) => {
-      if (item.completed) {
-        accumulator.completed.push({ item, index })
-      } else {
-        accumulator.pending.push({ item, index })
-      }
-      return accumulator
-    }, { pending: [], completed: [] }),
-  [dailyUpdateForm.checklist])
   const masterChecklistGroupedByPatient = useMemo(() => {
-    const grouped = new Map<number, { patientIdentifier: string; pending: MasterChecklistItem[]; completed: MasterChecklistItem[] }>()
+    const grouped = new Map<number, { patientIdentifier: string; items: MasterChecklistItem[] }>()
 
     masterChecklistItems.forEach((item) => {
       const existing = grouped.get(item.patientId)
       if (existing) {
-        if (item.completed) {
-          existing.completed.push(item)
-        } else {
-          existing.pending.push(item)
-        }
+        existing.items.push(item)
         return
       }
 
       grouped.set(item.patientId, {
         patientIdentifier: item.patientIdentifier,
-        pending: item.completed ? [] : [item],
-        completed: item.completed ? [item] : [],
+        items: [item],
       })
     })
 
@@ -3988,8 +3896,7 @@ function App() {
                       <div key={`master-patient-${group.patientId}`} className='space-y-2'>
                         <p className='text-sm font-semibold text-espresso'>{group.patientIdentifier}</p>
                         <div className='space-y-2'>
-                          {group.pending.map((item) => renderMasterChecklistItem(item, `master-pending-${item.patientId}-${item.viewDate}-${item.index}`))}
-                          {group.completed.map((item) => renderMasterChecklistItem(item, `master-completed-${item.patientId}-${item.viewDate}-${item.index}`))}
+                          {group.items.map((item) => renderMasterChecklistItem(item, `master-${item.patientId}-${item.viewDate}-${item.index}`))}
                         </div>
                       </div>
                     ))}
@@ -4037,7 +3944,7 @@ function App() {
                 <Tabs value={selectedTab} onValueChange={(v) => setSelectedTab(v as typeof selectedTab)}>
                   <TabsList className='hidden sm:grid sm:grid-cols-4 lg:grid-cols-8 h-auto w-full gap-0.5 px-1 mb-4 mt-2'>
                     <TabsTrigger className='w-full text-xs px-2.5' value='profile'>Profile</TabsTrigger>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='frichmond'>FRICH</TabsTrigger>
+                    <TabsTrigger className='w-full text-xs px-2.5' value='problems'>Problems</TabsTrigger>
                     <TabsTrigger className='w-full text-xs px-2.5' value='vitals'>Vitals</TabsTrigger>
                     <TabsTrigger className='w-full text-xs px-2.5' value='labs'>Labs</TabsTrigger>
                     <TabsTrigger className='w-full text-xs px-2.5' value='medications'>Meds</TabsTrigger>
@@ -4213,7 +4120,7 @@ function App() {
                     </div>
                   </div>
                 </TabsContent>
-                <TabsContent value='frichmond'>
+                <TabsContent value='problems'>
                   <div className='space-y-3'>
                     <div className='flex flex-wrap items-end gap-2'>
                       <div className='space-y-1 max-w-60'>
@@ -4279,10 +4186,10 @@ function App() {
                         <p className='text-xs text-clay'>No saved daily entries yet.</p>
                       )}
                     </div>
-                    <p className='text-xs text-clay'>Copies all daily fields (FRICHMOND, assessment, plan) and carries over only pending checklist items from the latest saved date (or previous date when today is latest).</p>
+                    <p className='text-xs text-clay'>Copies all problem blocks in their current order, assessment, and plan. Only pending checklist items carry over from the source date.</p>
                     <div className='space-y-2'>
                       <Label>Checklist</Label>
-                      <p className='text-xs text-clay'>Drag the handle to reorder items within pending or completed sections. On mobile, press and hold the handle then drag. Keyboard: focus handle then press Ctrl/⌘ + ↑/↓.</p>
+                      <p className='text-xs text-clay'>Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
                       <div className='flex flex-wrap gap-2'>
                         <Input
                           value={dailyChecklistDraft}
@@ -4301,163 +4208,22 @@ function App() {
                         </Button>
                       </div>
                       <div className='space-y-2'>
-                        {dailyChecklistSections.pending.map(({ item, index }) => renderDailyChecklistItem(item, index))}
-                        {dailyChecklistSections.completed.map(({ item, index }) => renderDailyChecklistItem(item, index))}
+                        {dailyUpdateForm.checklist.map((item, index) => renderDailyChecklistItem(item, index))}
                         {dailyUpdateForm.checklist.length === 0 && (
                           <p className='text-xs text-clay'>No checklist items yet.</p>
                         )}
                       </div>
                     </div>
-                    <div className='space-y-1'>
-                      <Label>Fluid</Label>
-                      <PhotoMentionField
-                        ariaLabel='Fluid'
-                        placeholder='Fluid'
-                        value={dailyUpdateForm.fluid}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, fluid: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Respiratory</Label>
-                      <PhotoMentionField
-                        ariaLabel='Respiratory'
-                        placeholder='Respiratory'
-                        value={dailyUpdateForm.respiratory}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, respiratory: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Infectious</Label>
-                      <PhotoMentionField
-                        ariaLabel='Infectious'
-                        placeholder='Infectious'
-                        value={dailyUpdateForm.infectious}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, infectious: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Cardio</Label>
-                      <PhotoMentionField
-                        ariaLabel='Cardio'
-                        placeholder='Cardio'
-                        value={dailyUpdateForm.cardio}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, cardio: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Hema</Label>
-                      <PhotoMentionField
-                        ariaLabel='Hema'
-                        placeholder='Hema'
-                        value={dailyUpdateForm.hema}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, hema: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Metabolic</Label>
-                      <PhotoMentionField
-                        ariaLabel='Metabolic'
-                        placeholder='Metabolic'
-                        value={dailyUpdateForm.metabolic}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, metabolic: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Output</Label>
-                      <PhotoMentionField
-                        ariaLabel='Output'
-                        placeholder='Output'
-                        value={dailyUpdateForm.output}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, output: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Neuro</Label>
-                      <PhotoMentionField
-                        ariaLabel='Neuro'
-                        placeholder='Neuro'
-                        value={dailyUpdateForm.neuro}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, neuro: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Drugs</Label>
-                      <PhotoMentionField
-                        ariaLabel='Drugs'
-                        placeholder='Drugs'
-                        value={dailyUpdateForm.drugs}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, drugs: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Other</Label>
-                      <PhotoMentionField
-                        ariaLabel='Other'
-                        placeholder='Other'
-                        value={dailyUpdateForm.other}
-                        onChange={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, other: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
+                    <ProblemListEditor
+                      problems={dailyUpdateForm.problems}
+                      onChange={(problems) => {
+                        setDailyUpdateForm((previous) => ({ ...previous, problems }))
+                        setDailyDirty(true)
+                      }}
+                      attachments={mentionableAttachments}
+                      attachmentByTitle={mentionableAttachmentByTitle}
+                      onOpenPhotoById={openPhotoById}
+                    />
                     <div className='space-y-1'>
                       <Label>Assessment</Label>
                       <PhotoMentionField
@@ -5625,8 +5391,8 @@ function App() {
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
                     ['Navigate on mobile', 'The bottom bar shows all 8 patient sections in a 2-row grid — tap any to switch. Use ← Back to return to the patient list.'],
                     ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. Discharged patients are hidden from this quick-switch list, and you can scroll through the list when many active patients are present.'],
-                    ['Write daily notes', 'Open FRICH, pick today\'s date, fill F-R-I-C-H-M-O-N-D fields, plan, and checklist. Use the pencil button to revise or remove checklist items, and use the drag handle to reorder priorities (on mobile, press and hold the handle then drag). Tap Copy latest entry to carry forward yesterday\'s note with pending checklist items only.'],
-                    ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Use the pencil button to edit or remove items, update status, and drag with the handle to reorder within each patient section (on mobile, press and hold then drag).'],
+                    ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes. Drag blocks to set their priority. Assessment, Plan, and Checklist remain below the list. Tap Copy latest entry to copy the previous problem blocks in order, assessment, plan, and pending checklist items.'],
+                    ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Completing an item moves it to the bottom; reopening it moves it before the first completed item. Drag any item to override that order.'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],
                     ['Back up your data', 'Go to Settings → Export backup regularly, especially before switching devices or browsers.'],
                   ] as [string, string][]).map(([title, detail], i) => (
@@ -5644,7 +5410,7 @@ function App() {
                 <div className='grid grid-cols-2 gap-1.5'>
                   {([
                     ['Profile', 'Demographics, diagnosis, clinical summary, HPI, PMH, PE, meds, labs, and clerk notes'],
-                    ['FRICH', 'Date-based F-R-I-C-H-M-O-N-D daily notes, assessment, plan, and checklist'],
+                    ['Problems', 'Ordered, date-based problem blocks with free-text notes, assessment, plan, and checklist'],
                     ['Vitals', 'Structured BP/HR/RR/Temp/SpO2 log with date & time entries'],
                     ['Labs', 'CBC, UA, Blood Chem, ABG templates + free-text with date/time'],
                     ['Meds', 'Structured medication list: drug, dose, route, frequency, status, plus drag-to-reorder'],
@@ -5671,7 +5437,7 @@ function App() {
                     'Report Labs: two entries from the same lab template are auto-compared, except Others entries which are always shown as separate plain results.',
                     'Type @ in any text field to link a photo by title — tap the highlighted @title to open the photo viewer.',
                     'Large note text boxes include an expand button when content overflows; tap again to collapse back to default height.',
-                    'FRICH exports include a daily vitals range line (BP, HR, RR, Temp, SpO2%) for the selected date.',
+                    'Problems exports preserve problem and checklist order and include a daily vitals range line (BP, HR, RR, Temp, SpO2%) for the selected date.',
                     'All patient exports: select and reorder active patients before generating Multiple Census or Multiple Vitals.',
                     'Photos: upload multiple images at once — they are grouped into one block and keep your picker selection order. Tap the block to open a carousel, then use < / >, keyboard arrows, Home/End, thumbnails, or swipe the thumbnail row on phone to jump quickly in large sets.',
                     'Settings → Review all photos lets you find linked/orphan photos and reassign, delete, or export each photo.',
@@ -5701,8 +5467,8 @@ function App() {
                     ['Sync during rounds', 'Tap Sync from the footer (phone) or header (desktop) whenever you finish key edits or before switching devices. Button states: Synced, ↑ Push ready, ↓ Updates available, ⚠ Conflict, or Syncing.'],
                     ['If conflict appears', 'A version picker opens whenever remote data is newer and this device also changed since the last sync. Choose a room version or keep local. Choosing an older version restores it and uploads it as the room’s latest snapshot.'],
                     ['If sync cannot connect', 'PUHRR stops without uploading when room lookup or conflict checks fail. Check the connection and retry; a failed check is never treated as an empty room.'],
-                    ['Keep backup safety', 'Sync includes profile, FRICH, vitals, medications, labs, and orders. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
-                    ['If only profile/FRICH pull in', 'This usually means the room still has a legacy snapshot from an older app build. Sync from an updated device once to upgrade the room snapshot, then sync again on the other device.'],
+                    ['Keep backup safety', 'Sync includes profile, Problems, vitals, medications, labs, and orders. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
+                    ['Keep app versions aligned', 'The Problems data format requires the updated app on every linked device. If sync reports an unsupported room version, update PUHRR on both devices before trying again.'],
                   ] as [string, string][]).map(([title, detail], i) => (
                     <li key={i} className='flex gap-2.5 items-start'>
                       <span className='shrink-0 w-5 h-5 rounded-full bg-action-primary/15 text-action-primary text-[10px] font-bold flex items-center justify-center mt-0.5'>{i + 1}</span>
@@ -6158,10 +5924,10 @@ function App() {
               <span className='text-[9px] font-bold leading-none'>Back</span>
             </button>
             <div className='flex-1 grid grid-cols-4 gap-px p-1'>
-              {((['profile', 'frichmond', 'vitals', 'labs', 'medications', 'orders', 'photos', 'reporting'] as const)).map((tab) => {
+              {((['profile', 'problems', 'vitals', 'labs', 'medications', 'orders', 'photos', 'reporting'] as const)).map((tab) => {
                 const tabLabels: Record<typeof tab, string> = {
                   profile: 'Profile',
-                  frichmond: 'FRICH',
+                  problems: 'Problems',
                   vitals: 'Vitals',
                   labs: 'Labs',
                   medications: 'Meds',

@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
+import { normalizeDailyUpdate } from './features/problems/problemUtils'
 import type {
   DailyUpdate,
   LabEntry,
@@ -81,6 +82,28 @@ db.version(3).stores({
   orders: '++id, patientId, status, [patientId+status], createdAt',
   photoAttachments:
     '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+})
+
+db.version(4).stores({
+  patients: '++id, lastName, roomNumber, service, status, admitDate',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+}).upgrade(async (tx) => {
+  const dailyUpdateTable = tx.table<DailyUpdate, number>('dailyUpdates')
+  const photoTable = tx.table<PhotoAttachment, number>('photoAttachments')
+  const dailyUpdates = await dailyUpdateTable.toArray()
+  const photos = await photoTable.toArray()
+
+  await Promise.all(dailyUpdates.map((entry) => dailyUpdateTable.put(normalizeDailyUpdate(entry))))
+  await Promise.all(photos.map((entry) => {
+    if ((entry.category as string) !== 'frichmond') return Promise.resolve(entry.id ?? 0)
+    return photoTable.put({ ...entry, category: 'problems' })
+  }))
 })
 
 export { db }

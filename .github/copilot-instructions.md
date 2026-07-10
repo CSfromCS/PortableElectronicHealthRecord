@@ -146,28 +146,19 @@ When generating new UI for this app, follow these rules:
 
 ### Patient Workflow
 1. **Admit patient:** Enter demographics (room, name, age, sex) → add service → add diagnosis and clinical details in Profile tab
-2. **Daily rounds:** Enter FRICHMOND notes, vitals, meds, labs
+2. **Daily rounds:** Enter ordered problem notes, vitals, meds, labs
 3. **Generate text:** Tap button to get formatted census entry or daily summary
 4. **Copy/share:** Paste into chat → send to laptop → paste into Google Docs
 
-### FRICHMOND Mnemonic
-Standard medical daily progress note format used in Philippine medical schools:
-- **F**luid/intake-output
-- **R**espiratory exam
-- **I**nfectious findings
-- **C**ardiovascular exam
-- **H**ema (hematology)
-- **M**etabolic
-- **O**utput
-- **N**euro
-- **D**rugs
+### Problems List
+Daily progress notes are stored as user-defined, ordered problem blocks. Each block has a short title and free-text notes, and users control priority through drag-and-drop ordering.
 
 ### Key Data
 - **Demographics:** Room number, name, age, sex, service (e.g., Internal Medicine, Surgery)
 - **Admitting diagnosis:** Chief complaint / reason for admission
 - **Working diagnosis:** Current diagnosis after workup
 - **Clinical details:** Freeform text fields (plans, medications, labs, pendings, clerk notes)
-- **Daily updates:** FRICHMOND notes, vitals, assessment, plan
+- **Daily updates:** Ordered problem notes, vitals, assessment, plan
 - **Vitals:** Temperature, blood pressure, heart rate, respiratory rate, O2 saturation
 - **Labs:** CBC, electrolytes, liver/kidney function, etc. with trend comparison
 
@@ -212,7 +203,7 @@ For every user-visible or behavior-changing update:
 ## Current State (Living)
 
 - ✅ MVP foundation: Patient add/edit, list with search/filter/sort, Profile tab, Vital Signs tab, Orders tab
-- ✅ FRICHMOND note-taking with autosave
+- ✅ Ordered Problems List note-taking with autosave
 - ✅ Structured data entry: Vitals, medications, labs (with trends), doctor's orders
 - ✅ Text generation: Census entry, daily summary, profile copy/share
 - ✅ Settings: Backup export/import (JSON), clear discharged patients, built-in usage guide

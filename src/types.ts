@@ -25,20 +25,17 @@ export interface Patient {
   dischargeDate?: string
 }
 
+export interface ProblemBlock {
+  id: string
+  title: string
+  notes: string
+}
+
 export interface DailyUpdate {
   id?: number
   patientId: number
   date: string
-  fluid: string
-  respiratory: string
-  infectious: string
-  cardio: string
-  hema: string
-  metabolic: string
-  output: string
-  neuro: string
-  drugs: string
-  other: string
+  problems: ProblemBlock[]
   assessment: string
   plans: string
   checklist: { text: string; completed: boolean }[]
@@ -97,7 +94,7 @@ export interface OrderEntry {
 
 export type PhotoCategory =
   | 'profile'
-  | 'frichmond'
+  | 'problems'
   | 'vitals'
   | 'medications'
   | 'labs'

@@ -5,7 +5,7 @@
 
 ## Context
 
-RoundingApp is a personal PWA for a medical clerk doing hospital rounds. It stores patient records and daily FRICHMOND updates in IndexedDB (via Dexie.js) on-device. The app already works — patients can be added, daily notes taken, and formatted text copied to clipboard.
+RoundingApp is a personal PWA for a medical clerk doing hospital rounds. It stores patient records and ordered daily problem updates in IndexedDB (via Dexie.js) on-device. The app already works — patients can be added, daily notes taken, and formatted text copied to clipboard.
 
 The problem: the clerk uses their **phone** during rounds (bedside data entry) and their **laptop** for write-ups afterward. Right now these are two separate IndexedDB databases with no connection. Getting data from phone to laptop requires manual JSON export/import or copy-pasting through a messaging app.
 
