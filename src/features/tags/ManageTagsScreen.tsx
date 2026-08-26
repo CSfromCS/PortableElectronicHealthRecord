@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronLeft, ChevronUp, ChevronDown, Pencil, Trash2, Plus } from 'lucide-react'
+import { ChevronLeft, Pencil, Trash2, Plus } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,6 +7,10 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { cn } from '@/lib/utils'
+import { DragHandle } from '@/lib/dnd/DragHandle'
+import { moveItemByKey } from '@/lib/dnd/reorderList'
+import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import type { Patient, TagAutomationRole, TagDefinition, TagDisplayType, TagGroupDefinition } from '@/types'
 import { AUTOMATION_ROLE_LABELS, UNGROUPED_LABEL } from './tagConstants'
 import { bucketTagsByGroup, sortTagGroups, sortTagsInGroup } from './tagUtils'
@@ -178,31 +182,35 @@ export const ManageTagsScreen = ({
     setDeleteGroupTarget(null)
   }
 
-  const moveGroup = async (group: TagGroupDefinition, direction: 'up' | 'down') => {
-    const index = orderedGroups.findIndex((candidate) => candidate.id === group.id)
-    const swapIndex = direction === 'up' ? index - 1 : index + 1
-    const swapWith = orderedGroups[swapIndex]
-    if (!swapWith || group.id === undefined || swapWith.id === undefined) return
-
+  const reorderGroups = async (sourceGroupId: number, targetGroupId: number) => {
+    const reordered = moveItemByKey(orderedGroups, (group) => group.id, sourceGroupId, targetGroupId)
     await db.transaction('rw', [db.tagGroups], async () => {
-      await db.tagGroups.update(group.id as number, { sortOrder: swapWith.sortOrder })
-      await db.tagGroups.update(swapWith.id as number, { sortOrder: group.sortOrder })
+      await Promise.all(
+        reordered.map((group, index) =>
+          group.id === undefined || group.sortOrder === index ? Promise.resolve() : db.tagGroups.update(group.id, { sortOrder: index }),
+        ),
+      )
     })
   }
+  const groupDrag = useDragReorder(orderedGroups.map((group) => group.id as number), (source, target) => void reorderGroups(source, target))
 
-  const moveTag = async (tag: TagDefinition, direction: 'up' | 'down') => {
-    const bucket = bucketsById.get(tag.groupId ?? null)
+  const reorderTags = async (sourceTagId: number, targetTagId: number) => {
+    const sourceTag = tags.find((tag) => tag.id === sourceTagId)
+    const targetTag = tags.find((tag) => tag.id === targetTagId)
+    if (!sourceTag || !targetTag || (sourceTag.groupId ?? null) !== (targetTag.groupId ?? null)) return
+
+    const bucket = bucketsById.get(sourceTag.groupId ?? null)
     const siblings = bucket ? sortTagsInGroup(bucket.tags) : []
-    const index = siblings.findIndex((candidate) => candidate.id === tag.id)
-    const swapIndex = direction === 'up' ? index - 1 : index + 1
-    const swapWith = siblings[swapIndex]
-    if (!swapWith || tag.id === undefined || swapWith.id === undefined) return
-
+    const reordered = moveItemByKey(siblings, (tag) => tag.id, sourceTagId, targetTagId)
     await db.transaction('rw', [db.tagDefinitions], async () => {
-      await db.tagDefinitions.update(tag.id as number, { sortOrder: swapWith.sortOrder })
-      await db.tagDefinitions.update(swapWith.id as number, { sortOrder: tag.sortOrder })
+      await Promise.all(
+        reordered.map((tag, index) =>
+          tag.id === undefined || tag.sortOrder === index ? Promise.resolve() : db.tagDefinitions.update(tag.id, { sortOrder: index }),
+        ),
+      )
     })
   }
+  const tagDrag = useDragReorder(tags.map((tag) => tag.id as number), (source, target) => void reorderTags(source, target))
 
   return (
     <Card className='bg-white/80 border-clay/25 shadow-sm'>
@@ -218,16 +226,17 @@ export const ManageTagsScreen = ({
         <div className='space-y-2'>
           <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tag Groups</p>
           <div className='flex flex-col gap-1.5'>
-            {orderedGroups.map((group, index) => (
-              <div key={group.id} className='flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5'>
-                <div className='flex flex-col'>
-                  <button type='button' disabled={index === 0} onClick={() => void moveGroup(group, 'up')} className='text-clay disabled:opacity-30' aria-label={`Move ${group.name} group up`}>
-                    <ChevronUp className='h-3.5 w-3.5' />
-                  </button>
-                  <button type='button' disabled={index === orderedGroups.length - 1} onClick={() => void moveGroup(group, 'down')} className='text-clay disabled:opacity-30' aria-label={`Move ${group.name} group down`}>
-                    <ChevronDown className='h-3.5 w-3.5' />
-                  </button>
-                </div>
+            {orderedGroups.map((group) => (
+              <div
+                key={group.id}
+                className={cn(
+                  'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5 transition-shadow',
+                  groupDrag.isDragging(group.id as number) && 'opacity-50',
+                  groupDrag.isDropTarget(group.id as number) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                )}
+                {...groupDrag.getItemProps(group.id as number)}
+              >
+                <DragHandle label={`Drag to reorder ${group.name} group`} dragProps={groupDrag.getHandleProps(group.id as number)} />
                 {renamingGroupId === group.id ? (
                   <div className='flex-1 flex items-center gap-1.5'>
                     <Input value={renamingGroupName} onChange={(event) => setRenamingGroupName(event.target.value)} className='h-7 text-sm' autoFocus />
@@ -263,16 +272,17 @@ export const ManageTagsScreen = ({
             <div key={bucket.groupId ?? 'ungrouped'} className='space-y-1.5'>
               <p className='text-xs font-semibold text-espresso'>{bucket.groupName === UNGROUPED_LABEL ? UNGROUPED_LABEL : bucket.groupName}</p>
               <div className='flex flex-col gap-1'>
-                {bucket.tags.map((tag, index) => (
-                  <div key={tag.id} className='flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5'>
-                    <div className='flex flex-col'>
-                      <button type='button' disabled={index === 0} onClick={() => void moveTag(tag, 'up')} className='text-clay disabled:opacity-30' aria-label={`Move ${tag.name} up`}>
-                        <ChevronUp className='h-3.5 w-3.5' />
-                      </button>
-                      <button type='button' disabled={index === bucket.tags.length - 1} onClick={() => void moveTag(tag, 'down')} className='text-clay disabled:opacity-30' aria-label={`Move ${tag.name} down`}>
-                        <ChevronDown className='h-3.5 w-3.5' />
-                      </button>
-                    </div>
+                {bucket.tags.map((tag) => (
+                  <div
+                    key={tag.id}
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5 transition-shadow',
+                      tagDrag.isDragging(tag.id as number) && 'opacity-50',
+                      tagDrag.isDropTarget(tag.id as number) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                    )}
+                    {...tagDrag.getItemProps(tag.id as number)}
+                  >
+                    <DragHandle label={`Drag to reorder ${tag.name}`} dragProps={tagDrag.getHandleProps(tag.id as number)} />
                     <TagChip tag={tag} />
                     <span className='flex-1 text-sm text-espresso truncate'>{tag.name}</span>
                     {tag.terminal ? <span className='text-[10px] text-clay/70'>Terminal</span> : null}
