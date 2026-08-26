@@ -21,8 +21,45 @@ export interface Patient {
   labs: string
   pendings: string
   clerkNotes: string
-  status: 'active' | 'discharged'
-  dischargeDate?: string
+  tagIds: number[]
+}
+
+export type TagDisplayType = 'emoji' | 'color'
+
+export type TagAutomationRole =
+  | 'none'
+  | 'category-cd'
+  | 'category-pd'
+  | 'relationship-main'
+  | 'relationship-referral'
+
+export interface TagGroupDefinition {
+  id?: number
+  name: string
+  sortOrder: number
+}
+
+export interface TagDefinition {
+  id?: number
+  name: string
+  displayType: TagDisplayType
+  emoji?: string
+  color?: string
+  groupId?: number
+  sortOrder: number
+  visibleOnPatientCard: boolean
+  terminal: boolean
+  automationRole: TagAutomationRole
+  createdAt: string
+}
+
+export interface TagEvent {
+  id?: number
+  patientId: number
+  tagId: number
+  tagName: string
+  action: 'added' | 'removed'
+  at: string
 }
 
 export interface ProblemBlock {

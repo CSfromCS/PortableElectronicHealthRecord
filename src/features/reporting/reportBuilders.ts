@@ -266,6 +266,7 @@ export const toCensusEntry = (
   medicationEntries: MedicationEntry[],
   labEntries: LabEntry[],
   orderEntries: OrderEntry[],
+  tagDisplayStrings: string[] = [],
 ) => {
   const activeStructuredMeds = medicationEntries
     .filter((entry) => entry.status === 'active')
@@ -290,11 +291,12 @@ export const toCensusEntry = (
 
   return [
     `${patient.roomNumber} ${patient.lastName}, ${patient.firstName} ${patient.age}/${patient.sex}`,
+    tagDisplayStrings.length > 0 ? `Tags: ${tagDisplayStrings.join(', ')}` : '',
     patient.diagnosis,
     `Labs: ${labsCombined || '-'}`,
     `Meds: ${medsCombined || '-'}`,
     `Orders: ${activeOrders || '-'}`,
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }
 
 export const toSelectedPatientCensusReport = (
@@ -373,6 +375,7 @@ export const toSelectedPatientCensusReport = (
 export const toProfileSummary = (
   patient: Patient,
   profile: ProfileSummaryInput,
+  tagDisplayStrings: string[] = [],
 ) => {
   const { main, referrals } = parseServiceLines(profile.service || patient.service)
   const diagnosis = profile.diagnosis.trim() || patient.diagnosis.trim() || '-'
@@ -381,6 +384,7 @@ export const toProfileSummary = (
   const lines = [
     formatPatientHeader(patient),
     `${patient.age} / ${patient.sex}`,
+    ...(tagDisplayStrings.length > 0 ? [`Tags: ${tagDisplayStrings.join(', ')}`] : []),
     `Main: ${main}`,
     `Referrals: ${referrals.length > 0 ? referrals.join(', ') : '-'}`,
     `Dx: ${diagnosis}`,

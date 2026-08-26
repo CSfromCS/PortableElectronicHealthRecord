@@ -1,0 +1,410 @@
+import { useState } from 'react'
+import { ChevronLeft, ChevronUp, ChevronDown, Pencil, Trash2, Plus } from 'lucide-react'
+import { db } from '@/db'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import type { Patient, TagAutomationRole, TagDefinition, TagDisplayType, TagGroupDefinition } from '@/types'
+import { AUTOMATION_ROLE_LABELS, UNGROUPED_LABEL } from './tagConstants'
+import { bucketTagsByGroup, sortTagGroups, sortTagsInGroup } from './tagUtils'
+import { TagChip } from './TagChip'
+
+type TagFormState = {
+  name: string
+  displayType: TagDisplayType
+  emoji: string
+  color: string
+  groupId: string
+  visibleOnPatientCard: boolean
+  terminal: boolean
+  automationRole: TagAutomationRole
+}
+
+const blankTagForm = (defaultGroupId?: string): TagFormState => ({
+  name: '',
+  displayType: 'emoji',
+  emoji: '',
+  color: '#c98a5e',
+  groupId: defaultGroupId ?? '',
+  visibleOnPatientCard: true,
+  terminal: false,
+  automationRole: 'none',
+})
+
+const tagToForm = (tag: TagDefinition): TagFormState => ({
+  name: tag.name,
+  displayType: tag.displayType,
+  emoji: tag.emoji ?? '',
+  color: tag.color ?? '#c98a5e',
+  groupId: tag.groupId !== undefined ? String(tag.groupId) : '',
+  visibleOnPatientCard: tag.visibleOnPatientCard,
+  terminal: tag.terminal,
+  automationRole: tag.automationRole,
+})
+
+export const ManageTagsScreen = ({
+  tags,
+  groups,
+  patients,
+  onBack,
+}: {
+  tags: TagDefinition[]
+  groups: TagGroupDefinition[]
+  patients: Patient[]
+  onBack: () => void
+}) => {
+  const [tagFormOpen, setTagFormOpen] = useState(false)
+  const [tagForm, setTagForm] = useState<TagFormState>(blankTagForm())
+  const [editingTagId, setEditingTagId] = useState<number | null>(null)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [renamingGroupId, setRenamingGroupId] = useState<number | null>(null)
+  const [renamingGroupName, setRenamingGroupName] = useState('')
+  const [deleteTagTarget, setDeleteTagTarget] = useState<TagDefinition | null>(null)
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<TagGroupDefinition | null>(null)
+
+  const orderedGroups = sortTagGroups(groups)
+  const buckets = bucketTagsByGroup(tags, groups)
+  const bucketsById = new Map(buckets.map((bucket) => [bucket.groupId, bucket]))
+
+  const patientCountForTag = (tagId: number | undefined) =>
+    tagId === undefined ? 0 : patients.filter((patient) => (patient.tagIds ?? []).includes(tagId)).length
+
+  const openCreateTag = (groupId?: number) => {
+    setEditingTagId(null)
+    setTagForm(blankTagForm(groupId !== undefined ? String(groupId) : ''))
+    setTagFormOpen(true)
+  }
+
+  const openEditTag = (tag: TagDefinition) => {
+    setEditingTagId(tag.id ?? null)
+    setTagForm(tagToForm(tag))
+    setTagFormOpen(true)
+  }
+
+  const saveTagForm = async () => {
+    const name = tagForm.name.trim()
+    if (!name) return
+
+    const groupId = tagForm.groupId ? Number.parseInt(tagForm.groupId, 10) : undefined
+    const now = new Date().toISOString()
+
+    if (editingTagId !== null) {
+      await db.tagDefinitions.update(editingTagId, {
+        name,
+        displayType: tagForm.displayType,
+        emoji: tagForm.displayType === 'emoji' ? (tagForm.emoji.trim() || undefined) : undefined,
+        color: tagForm.displayType === 'color' ? tagForm.color : undefined,
+        groupId,
+        visibleOnPatientCard: tagForm.visibleOnPatientCard,
+        terminal: tagForm.terminal,
+        automationRole: tagForm.automationRole,
+      })
+    } else {
+      const siblingTags = tags.filter((tag) => (tag.groupId ?? undefined) === groupId)
+      const nextSortOrder = siblingTags.length > 0 ? Math.max(...siblingTags.map((tag) => tag.sortOrder)) + 1 : 0
+      await db.tagDefinitions.add({
+        name,
+        displayType: tagForm.displayType,
+        emoji: tagForm.displayType === 'emoji' ? (tagForm.emoji.trim() || undefined) : undefined,
+        color: tagForm.displayType === 'color' ? tagForm.color : undefined,
+        groupId,
+        sortOrder: nextSortOrder,
+        visibleOnPatientCard: tagForm.visibleOnPatientCard,
+        terminal: tagForm.terminal,
+        automationRole: tagForm.automationRole,
+        createdAt: now,
+      })
+    }
+
+    setTagFormOpen(false)
+  }
+
+  const confirmDeleteTag = async () => {
+    if (deleteTagTarget?.id === undefined) return
+    const tagId = deleteTagTarget.id
+
+    await db.transaction('rw', [db.patients, db.tagDefinitions], async () => {
+      const affectedPatients = await db.patients.filter((patient) => (patient.tagIds ?? []).includes(tagId)).toArray()
+      await Promise.all(
+        affectedPatients.map((patient) =>
+          patient.id === undefined
+            ? Promise.resolve()
+            : db.patients.update(patient.id, { tagIds: (patient.tagIds ?? []).filter((id) => id !== tagId) }),
+        ),
+      )
+      await db.tagDefinitions.delete(tagId)
+    })
+
+    setDeleteTagTarget(null)
+  }
+
+  const addGroup = async () => {
+    const name = newGroupName.trim()
+    if (!name) return
+    const nextSortOrder = groups.length > 0 ? Math.max(...groups.map((group) => group.sortOrder)) + 1 : 0
+    await db.tagGroups.add({ name, sortOrder: nextSortOrder })
+    setNewGroupName('')
+  }
+
+  const startRenameGroup = (group: TagGroupDefinition) => {
+    setRenamingGroupId(group.id ?? null)
+    setRenamingGroupName(group.name)
+  }
+
+  const saveRenameGroup = async () => {
+    if (renamingGroupId === null) return
+    const name = renamingGroupName.trim()
+    if (name) {
+      await db.tagGroups.update(renamingGroupId, { name })
+    }
+    setRenamingGroupId(null)
+  }
+
+  const confirmDeleteGroup = async () => {
+    if (deleteGroupTarget?.id === undefined) return
+    const groupId = deleteGroupTarget.id
+    const tagsInGroup = tags.filter((tag) => tag.groupId === groupId)
+
+    await db.transaction('rw', [db.tagDefinitions, db.tagGroups], async () => {
+      await Promise.all(
+        tagsInGroup.map((tag) => (tag.id === undefined ? Promise.resolve() : db.tagDefinitions.update(tag.id, { groupId: undefined }))),
+      )
+      await db.tagGroups.delete(groupId)
+    })
+
+    setDeleteGroupTarget(null)
+  }
+
+  const moveGroup = async (group: TagGroupDefinition, direction: 'up' | 'down') => {
+    const index = orderedGroups.findIndex((candidate) => candidate.id === group.id)
+    const swapIndex = direction === 'up' ? index - 1 : index + 1
+    const swapWith = orderedGroups[swapIndex]
+    if (!swapWith || group.id === undefined || swapWith.id === undefined) return
+
+    await db.transaction('rw', [db.tagGroups], async () => {
+      await db.tagGroups.update(group.id as number, { sortOrder: swapWith.sortOrder })
+      await db.tagGroups.update(swapWith.id as number, { sortOrder: group.sortOrder })
+    })
+  }
+
+  const moveTag = async (tag: TagDefinition, direction: 'up' | 'down') => {
+    const bucket = bucketsById.get(tag.groupId ?? null)
+    const siblings = bucket ? sortTagsInGroup(bucket.tags) : []
+    const index = siblings.findIndex((candidate) => candidate.id === tag.id)
+    const swapIndex = direction === 'up' ? index - 1 : index + 1
+    const swapWith = siblings[swapIndex]
+    if (!swapWith || tag.id === undefined || swapWith.id === undefined) return
+
+    await db.transaction('rw', [db.tagDefinitions], async () => {
+      await db.tagDefinitions.update(tag.id as number, { sortOrder: swapWith.sortOrder })
+      await db.tagDefinitions.update(swapWith.id as number, { sortOrder: tag.sortOrder })
+    })
+  }
+
+  return (
+    <Card className='bg-white/80 border-clay/25 shadow-sm'>
+      <CardHeader className='py-3 px-4 pb-2'>
+        <div className='flex items-center gap-2'>
+          <Button variant='ghost' size='sm' className='h-7 w-7 p-0' onClick={onBack} aria-label='Back to Settings'>
+            <ChevronLeft className='h-4 w-4' />
+          </Button>
+          <CardTitle className='text-base text-espresso'>Manage Tags</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className='px-4 pb-4 space-y-5'>
+        <div className='space-y-2'>
+          <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tag Groups</p>
+          <div className='flex flex-col gap-1.5'>
+            {orderedGroups.map((group, index) => (
+              <div key={group.id} className='flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5'>
+                <div className='flex flex-col'>
+                  <button type='button' disabled={index === 0} onClick={() => void moveGroup(group, 'up')} className='text-clay disabled:opacity-30' aria-label={`Move ${group.name} group up`}>
+                    <ChevronUp className='h-3.5 w-3.5' />
+                  </button>
+                  <button type='button' disabled={index === orderedGroups.length - 1} onClick={() => void moveGroup(group, 'down')} className='text-clay disabled:opacity-30' aria-label={`Move ${group.name} group down`}>
+                    <ChevronDown className='h-3.5 w-3.5' />
+                  </button>
+                </div>
+                {renamingGroupId === group.id ? (
+                  <div className='flex-1 flex items-center gap-1.5'>
+                    <Input value={renamingGroupName} onChange={(event) => setRenamingGroupName(event.target.value)} className='h-7 text-sm' autoFocus />
+                    <Button size='sm' className='h-7' onClick={() => void saveRenameGroup()}>Save</Button>
+                  </div>
+                ) : (
+                  <span className='flex-1 text-sm text-espresso font-medium'>{group.name}</span>
+                )}
+                <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Rename ${group.name}`} onClick={() => startRenameGroup(group)}>
+                  <Pencil className='h-3.5 w-3.5' />
+                </Button>
+                <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Delete ${group.name}`} onClick={() => setDeleteGroupTarget(group)}>
+                  <Trash2 className='h-3.5 w-3.5' />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <div className='flex items-center gap-1.5'>
+            <Input placeholder='New group name' value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} className='h-8 text-sm' />
+            <Button size='sm' className='h-8' onClick={() => void addGroup()}>Add</Button>
+          </div>
+        </div>
+
+        <div className='space-y-3'>
+          <div className='flex items-center justify-between'>
+            <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tags</p>
+            <Button size='sm' variant='outline' onClick={() => openCreateTag()}>
+              <Plus className='h-3.5 w-3.5 mr-1' /> Add tag
+            </Button>
+          </div>
+          {buckets.length === 0 ? <p className='text-xs text-clay'>No tags defined yet.</p> : null}
+          {buckets.map((bucket) => (
+            <div key={bucket.groupId ?? 'ungrouped'} className='space-y-1.5'>
+              <p className='text-xs font-semibold text-espresso'>{bucket.groupName === UNGROUPED_LABEL ? UNGROUPED_LABEL : bucket.groupName}</p>
+              <div className='flex flex-col gap-1'>
+                {bucket.tags.map((tag, index) => (
+                  <div key={tag.id} className='flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5'>
+                    <div className='flex flex-col'>
+                      <button type='button' disabled={index === 0} onClick={() => void moveTag(tag, 'up')} className='text-clay disabled:opacity-30' aria-label={`Move ${tag.name} up`}>
+                        <ChevronUp className='h-3.5 w-3.5' />
+                      </button>
+                      <button type='button' disabled={index === bucket.tags.length - 1} onClick={() => void moveTag(tag, 'down')} className='text-clay disabled:opacity-30' aria-label={`Move ${tag.name} down`}>
+                        <ChevronDown className='h-3.5 w-3.5' />
+                      </button>
+                    </div>
+                    <TagChip tag={tag} />
+                    <span className='flex-1 text-sm text-espresso truncate'>{tag.name}</span>
+                    {tag.terminal ? <span className='text-[10px] text-clay/70'>Terminal</span> : null}
+                    {!tag.visibleOnPatientCard ? <span className='text-[10px] text-clay/70'>Hidden on card</span> : null}
+                    <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${tag.name}`} onClick={() => openEditTag(tag)}>
+                      <Pencil className='h-3.5 w-3.5' />
+                    </Button>
+                    <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Delete ${tag.name}`} onClick={() => setDeleteTagTarget(tag)}>
+                      <Trash2 className='h-3.5 w-3.5' />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+
+      <Dialog open={tagFormOpen} onOpenChange={setTagFormOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingTagId !== null ? 'Edit tag' : 'New tag'}</DialogTitle>
+          </DialogHeader>
+          <div className='space-y-3'>
+            <div className='space-y-1'>
+              <Label htmlFor='tag-name'>Name</Label>
+              <Input id='tag-name' value={tagForm.name} onChange={(event) => setTagForm({ ...tagForm, name: event.target.value })} />
+            </div>
+
+            <div className='space-y-1'>
+              <Label>Display Type</Label>
+              <div className='flex gap-3 text-sm'>
+                <label className='flex items-center gap-1.5'>
+                  <input type='radio' name='displayType' checked={tagForm.displayType === 'emoji'} onChange={() => setTagForm({ ...tagForm, displayType: 'emoji' })} />
+                  Emoji
+                </label>
+                <label className='flex items-center gap-1.5'>
+                  <input type='radio' name='displayType' checked={tagForm.displayType === 'color'} onChange={() => setTagForm({ ...tagForm, displayType: 'color' })} />
+                  Text with Color
+                </label>
+              </div>
+            </div>
+
+            {tagForm.displayType === 'emoji' ? (
+              <div className='space-y-1'>
+                <Label htmlFor='tag-emoji'>Emoji</Label>
+                <Input id='tag-emoji' value={tagForm.emoji} onChange={(event) => setTagForm({ ...tagForm, emoji: event.target.value })} placeholder='e.g. 🏥' className='w-24' />
+              </div>
+            ) : (
+              <div className='space-y-1'>
+                <Label htmlFor='tag-color'>Badge color</Label>
+                <input id='tag-color' type='color' value={tagForm.color} onChange={(event) => setTagForm({ ...tagForm, color: event.target.value })} className='h-9 w-16 rounded border border-clay/30' />
+              </div>
+            )}
+
+            <div className='space-y-1'>
+              <Label>Tag Group</Label>
+              <Select value={tagForm.groupId} onValueChange={(value) => setTagForm({ ...tagForm, groupId: value === '__ungrouped__' ? '' : value })}>
+                <SelectTrigger><SelectValue placeholder={UNGROUPED_LABEL} /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='__ungrouped__'>{UNGROUPED_LABEL}</SelectItem>
+                  {sortTagGroups(groups).map((group) => (
+                    <SelectItem key={group.id} value={String(group.id)}>{group.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className='space-y-1'>
+              <Label>Automation Role</Label>
+              <Select value={tagForm.automationRole} onValueChange={(value) => setTagForm({ ...tagForm, automationRole: value as TagAutomationRole })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.entries(AUTOMATION_ROLE_LABELS) as [TagAutomationRole, string][]).map(([role, label]) => (
+                    <SelectItem key={role} value={role}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <label className='flex items-center gap-2 text-sm'>
+              <input type='checkbox' className='h-4 w-4 accent-action-primary' checked={tagForm.visibleOnPatientCard} onChange={(event) => setTagForm({ ...tagForm, visibleOnPatientCard: event.target.checked })} />
+              Visible on Patient Card
+            </label>
+
+            <label className='flex items-center gap-2 text-sm'>
+              <input type='checkbox' className='h-4 w-4 accent-action-primary' checked={tagForm.terminal} onChange={(event) => setTagForm({ ...tagForm, terminal: event.target.checked })} />
+              Terminal flag (excludes patient from active views)
+            </label>
+
+            <div className='flex justify-end gap-2 pt-1'>
+              <Button variant='ghost' onClick={() => setTagFormOpen(false)}>Cancel</Button>
+              <Button onClick={() => void saveTagForm()} disabled={!tagForm.name.trim()}>Save</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteTagTarget !== null} onOpenChange={(open) => !open && setDeleteTagTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete tag "{deleteTagTarget?.name}"?</DialogTitle>
+          </DialogHeader>
+          <p className='text-sm text-espresso'>
+            {(() => {
+              const count = patientCountForTag(deleteTagTarget?.id)
+              return count > 0
+                ? `It is currently applied to ${count} patient${count === 1 ? '' : 's'} and will be removed from all of them.`
+                : 'It is not currently applied to any patients.'
+            })()}
+          </p>
+          <div className='flex justify-end gap-2 pt-1'>
+            <Button variant='ghost' onClick={() => setDeleteTagTarget(null)}>Cancel</Button>
+            <Button variant='destructive' onClick={() => void confirmDeleteTag()}>Delete</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteGroupTarget !== null} onOpenChange={(open) => !open && setDeleteGroupTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete group "{deleteGroupTarget?.name}"?</DialogTitle>
+          </DialogHeader>
+          <p className='text-sm text-espresso'>
+            Tags in this group will move to {UNGROUPED_LABEL}. Tags themselves are not deleted.
+          </p>
+          <div className='flex justify-end gap-2 pt-1'>
+            <Button variant='ghost' onClick={() => setDeleteGroupTarget(null)}>Cancel</Button>
+            <Button variant='destructive' onClick={() => void confirmDeleteGroup()}>Delete</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  )
+}

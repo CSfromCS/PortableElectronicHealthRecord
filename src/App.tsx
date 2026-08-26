@@ -108,7 +108,21 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon } from 'lucide-react'
+import type { TagDefinition, TagEvent, TagGroupDefinition } from './types'
+import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
+import { TagPicker } from './features/tags/TagPicker'
+import { TagChipRow } from './features/tags/TagChip'
+import { AmbiguityBadge } from './features/tags/AmbiguityBadge'
+import {
+  applyTagToPatient,
+  clearTerminalTagsFromPatient,
+  findTagAmbiguities,
+  getVisiblePatientTags,
+  isPatientActive,
+  renderTagDisplayText,
+  toggleTagOnPatient,
+} from './features/tags/tagUtils'
 
 type PatientFormState = {
   roomNumber: string
@@ -220,6 +234,9 @@ type BackupPayload = {
   medications?: MedicationEntry[]
   labs?: LabEntry[]
   orders?: OrderEntry[]
+  tagGroups?: TagGroupDefinition[]
+  tagDefinitions?: TagDefinition[]
+  tagEvents?: TagEvent[]
 }
 
 type ReportingAction = {
@@ -368,7 +385,10 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
   const validMedications = candidate.medications === undefined || Array.isArray(candidate.medications)
   const validLabs = candidate.labs === undefined || Array.isArray(candidate.labs)
   const validOrders = candidate.orders === undefined || Array.isArray(candidate.orders)
-  return validVitals && validMedications && validLabs && validOrders
+  const validTagGroups = candidate.tagGroups === undefined || Array.isArray(candidate.tagGroups)
+  const validTagDefinitions = candidate.tagDefinitions === undefined || Array.isArray(candidate.tagDefinitions)
+  const validTagEvents = candidate.tagEvents === undefined || Array.isArray(candidate.tagEvents)
+  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents
 }
 
 const isConflictSyncResult = (result: SyncNowResult): result is ConflictResult => {
@@ -417,6 +437,7 @@ const ensurePatientLastModified = (patient: Patient): Patient => {
   return {
     ...patient,
     lastModified: patient.lastModified ?? patient.admitDate ?? new Date().toISOString(),
+    tagIds: patient.tagIds ?? [],
   }
 }
 
@@ -427,10 +448,10 @@ function App() {
   const outputPreviewTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const carouselThumbnailButtonRefs = useRef<Record<number, HTMLButtonElement>>({})
   const [form, setForm] = useState<PatientFormState>(initialForm)
-  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings'>('patients')
+  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'active' | 'discharged' | 'all'>('active')
+  const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
   const [sortBy, setSortBy] = useState<'room' | 'name' | 'admitDate'>('room')
   const [profileForm, setProfileForm] = useState<ProfileFormState>(initialProfileForm)
   const [dailyDate, setDailyDate] = useState(() => toLocalISODate())
@@ -546,6 +567,10 @@ function App() {
   const labs = useLiveQuery(() => db.labs.toArray(), [])
   const orders = useLiveQuery(() => db.orders.toArray(), [])
   const photoAttachments = useLiveQuery(() => db.photoAttachments.toArray(), [])
+  const tagGroups = useLiveQuery(() => db.tagGroups.toArray(), [])
+  const tagDefinitions = useLiveQuery(() => db.tagDefinitions.toArray(), [])
+  const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
+  const dischargedTag = useMemo(() => (tagDefinitions ?? []).find((tag) => tag.name === 'Discharged'), [tagDefinitions])
   const refreshSyncInsight = useCallback(async (config: SyncConfig | null) => {
     if (!config) {
       setSyncInsight(null)
@@ -741,7 +766,7 @@ function App() {
     [patients, selectedPatientId],
   )
 
-  const activePatients = useMemo(() => (patients ?? []).filter((patient) => patient.status === 'active'), [patients])
+  const activePatients = useMemo(() => (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)), [patients, tagsById])
 
   const activePatientIds = useMemo(
     () => activePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined),
@@ -1042,7 +1067,7 @@ function App() {
 
   const masterChecklistItems = useMemo<MasterChecklistItem[]>(() => {
     const sortedPatients = (patients ?? [])
-      .filter((patient) => patient.status === 'active')
+      .filter((patient) => isPatientActive(patient, tagsById))
       .sort((a, b) => {
       const byRoom = a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
       if (byRoom !== 0) return byRoom
@@ -1105,7 +1130,7 @@ function App() {
     })
 
     return items
-  }, [dailyUpdatesByPatient, masterChecklistDate, patients])
+  }, [dailyUpdatesByPatient, masterChecklistDate, patients, tagsById])
 
   const reviewablePhotoAttachments = useMemo(() => {
     return (photoAttachments ?? [])
@@ -1333,7 +1358,11 @@ function App() {
       a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
 
     return (patients ?? [])
-      .filter((patient) => (statusFilter === 'all' ? true : patient.status === statusFilter))
+      .filter((patient) => {
+        if (statusFilter === 'all') return true
+        const active = isPatientActive(patient, tagsById)
+        return statusFilter === 'active' ? active : !active
+      })
       .filter(matchesQuery)
       .sort((a, b) => {
         if (sortBy === 'name') {
@@ -1344,16 +1373,16 @@ function App() {
         }
         return compareByRoom(a, b)
       })
-  }, [patients, searchQuery, sortBy, statusFilter])
+  }, [patients, searchQuery, sortBy, statusFilter, tagsById])
 
   const quickSwitchPatients = useMemo(() => {
     const compareByRoom = (a: Patient, b: Patient) =>
       a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
 
     return (patients ?? [])
-      .filter((patient) => patient.status === 'active')
+      .filter((patient) => isPatientActive(patient, tagsById))
       .sort(compareByRoom)
-  }, [patients])
+  }, [patients, tagsById])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -1381,7 +1410,7 @@ function App() {
       labs: '',
       pendings: '',
       clerkNotes: '',
-      status: 'active',
+      tagIds: [],
     }
 
     await db.patients.add(patientPayload)
@@ -1617,12 +1646,13 @@ function App() {
 
   const toggleDischarge = async (patient: Patient) => {
     if (patient.id === undefined) return
-    const discharged = patient.status === 'active'
-    await db.patients.update(patient.id, {
-      lastModified: new Date().toISOString(),
-      status: discharged ? 'discharged' : 'active',
-      dischargeDate: discharged ? toLocalISODate() : undefined,
-    })
+    const active = isPatientActive(patient, tagsById)
+    if (active) {
+      if (!dischargedTag) return
+      await applyTagToPatient(patient, dischargedTag)
+    } else {
+      await clearTerminalTagsFromPatient(patient, tagsById)
+    }
   }
 
   useEffect(() => {
@@ -3138,6 +3168,9 @@ function App() {
       medications: await db.medications.toArray(),
       labs: await db.labs.toArray(),
       orders: await db.orders.toArray(),
+      tagGroups: await db.tagGroups.toArray(),
+      tagDefinitions: await db.tagDefinitions.toArray(),
+      tagEvents: await db.tagEvents.toArray(),
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -3165,7 +3198,7 @@ function App() {
 
       await db.transaction(
         'rw',
-        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders],
+        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents],
         async () => {
         await db.labs.clear()
         await db.medications.clear()
@@ -3173,6 +3206,9 @@ function App() {
         await db.vitals.clear()
         await db.dailyUpdates.clear()
         await db.patients.clear()
+        await db.tagGroups.clear()
+        await db.tagDefinitions.clear()
+        await db.tagEvents.clear()
         if (parsed.patients.length > 0) {
           await db.patients.bulkPut(parsed.patients.map((patient) => ensurePatientLastModified(patient)))
         }
@@ -3190,6 +3226,15 @@ function App() {
         }
         if ((parsed.orders ?? []).length > 0) {
           await db.orders.bulkPut(parsed.orders ?? [])
+        }
+        if ((parsed.tagGroups ?? []).length > 0) {
+          await db.tagGroups.bulkPut(parsed.tagGroups ?? [])
+        }
+        if ((parsed.tagDefinitions ?? []).length > 0) {
+          await db.tagDefinitions.bulkPut(parsed.tagDefinitions ?? [])
+        }
+        if ((parsed.tagEvents ?? []).length > 0) {
+          await db.tagEvents.bulkPut(parsed.tagEvents ?? [])
         }
       },
       )
@@ -3228,17 +3273,18 @@ function App() {
   }
 
   const clearDischargedPatients = async () => {
-    const dischargedPatients = await db.patients.where('status').equals('discharged').toArray()
-    const dischargedIds = dischargedPatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
+    const allPatients = await db.patients.toArray()
+    const inactivePatients = allPatients.filter((patient) => !isPatientActive(patient, tagsById))
+    const dischargedIds = inactivePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
 
     if (dischargedIds.length === 0) {
-      setNotice('No discharged patients to clear.')
+      setNotice('No inactive patients to clear.')
       return
     }
 
     await db.transaction(
       'rw',
-      [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments],
+      [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments, db.tagEvents],
       async () => {
       await db.patients.bulkDelete(dischargedIds)
       await db.dailyUpdates.where('patientId').anyOf(dischargedIds).delete()
@@ -3247,6 +3293,7 @@ function App() {
       await db.labs.where('patientId').anyOf(dischargedIds).delete()
       await db.orders.where('patientId').anyOf(dischargedIds).delete()
       await db.photoAttachments.where('patientId').anyOf(dischargedIds).delete()
+      await db.tagEvents.where('patientId').anyOf(dischargedIds).delete()
     },
     )
 
@@ -3278,7 +3325,7 @@ function App() {
       setLastSavedAt(null)
     }
 
-    setNotice('Cleared discharged patients.')
+    setNotice('Cleared inactive patients.')
   }
 
   const addSamplePatient = async () => {
@@ -3309,7 +3356,7 @@ function App() {
         labs: 'Follow-up trends: CBC improving, renal panel stable.',
         pendings: 'Sputum culture and sensitivity result.\nRepeat chest x-ray in 48-72 hours.',
         clerkNotes: 'Patient reports better appetite and less cough overnight.',
-        status: 'active',
+        tagIds: [],
       }) as number
 
       await db.medications.bulkAdd([
@@ -3569,7 +3616,7 @@ function App() {
               id: 'profile-summary',
               label: 'Profile',
               outputTitle: 'Profile summary',
-              buildText: () => toProfileSummary(selectedPatient, profileForm),
+              buildText: () => toProfileSummary(selectedPatient, profileForm, getVisiblePatientTags(selectedPatient, tagsById, tagGroups ?? []).map(renderTagDisplayText)),
             },
             {
               id: 'daily-summary',
@@ -3670,6 +3717,7 @@ function App() {
                       structuredMedsByPatient.get(patient.id ?? -1) ?? [],
                       structuredLabsByPatient.get(patient.id ?? -1) ?? [],
                       structuredOrdersByPatient.get(patient.id ?? -1) ?? [],
+                      getVisiblePatientTags(patient, tagsById, tagGroups ?? []).map(renderTagDisplayText),
                     ),
                   )
                   .join('\n\n'),
@@ -3682,7 +3730,7 @@ function App() {
   const focusedPatientNavLabel = selectedPatient
     ? `${selectedPatient.roomNumber} - ${selectedPatient.lastName}`
     : 'Patient'
-  const canShowFocusedPatientNavButton = selectedPatient?.status === 'active'
+  const canShowFocusedPatientNavButton = selectedPatient ? isPatientActive(selectedPatient, tagsById) : false
   const masterChecklistGroupedByPatient = useMemo(() => {
     const grouped = new Map<number, { patientIdentifier: string; items: MasterChecklistItem[] }>()
 
@@ -3760,7 +3808,7 @@ function App() {
                 </Button>
               ) : null}
               <Button variant={view === 'checklist' ? 'default' : 'ghost'} size='sm' onClick={() => setView('checklist')}>Checklist</Button>
-              <Button variant={view === 'settings' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
+              <Button variant={view === 'settings' || view === 'manageTags' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
             </div>
           </div>
         </div>
@@ -3769,7 +3817,14 @@ function App() {
           <div className='mb-3 h-px bg-linear-to-r from-transparent via-clay/20 to-transparent sm:hidden' aria-hidden='true' />
         ) : null}
 
-        {view !== 'settings' ? (
+        {view === 'manageTags' ? (
+          <ManageTagsScreen
+            tags={tagDefinitions ?? []}
+            groups={tagGroups ?? []}
+            patients={patients ?? []}
+            onBack={() => setView('settings')}
+          />
+        ) : view !== 'settings' ? (
           <>
             {view === 'patients' ? (
               <>
@@ -3808,11 +3863,11 @@ function App() {
                     className='w-full'
                   />
                   <div className='flex gap-2'>
-                    <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as 'active' | 'discharged' | 'all')}>
+                    <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as 'active' | 'inactive' | 'all')}>
                       <SelectTrigger className='flex-1'><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value='active'>Active</SelectItem>
-                        <SelectItem value='discharged'>Discharged</SelectItem>
+                        <SelectItem value='inactive'>Inactive</SelectItem>
                         <SelectItem value='all'>All</SelectItem>
                       </SelectContent>
                     </Select>
@@ -3830,17 +3885,21 @@ function App() {
             </Card>
 
             <div className='flex flex-col gap-2'>
-              {visiblePatients.map((patient) => (
+              {visiblePatients.map((patient) => {
+                const patientActive = isPatientActive(patient, tagsById)
+                const visibleTags = getVisiblePatientTags(patient, tagsById, tagGroups ?? [])
+                const ambiguity = findTagAmbiguities(patient, tagsById)
+                return (
                 <Card key={patient.id} className={cn(
                   'border-clay/20 hover:shadow-md hover:border-clay/35 transition-all duration-200 overflow-hidden bg-white/75',
-                  patient.status === 'active'
+                  patientActive
                     ? 'border-l-[3px] border-l-action-primary shadow-sm'
                     : 'border-l-[3px] border-l-clay/25 opacity-70'
                 )}>
                   <CardContent className='flex items-center gap-3 py-3 px-4'>
                     <div className={cn(
                       'shrink-0 flex items-center justify-center w-11 h-11 rounded-xl text-xs font-bold leading-tight text-center px-1',
-                      patient.status === 'active'
+                      patientActive
                         ? 'bg-action-primary/10 text-action-primary'
                         : 'bg-clay/10 text-clay'
                     )}>
@@ -3859,16 +3918,23 @@ function App() {
                         </p>
                       )}
                     </div>
-                    <Button
-                      size='sm'
-                      variant={patient.status === 'active' ? 'default' : 'secondary'}
-                      onClick={() => selectPatient(patient)}
-                    >
-                      Open
-                    </Button>
+                    <div className='flex flex-col items-end gap-1.5 shrink-0'>
+                      <div className='flex items-center gap-1'>
+                        <AmbiguityBadge ambiguity={ambiguity} />
+                        <TagChipRow tags={visibleTags} />
+                      </div>
+                      <Button
+                        size='sm'
+                        variant={patientActive ? 'default' : 'secondary'}
+                        onClick={() => selectPatient(patient)}
+                      >
+                        Open
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
-              ))}
+                )
+              })}
             </div>
               </>
             ) : null}
@@ -3892,14 +3958,21 @@ function App() {
                     Viewing checklist state for {formatDateShortMonthDay(masterChecklistDate)}. Pending items carry forward to future dates; completed items stay on their original completion date.
                   </p>
                   <div className='space-y-3'>
-                    {masterChecklistGroupedByPatient.map((group) => (
+                    {masterChecklistGroupedByPatient.map((group) => {
+                      const groupPatient = patientsById.get(group.patientId)
+                      const groupVisibleTags = groupPatient ? getVisiblePatientTags(groupPatient, tagsById, tagGroups ?? []) : []
+                      return (
                       <div key={`master-patient-${group.patientId}`} className='space-y-2'>
-                        <p className='text-sm font-semibold text-espresso'>{group.patientIdentifier}</p>
+                        <div>
+                          <p className='text-sm font-semibold text-espresso'>{group.patientIdentifier}</p>
+                          {groupVisibleTags.length > 0 ? <TagChipRow tags={groupVisibleTags} className='justify-start mt-0.5' /> : null}
+                        </div>
                         <div className='space-y-2'>
                           {group.items.map((item) => renderMasterChecklistItem(item, `master-${item.patientId}-${item.viewDate}-${item.index}`))}
                         </div>
                       </div>
-                    ))}
+                      )
+                    })}
                     {masterChecklistItems.length === 0 ? (
                       <p className='text-xs text-clay'>No checklist items for this date.</p>
                     ) : null}
@@ -3913,7 +3986,7 @@ function App() {
               <Card className='border-0 bg-transparent shadow-none sm:bg-white/80 sm:border-clay/25 sm:shadow-md sm:ring-1 sm:ring-clay/10'>
                 <CardHeader className='sticky top-0 z-20 py-2 px-0 pb-2 bg-warm-ivory/97 backdrop-blur-sm border-b border-clay/15 mx-0 sm:static sm:py-3 sm:px-4 sm:pb-0 sm:bg-transparent sm:backdrop-blur-none sm:border-b-0'>
                   <Select
-                    value={selectedPatient.status === 'active' ? (selectedPatient.id?.toString() ?? '') : ''}
+                    value={isPatientActive(selectedPatient, tagsById) ? (selectedPatient.id?.toString() ?? '') : ''}
                     onValueChange={(value) => {
                       const nextId = Number.parseInt(value, 10)
                       if (!Number.isFinite(nextId) || selectedPatient.id === nextId) return
@@ -4110,12 +4183,25 @@ function App() {
                         onOpenPhotoById={openPhotoById}
                       />
                     </div>
+                    <div className='space-y-1.5'>
+                      <div className='flex items-center gap-1.5'>
+                        <Label>Tags</Label>
+                        <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
+                      </div>
+                      <TagPicker
+                        patient={selectedPatient}
+                        tags={tagDefinitions ?? []}
+                        groups={tagGroups ?? []}
+                        onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
+                      />
+                    </div>
                     <div className='flex gap-2 flex-wrap'>
                       <Button
-                        variant={selectedPatient.status === 'active' ? 'destructive' : 'secondary'}
+                        variant={isPatientActive(selectedPatient, tagsById) ? 'destructive' : 'secondary'}
                         onClick={() => void toggleDischarge(selectedPatient)}
+                        disabled={isPatientActive(selectedPatient, tagsById) && !dischargedTag}
                       >
-                        {selectedPatient.status === 'active' ? 'Discharge' : 'Re-activate'}
+                        {isPatientActive(selectedPatient, tagsById) ? 'Discharge' : 'Re-activate'}
                       </Button>
                     </div>
                   </div>
@@ -5307,8 +5393,8 @@ function App() {
                       <Trash2 className='h-4 w-4 text-action-danger' />
                     </div>
                     <div className='min-w-0'>
-                      <p className='text-sm font-semibold text-action-danger'>Clear discharged patients</p>
-                      <p className='text-xs text-clay mt-0.5'>Permanently removes all discharged patient records</p>
+                      <p className='text-sm font-semibold text-action-danger'>Clear inactive patients</p>
+                      <p className='text-xs text-clay mt-0.5'>Permanently removes all patient records with a Terminal tag applied</p>
                     </div>
                   </button>
                   <button
@@ -5325,6 +5411,25 @@ function App() {
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Edit sync settings</p>
                       <p className='text-xs text-clay mt-0.5'>Change room code or device name for this device</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+              {/* Tags */}
+              <div className='space-y-2'>
+                <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tags</p>
+                <div className='flex flex-col gap-2'>
+                  <button
+                    type='button'
+                    onClick={() => setView('manageTags')}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-primary/10 flex items-center justify-center shrink-0'>
+                      <TagsIcon className='h-4 w-4 text-action-primary' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-espresso'>Manage Tags</p>
+                      <p className='text-xs text-clay mt-0.5'>Create, edit, and reorder tags and tag groups</p>
                     </div>
                   </button>
                 </div>
@@ -5996,7 +6101,7 @@ function App() {
             <button
               className={cn(
                 'flex flex-1 flex-col items-center gap-0.5 px-2 py-1.5 text-xs font-semibold rounded-xl transition-all duration-200',
-                view === 'settings'
+                view === 'settings' || view === 'manageTags'
                   ? 'text-action-primary bg-action-primary/10'
                   : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
               )}

@@ -5,6 +5,9 @@ import type {
   MedicationEntry,
   OrderEntry,
   Patient,
+  TagDefinition,
+  TagEvent,
+  TagGroupDefinition,
   VitalEntry,
 } from '@/types'
 import { normalizeDailyUpdate } from '@/features/problems/problemUtils'
@@ -30,6 +33,9 @@ type SyncPayload = {
   medications?: MedicationEntry[]
   labs?: LabEntry[]
   orders?: OrderEntry[]
+  tagGroups?: TagGroupDefinition[]
+  tagDefinitions?: TagDefinition[]
+  tagEvents?: TagEvent[]
 }
 
 type RemoteDescription = {
@@ -245,13 +251,16 @@ const getLatestLocalChangeAt = async (): Promise<string | null> => {
 }
 
 const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
-  const [patients, dailyUpdates, vitals, medications, labs, orders] = await Promise.all([
+  const [patients, dailyUpdates, vitals, medications, labs, orders, tagGroups, tagDefinitions, tagEvents] = await Promise.all([
     db.patients.toArray(),
     db.dailyUpdates.toArray(),
     db.vitals.toArray(),
     db.medications.toArray(),
     db.labs.toArray(),
     db.orders.toArray(),
+    db.tagGroups.toArray(),
+    db.tagDefinitions.toArray(),
+    db.tagEvents.toArray(),
   ])
 
   return {
@@ -264,6 +273,9 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     medications,
     labs,
     orders,
+    tagGroups,
+    tagDefinitions,
+    tagEvents,
   }
 }
 
@@ -271,6 +283,7 @@ const sanitizeImportedPatient = (patient: Patient): Patient => {
   return {
     ...patient,
     lastModified: patient.lastModified ?? patient.admitDate ?? toIsoNow(),
+    tagIds: patient.tagIds ?? [],
   }
 }
 
@@ -288,6 +301,9 @@ const isSyncPayload = (value: unknown): value is SyncPayload => {
     && (candidate.medications === undefined || Array.isArray(candidate.medications))
     && (candidate.labs === undefined || Array.isArray(candidate.labs))
     && (candidate.orders === undefined || Array.isArray(candidate.orders))
+    && (candidate.tagGroups === undefined || Array.isArray(candidate.tagGroups))
+    && (candidate.tagDefinitions === undefined || Array.isArray(candidate.tagDefinitions))
+    && (candidate.tagEvents === undefined || Array.isArray(candidate.tagEvents))
   )
 }
 
@@ -306,6 +322,9 @@ const getMissingSecondaryTables = (payload: SyncPayload): string[] => {
   if (payload.orders === undefined) {
     missingTables.push('orders')
   }
+  if (payload.tagGroups === undefined || payload.tagDefinitions === undefined) {
+    missingTables.push('tags')
+  }
 
   return missingTables
 }
@@ -319,7 +338,10 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
   const patientsToStore = payload.patients.map((patient) => sanitizeImportedPatient(patient))
   const dailyUpdatesToStore = payload.dailyUpdates.map((update) => normalizeDailyUpdate(update))
 
-  await db.transaction('rw', [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders], async () => {
+  await db.transaction(
+    'rw',
+    [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents],
+    async () => {
     await db.patients.clear()
     await db.dailyUpdates.clear()
 
@@ -356,6 +378,27 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       await db.orders.clear()
       if (payload.orders.length > 0) {
         await db.orders.bulkPut(payload.orders)
+      }
+    }
+
+    if (payload.tagGroups !== undefined) {
+      await db.tagGroups.clear()
+      if (payload.tagGroups.length > 0) {
+        await db.tagGroups.bulkPut(payload.tagGroups)
+      }
+    }
+
+    if (payload.tagDefinitions !== undefined) {
+      await db.tagDefinitions.clear()
+      if (payload.tagDefinitions.length > 0) {
+        await db.tagDefinitions.bulkPut(payload.tagDefinitions)
+      }
+    }
+
+    if (payload.tagEvents !== undefined) {
+      await db.tagEvents.clear()
+      if (payload.tagEvents.length > 0) {
+        await db.tagEvents.bulkPut(payload.tagEvents)
       }
     }
   })
