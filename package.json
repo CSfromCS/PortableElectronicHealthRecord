@@ -1,11 +1,12 @@
 {
   "name": "app",
   "private": true,
-    "version": "1.5.0",
+    "version": "1.5.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:staging": "tsc -b && vite build --mode staging",
     "lint": "eslint .",
     "preview": "vite preview"
   },

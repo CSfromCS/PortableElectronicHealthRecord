@@ -1,0 +1,76 @@
+name: Deploy visibility staging
+
+on:
+  push:
+    branches:
+      - chore/prepare-staging-visibility
+      - 'staging/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@v5
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Build staging app
+        run: |
+          npm ci
+          npm run build:staging
+          mv dist staging-dist
+
+      - name: Checkout production source
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          path: production-source
+
+      - name: Build production app for the site root
+        run: |
+          npm ci --prefix production-source
+          npm run build --prefix production-source
+
+      - name: Combine production root and staging path
+        run: |
+          rm -rf site
+          mv production-source/dist site
+          mkdir -p site/staging
+          cp -R staging-dist/. site/staging/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ./site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Report staging URL
+        run: 'echo "Staging URL: ${{ steps.deployment.outputs.page_url }}staging/" >> "$GITHUB_STEP_SUMMARY"'

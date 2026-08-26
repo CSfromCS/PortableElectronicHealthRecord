@@ -344,6 +344,8 @@ const initialOrderForm = (): OrderFormState => ({
 declare const __APP_VERSION__: string;
 declare const __GIT_SHA__: string;
 
+const IS_STAGING_BUILD = import.meta.env.VITE_STAGING_MODE === 'true'
+
 type NavigatorWithStandalone = Navigator & {
   standalone?: boolean
 }
@@ -501,8 +503,8 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const onboardingAutoInstallAttemptedRef = useRef(false)
   const [deferredInstallPromptEvent, setDeferredInstallPromptEvent] = useState<InstallPromptEvent | null>(null)
-  const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(() => readSyncConfig())
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => (readSyncConfig() ? 'idle' : 'not-configured'))
+  const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(() => (IS_STAGING_BUILD ? null : readSyncConfig()))
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => (!IS_STAGING_BUILD && readSyncConfig() ? 'idle' : 'not-configured'))
   const [syncSetupOpen, setSyncSetupOpen] = useState(false)
   const [syncSetupMode, setSyncSetupMode] = useState<'setup' | 'edit'>('setup')
   const [isSyncBusy, setIsSyncBusy] = useState(false)
@@ -627,6 +629,7 @@ function App() {
   }, [hasLocalChangesSinceLastSync, syncConfig, syncInsight?.remoteHasNewerData, syncStatus])
 
   useEffect(() => {
+    if (IS_STAGING_BUILD) return
     void refreshSyncInsight(syncConfig)
   }, [refreshSyncInsight, syncConfig])
 
@@ -3737,12 +3740,14 @@ function App() {
             </div>
           </div>
           <div className='hidden sm:flex items-center justify-end gap-2'>
-            <SyncButton
-              status={syncButtonStatus}
-              onClick={() => void runSyncNow()}
-              disabled={isSyncBusy}
-              lastSyncedAt={syncConfig?.lastSyncedAt ?? null}
-            />
+            {!IS_STAGING_BUILD ? (
+              <SyncButton
+                status={syncButtonStatus}
+                onClick={() => void runSyncNow()}
+                disabled={isSyncBusy}
+                lastSyncedAt={syncConfig?.lastSyncedAt ?? null}
+              />
+            ) : null}
             <div className='flex gap-0.5 bg-blush-sand/60 rounded-xl p-1 border border-clay/15 shadow-sm'>
               <Button variant={view === 'patients' ? 'default' : 'ghost'} size='sm' onClick={() => setView('patients')}>Patients</Button>
               {canShowFocusedPatientNavButton ? (
@@ -5221,8 +5226,9 @@ function App() {
               </CardTitle>
             </CardHeader>
             <CardContent className='px-4 pb-4 space-y-5'>
-              <div className='space-y-2'>
-                <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Sync Status</p>
+              {!IS_STAGING_BUILD ? (
+                <div className='space-y-2'>
+                  <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Sync Status</p>
                 <div className='rounded-xl border border-clay/25 bg-warm-ivory px-3.5 py-3 space-y-2'>
                   <div className='flex flex-wrap gap-1.5'>
                     <Badge className={hasLocalChangesSinceLastSync ? 'bg-action-primary/15 text-action-primary border-action-primary/30' : 'bg-action-edit/15 text-action-edit border-action-edit/30'}>
@@ -5246,7 +5252,8 @@ function App() {
                     <p><strong>Last room upload:</strong> {formatSyncDateTime(syncInsight?.remoteLatestPushAt)} by {latestUploadOwnerLabel}</p>
                   </div>
                 </div>
-              </div>
+                </div>
+              ) : null}
 
               {/* Data management */}
               <div className='space-y-2'>
@@ -5311,22 +5318,24 @@ function App() {
                       <p className='text-xs text-clay mt-0.5'>Permanently removes all discharged patient records</p>
                     </div>
                   </button>
-                  <button
-                    type='button'
-                    onClick={() => {
-                      setSyncSetupMode('edit')
-                      setSyncSetupOpen(true)
-                    }}
-                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
-                  >
-                    <div className='w-9 h-9 rounded-lg bg-action-edit/10 flex items-center justify-center shrink-0'>
-                      <Settings className='h-4 w-4 text-action-edit' />
-                    </div>
-                    <div className='min-w-0'>
-                      <p className='text-sm font-semibold text-espresso'>Edit sync settings</p>
-                      <p className='text-xs text-clay mt-0.5'>Change room code or device name for this device</p>
-                    </div>
-                  </button>
+                  {!IS_STAGING_BUILD ? (
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setSyncSetupMode('edit')
+                        setSyncSetupOpen(true)
+                      }}
+                      className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
+                    >
+                      <div className='w-9 h-9 rounded-lg bg-action-edit/10 flex items-center justify-center shrink-0'>
+                        <Settings className='h-4 w-4 text-action-edit' />
+                      </div>
+                      <div className='min-w-0'>
+                        <p className='text-sm font-semibold text-espresso'>Edit sync settings</p>
+                        <p className='text-xs text-clay mt-0.5'>Change room code or device name for this device</p>
+                      </div>
+                    </button>
+                  ) : null}
                 </div>
               </div>
               {/* App */}
@@ -5454,7 +5463,7 @@ function App() {
               </div>
 
               {/* Sync between devices */}
-              <div className='px-4 py-3 space-y-2.5 border-b border-clay/15'>
+              {!IS_STAGING_BUILD ? <div className='px-4 py-3 space-y-2.5 border-b border-clay/15'>
                 <p className='text-[10px] font-extrabold uppercase tracking-widest text-clay/55'>Sync between devices</p>
                 <ol className='space-y-2'>
                   {([
@@ -5476,7 +5485,7 @@ function App() {
                     </li>
                   ))}
                 </ol>
-              </div>
+              </div> : null}
 
               {/* Data & saving */}
               <div className='px-4 py-3 space-y-2.5'>
@@ -5499,7 +5508,7 @@ function App() {
                 </ul>
               </div>
             </section>
-            <p className='text-sm text-clay'>Version: v{__APP_VERSION__} ({__GIT_SHA__})</p>
+            <p className='text-sm text-clay'>Version: v{__APP_VERSION__} ({IS_STAGING_BUILD ? 'STAGING, ' : ''}{__GIT_SHA__})</p>
             </CardContent>
           </Card>
         )}
@@ -5835,29 +5844,33 @@ function App() {
           </DialogContent>
         </Dialog>
 
-        <SyncSetupDialog
-          open={syncSetupOpen}
-          title={syncSetupMode === 'edit' ? 'Edit sync settings' : 'Set up sync'}
-          submitLabel={syncSetupMode === 'edit' ? 'Update & Sync' : 'Save & Sync'}
-          initialRoomCode={syncConfig?.roomCode ?? ''}
-          initialUsername={syncConfig?.username ?? ''}
-          initialDeviceName={syncConfig?.deviceName ?? 'Phone'}
-          onOpenChange={setSyncSetupOpen}
-          onSubmit={handleSyncSetupSubmit}
-        />
+        {!IS_STAGING_BUILD ? (
+          <>
+            <SyncSetupDialog
+              open={syncSetupOpen}
+              title={syncSetupMode === 'edit' ? 'Edit sync settings' : 'Set up sync'}
+              submitLabel={syncSetupMode === 'edit' ? 'Update & Sync' : 'Save & Sync'}
+              initialRoomCode={syncConfig?.roomCode ?? ''}
+              initialUsername={syncConfig?.username ?? ''}
+              initialDeviceName={syncConfig?.deviceName ?? 'Phone'}
+              onOpenChange={setSyncSetupOpen}
+              onSubmit={handleSyncSetupSubmit}
+            />
 
-        <VersionPickerDialog
-          open={syncConflictOpen}
-          mode={syncConflictMode}
-          versions={conflictVersions}
-          localDeviceTag={syncConfig?.deviceTag ?? 'local-device'}
-          localVersionMeta={localConflictVersionMeta}
-          selectedVersion={selectedConflictVersion}
-          onSelectVersion={setSelectedConflictVersion}
-          onResolve={resolveSyncConflict}
-          onOpenChange={setSyncConflictOpen}
-          isResolving={isSyncBusy}
-        />
+            <VersionPickerDialog
+              open={syncConflictOpen}
+              mode={syncConflictMode}
+              versions={conflictVersions}
+              localDeviceTag={syncConfig?.deviceTag ?? 'local-device'}
+              localVersionMeta={localConflictVersionMeta}
+              selectedVersion={selectedConflictVersion}
+              onSelectVersion={setSelectedConflictVersion}
+              onResolve={resolveSyncConflict}
+              onOpenChange={setSyncConflictOpen}
+              isResolving={isSyncBusy}
+            />
+          </>
+        ) : null}
 
         <Dialog open={showOnboarding} onOpenChange={setShowOnboarding}>
           <DialogContent className='max-w-md'>
@@ -6031,12 +6044,14 @@ function App() {
             ) : null}
           </div>
           <div className='sm:hidden'>
-            <SyncButton
-              status={syncButtonStatus}
-              onClick={() => void runSyncNow()}
-              disabled={isSyncBusy}
-              lastSyncedAt={syncConfig?.lastSyncedAt ?? null}
-            />
+            {!IS_STAGING_BUILD ? (
+              <SyncButton
+                status={syncButtonStatus}
+                onClick={() => void runSyncNow()}
+                disabled={isSyncBusy}
+                lastSyncedAt={syncConfig?.lastSyncedAt ?? null}
+              />
+            ) : null}
           </div>
         </div>
       </footer>
