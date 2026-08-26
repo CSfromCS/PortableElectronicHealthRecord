@@ -12,7 +12,11 @@ import type {
 
 void Dexie.delete('roundingAppDatabase').catch(() => undefined)
 
-const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
+const databaseName = import.meta.env.VITE_STAGING_MODE
+  ? 'roundingAppDatabase_staging_v1'
+  : 'roundingAppDatabase_v1'
+
+const db = new Dexie(databaseName) as Dexie & {
   patients: EntityTable<Patient, 'id'>
   dailyUpdates: EntityTable<DailyUpdate, 'id'>
   vitals: EntityTable<VitalEntry, 'id'>

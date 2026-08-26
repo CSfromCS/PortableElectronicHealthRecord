@@ -3003,6 +3003,7 @@ function App() {
   }, [])
 
   const applySyncResult = useCallback((nextConfig: SyncConfig, message: string) => {
+    if (IS_STAGING_BUILD) return
     saveSyncConfig(nextConfig)
     setSyncConfig(nextConfig)
     setSyncStatus('success')
@@ -3015,6 +3016,8 @@ function App() {
   }, [refreshSyncInsight, resetFocusedEditorState])
 
   const runSyncNow = useCallback(async () => {
+    if (IS_STAGING_BUILD) return
+
     if (!syncConfig) {
       setSyncSetupMode('setup')
       setSyncSetupOpen(true)
@@ -3063,6 +3066,8 @@ function App() {
   }, [applySyncResult, isSyncBusy, refreshSyncInsight, syncConfig])
 
   const handleSyncSetupSubmit = useCallback(async ({ roomCode, deviceName, username }: { roomCode: string; deviceName: SetupDeviceName; username: SetupUsername }) => {
+    if (IS_STAGING_BUILD) return
+
     const nextConfig = await buildSyncConfig(roomCode, deviceName, username, getDefaultSyncEndpoint())
     saveSyncConfig(nextConfig)
     setSyncConfig(nextConfig)
