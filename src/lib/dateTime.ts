@@ -81,6 +81,106 @@ export const toDateTimeStamp = (date: string, time?: string, fallback?: string) 
   return Number.NaN
 }
 
+const MONTH_NAMES = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+]
+
+const monthIndexFromName = (raw: string): number | null => {
+  const normalized = raw.trim().toLowerCase()
+  if (normalized.length < 3) return null
+  const index = MONTH_NAMES.findIndex((name) => name.startsWith(normalized))
+  return index === -1 ? null : index
+}
+
+const normalizeYear = (rawYear: string | undefined, referenceYear: number): number => {
+  if (!rawYear) return referenceYear
+  const year = Number.parseInt(rawYear, 10)
+  if (rawYear.length >= 4) return year
+  return year <= 68 ? 2000 + year : 1900 + year
+}
+
+const buildIsoDate = (year: number, monthIndex: number, day: number): FlexibleDateParseResult => {
+  if (monthIndex < 0 || monthIndex > 11) return { ok: false, error: 'Enter a valid month.' }
+  if (day < 1 || day > 31) return { ok: false, error: 'Enter a valid day.' }
+
+  const date = new Date(year, monthIndex, day)
+  if (date.getFullYear() !== year || date.getMonth() !== monthIndex || date.getDate() !== day) {
+    return { ok: false, error: "That date doesn't exist." }
+  }
+
+  const mm = (monthIndex + 1).toString().padStart(2, '0')
+  const dd = day.toString().padStart(2, '0')
+  return { ok: true, iso: `${year}-${mm}-${dd}` }
+}
+
+export type FlexibleDateParseResult =
+  | { ok: true; iso: string }
+  | { ok: false; error: string }
+
+/**
+ * Permissively parses free-typed date entry (e.g. "jan 1", "1/1", "01/01", "january 1",
+ * "01 jan", "jan 1 2026", "1/1/26") into an ISO yyyy-mm-dd string. Numeric month/day order
+ * (not day/month) matches the MM-DD-YYYY convention used elsewhere in this app.
+ */
+export const parseFlexibleDate = (input: string, referenceDate = new Date()): FlexibleDateParseResult => {
+  const trimmed = input.trim()
+  if (!trimmed) return { ok: false, error: 'Enter a date.' }
+
+  const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(trimmed)
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch
+    return buildIsoDate(Number.parseInt(y, 10), Number.parseInt(m, 10) - 1, Number.parseInt(d, 10))
+  }
+
+  const monthFirstMatch = /^([a-zA-Z]{3,})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{2,4})?$/.exec(trimmed)
+  if (monthFirstMatch) {
+    const [, monthRaw, dayRaw, yearRaw] = monthFirstMatch
+    const monthIndex = monthIndexFromName(monthRaw)
+    if (monthIndex === null) return { ok: false, error: `Unrecognized month "${monthRaw}".` }
+    return buildIsoDate(normalizeYear(yearRaw, referenceDate.getFullYear()), monthIndex, Number.parseInt(dayRaw, 10))
+  }
+
+  const dayFirstMatch = /^(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]{3,})\.?,?\s*(\d{2,4})?$/.exec(trimmed)
+  if (dayFirstMatch) {
+    const [, dayRaw, monthRaw, yearRaw] = dayFirstMatch
+    const monthIndex = monthIndexFromName(monthRaw)
+    if (monthIndex === null) return { ok: false, error: `Unrecognized month "${monthRaw}".` }
+    return buildIsoDate(normalizeYear(yearRaw, referenceDate.getFullYear()), monthIndex, Number.parseInt(dayRaw, 10))
+  }
+
+  const numericMatch = /^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$/.exec(trimmed)
+  if (numericMatch) {
+    const [, monthRaw, dayRaw, yearRaw] = numericMatch
+    return buildIsoDate(
+      normalizeYear(yearRaw, referenceDate.getFullYear()),
+      Number.parseInt(monthRaw, 10) - 1,
+      Number.parseInt(dayRaw, 10),
+    )
+  }
+
+  return { ok: false, error: 'Unrecognized date. Try "Jan 1", "1/1", or "Jan 1 2026".' }
+}
+
+/** Formats an ISO yyyy-mm-dd date as an unambiguous, fully resolved string, e.g. "January 1, 2026". */
+export const formatFlexibleDateConfirmation = (isoDate: string): string => {
+  const [yearText, monthText, dayText] = isoDate.split('-')
+  const year = Number.parseInt(yearText ?? '', 10)
+  const month = Number.parseInt(monthText ?? '', 10)
+  const day = Number.parseInt(dayText ?? '', 10)
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return isoDate
+  if (month < 1 || month > 12) return isoDate
+
+  const date = new Date(year, month - 1, day)
+  if (Number.isNaN(date.getTime())) return isoDate
+
+  // Fixed "D Mon YYYY" format (not locale-dependent) so the confirmation reads the same for
+  // every user regardless of browser locale.
+  const shortMonthName = MONTH_NAMES[month - 1]
+  const capitalizedMonth = `${shortMonthName[0].toUpperCase()}${shortMonthName.slice(1, 3)}`
+  return `${day} ${capitalizedMonth} ${year}`
+}
+
 export const isWithinDateTimeWindow = (
   date: string,
   time: string,

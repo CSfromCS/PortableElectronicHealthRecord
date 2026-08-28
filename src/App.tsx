@@ -37,6 +37,7 @@ import { cn } from '@/lib/utils'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import {
   formatClock,
   formatDateMMDD,
@@ -4095,11 +4096,11 @@ function App() {
                 <CardContent className='space-y-3'>
                   <div className='space-y-1 max-w-60'>
                     <Label htmlFor='master-checklist-date'>Date</Label>
-                    <Input
+                    <FlexibleDateInput
                       id='master-checklist-date'
-                      type='date'
+                      ariaLabel='Master checklist date'
                       value={masterChecklistDate}
-                      onChange={(event) => setMasterChecklistDate(event.target.value)}
+                      onChange={setMasterChecklistDate}
                     />
                   </div>
                   <p className='text-xs text-clay'>
@@ -4244,20 +4245,20 @@ function App() {
                     <div className='grid grid-cols-2 gap-2'>
                       <div className='space-y-1'>
                         <Label htmlFor='profile-admitdate'>Admission Date</Label>
-                        <Input
+                        <FlexibleDateInput
                           id='profile-admitdate'
-                          type='date'
+                          ariaLabel='Admission Date'
                           value={profileForm.admitDate}
-                          onChange={(event) => updateProfileField('admitDate', event.target.value)}
+                          onChange={(isoDate) => updateProfileField('admitDate', isoDate)}
                         />
                       </div>
                       <div className='space-y-1'>
                         <Label htmlFor='profile-referraldate'>Referral Date</Label>
-                        <Input
+                        <FlexibleDateInput
                           id='profile-referraldate'
-                          type='date'
+                          ariaLabel='Referral Date'
                           value={profileForm.referralDate}
-                          onChange={(event) => updateProfileField('referralDate', event.target.value)}
+                          onChange={(isoDate) => updateProfileField('referralDate', isoDate)}
                         />
                       </div>
                     </div>
@@ -4432,12 +4433,11 @@ function App() {
                     <div className='flex flex-wrap items-end gap-2'>
                       <div className='space-y-1 max-w-60'>
                         <Label htmlFor='daily-date'>Date</Label>
-                        <Input
+                        <FlexibleDateInput
                           id='daily-date'
-                          type='date'
+                          ariaLabel='Daily update date'
                           value={dailyDate}
-                          onChange={(event) => {
-                            const nextDate = event.target.value
+                          onChange={(nextDate) => {
                             if (dailyDirty) {
                               void saveDailyUpdate()
                             }
@@ -4573,7 +4573,7 @@ function App() {
                         <div className='grid grid-cols-3 gap-2 sm:grid-cols-4'>
                           <div className='space-y-1'>
                             <Label>Date</Label>
-                            <Input type='date' aria-label='Vital date' value={vitalForm.date} onChange={(event) => updateVitalField('date', event.target.value)} />
+                            <FlexibleDateInput ariaLabel='Vital date' value={vitalForm.date} onChange={(isoDate) => updateVitalField('date', isoDate)} />
                           </div>
                           <div className='space-y-1'>
                             <Label>Time</Label>
@@ -4845,11 +4845,10 @@ function App() {
                         <div className='grid grid-cols-1 sm:grid-cols-3 gap-2'>
                           <div className='space-y-1'>
                             <Label>Date</Label>
-                            <Input
-                              type='date'
-                              aria-label='Lab date'
+                            <FlexibleDateInput
+                              ariaLabel='Lab date'
                               value={labTemplateDate}
-                              onChange={(event) => setLabTemplateDate(event.target.value)}
+                              onChange={setLabTemplateDate}
                             />
                           </div>
                           <div className='space-y-1'>
@@ -5059,7 +5058,7 @@ function App() {
                         <div className='grid grid-cols-2 gap-2'>
                           <div className='space-y-1'>
                             <Label>Date</Label>
-                            <Input type='date' aria-label='Order date' value={orderForm.orderDate} onChange={(event) => updateOrderField('orderDate', event.target.value)} />
+                            <FlexibleDateInput ariaLabel='Order date' value={orderForm.orderDate} onChange={(isoDate) => updateOrderField('orderDate', isoDate)} />
                           </div>
                           <div className='space-y-1'>
                             <Label>Time</Label>
@@ -5424,7 +5423,7 @@ function App() {
                                 <div className='grid grid-cols-2 sm:grid-cols-4 gap-2'>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>From date</Label>
-                                    <Input type='date' value={reportVitalsDateFrom} onChange={(event) => setReportVitalsDateFrom(event.target.value)} />
+                                    <FlexibleDateInput ariaLabel='Vitals filter from date' value={reportVitalsDateFrom} onChange={setReportVitalsDateFrom} />
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>From time</Label>
@@ -5432,7 +5431,7 @@ function App() {
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>Until date</Label>
-                                    <Input type='date' value={reportVitalsDateTo} onChange={(event) => setReportVitalsDateTo(event.target.value)} />
+                                    <FlexibleDateInput ariaLabel='Vitals filter until date' value={reportVitalsDateTo} onChange={setReportVitalsDateTo} />
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>Until time</Label>
@@ -5446,7 +5445,7 @@ function App() {
                                 <div className='grid grid-cols-2 sm:grid-cols-4 gap-2'>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>From date</Label>
-                                    <Input type='date' value={reportOrdersDateFrom} onChange={(event) => setReportOrdersDateFrom(event.target.value)} />
+                                    <FlexibleDateInput ariaLabel='Orders filter from date' value={reportOrdersDateFrom} onChange={setReportOrdersDateFrom} />
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>From time</Label>
@@ -5454,7 +5453,7 @@ function App() {
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>Until date</Label>
-                                    <Input type='date' value={reportOrdersDateTo} onChange={(event) => setReportOrdersDateTo(event.target.value)} />
+                                    <FlexibleDateInput ariaLabel='Orders filter until date' value={reportOrdersDateTo} onChange={setReportOrdersDateTo} />
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>Until time</Label>
