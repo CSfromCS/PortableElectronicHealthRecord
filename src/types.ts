@@ -45,6 +45,8 @@ export interface TagDefinition {
   displayType: TagDisplayType
   emoji?: string
   color?: string
+  /** Text-with-Color only: what's actually shown on the badge (e.g. "Ref" for a "Referral" tag). Falls back to name when unset. */
+  displayText?: string
   groupId?: number
   sortOrder: number
   visibleOnPatientCard: boolean

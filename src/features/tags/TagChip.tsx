@@ -1,5 +1,6 @@
 import type { TagDefinition } from '@/types'
 import { cn } from '@/lib/utils'
+import { renderTagDisplayText } from './tagUtils'
 
 const getContrastingTextColor = (backgroundColor: string): string => {
   const hex = backgroundColor.replace('#', '')
@@ -31,7 +32,7 @@ export const TagChip = ({ tag, className }: { tag: TagDefinition; className?: st
       style={{ backgroundColor, color: getContrastingTextColor(backgroundColor) }}
       title={tag.name}
     >
-      {tag.name}
+      {renderTagDisplayText(tag)}
     </span>
   )
 }

@@ -115,7 +115,7 @@ export const hasTagAmbiguity = (ambiguity: TagAmbiguity): boolean =>
   ambiguity.terminalConflicts.length > 0 || ambiguity.automationRoleConflicts.size > 0
 
 export const renderTagDisplayText = (tag: TagDefinition): string =>
-  tag.displayType === 'emoji' ? (tag.emoji ?? tag.name) : tag.name
+  tag.displayType === 'emoji' ? (tag.emoji ?? tag.name) : (tag.displayText?.trim() || tag.name)
 
 /** Applies a tag to a patient and records a Tag Event History entry (point 3, point 8). */
 export const applyTagToPatient = async (patient: Patient, tag: TagDefinition): Promise<void> => {
