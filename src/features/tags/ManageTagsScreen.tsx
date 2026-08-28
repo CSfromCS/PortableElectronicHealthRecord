@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ChevronLeft, Pencil, Trash2, Plus } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
@@ -73,6 +73,11 @@ export const ManageTagsScreen = ({
   const [renamingGroupName, setRenamingGroupName] = useState('')
   const [deleteTagTarget, setDeleteTagTarget] = useState<TagDefinition | null>(null)
   const [deleteGroupTarget, setDeleteGroupTarget] = useState<TagGroupDefinition | null>(null)
+
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<number>>(new Set())
+  const [bulkColor, setBulkColor] = useState('#c98a5e')
+  const [bulkGroupSelection, setBulkGroupSelection] = useState('')
+  const [bulkNewGroupName, setBulkNewGroupName] = useState('')
 
   const orderedGroups = sortTagGroups(groups)
   const buckets = bucketTagsByGroup(tags, groups)
@@ -228,6 +233,102 @@ export const ManageTagsScreen = ({
   }
   const tagDrag = useDragReorder(tags.map((tag) => tag.id as number), (source, target) => void reorderTags(source, target))
 
+  // Multi-select is independent of which Tag Group a tag currently sits in, so bulk actions
+  // (recolor, card visibility, terminal flag, move-to-group) can span tags from any category.
+  const selectedTags = tags.filter((tag) => tag.id !== undefined && selectedTagIds.has(tag.id))
+  const toggleTagSelected = (tagId: number | undefined) => {
+    if (tagId === undefined) return
+    setSelectedTagIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(tagId)) next.delete(tagId)
+      else next.add(tagId)
+      return next
+    })
+  }
+  const clearSelection = () => {
+    setSelectedTagIds(new Set())
+    setSelectionMode(false)
+  }
+
+  // On desktop, the checkbox is always there to click. On touch devices it stays hidden — to cut
+  // clutter — until a long-press on a tag's content enters selection mode; a plain tap while
+  // already in selection mode then toggles that tag instead of long-pressing again.
+  const [selectionMode, setSelectionMode] = useState(false)
+  const longPressTimerRef = useRef<number | null>(null)
+  const longPressFiredRef = useRef(false)
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+  }
+
+  const handleTagContentTouchStart = (tagId: number | undefined) => {
+    if (tagId === undefined) return
+    longPressFiredRef.current = false
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressFiredRef.current = true
+      setSelectionMode(true)
+      toggleTagSelected(tagId)
+    }, 500)
+  }
+
+  const handleTagContentTouchEnd = (tagId: number | undefined) => {
+    cancelLongPress()
+    if (!longPressFiredRef.current && selectionMode) {
+      toggleTagSelected(tagId)
+    }
+    longPressFiredRef.current = false
+  }
+
+  const applyBulkColor = async () => {
+    const targets = selectedTags.filter((tag) => tag.displayType === 'color' && tag.id !== undefined)
+    if (targets.length === 0) return
+    await db.transaction('rw', [db.tagDefinitions], async () => {
+      await Promise.all(targets.map((tag) => db.tagDefinitions.update(tag.id as number, { color: bulkColor })))
+    })
+  }
+
+  const setBulkVisibility = async (visibleOnPatientCard: boolean) => {
+    const ids = [...selectedTagIds]
+    if (ids.length === 0) return
+    await db.transaction('rw', [db.tagDefinitions], async () => {
+      await Promise.all(ids.map((id) => db.tagDefinitions.update(id, { visibleOnPatientCard })))
+    })
+  }
+
+  const setBulkTerminal = async (terminal: boolean) => {
+    const ids = [...selectedTagIds]
+    if (ids.length === 0) return
+    await db.transaction('rw', [db.tagDefinitions], async () => {
+      await Promise.all(ids.map((id) => db.tagDefinitions.update(id, { terminal })))
+    })
+  }
+
+  const applyBulkGroup = async () => {
+    const ids = [...selectedTagIds]
+    if (ids.length === 0 || !bulkGroupSelection) return
+
+    let targetGroupId: number | undefined
+    if (bulkGroupSelection === '__new__') {
+      const name = bulkNewGroupName.trim()
+      if (!name) return
+      const nextSortOrder = groups.length > 0 ? Math.max(...groups.map((group) => group.sortOrder)) + 1 : 0
+      targetGroupId = await db.tagGroups.add({ name, sortOrder: nextSortOrder })
+    } else if (bulkGroupSelection === '__ungrouped__') {
+      targetGroupId = undefined
+    } else {
+      targetGroupId = Number.parseInt(bulkGroupSelection, 10)
+    }
+
+    await db.transaction('rw', [db.tagDefinitions], async () => {
+      await Promise.all(ids.map((id) => db.tagDefinitions.update(id, { groupId: targetGroupId })))
+    })
+    setBulkGroupSelection('')
+    setBulkNewGroupName('')
+  }
+
   return (
     <Card className='bg-white/80 border-clay/25 shadow-sm'>
       <CardHeader className='py-3 px-4 pb-2'>
@@ -283,6 +384,88 @@ export const ManageTagsScreen = ({
               <Plus className='h-3.5 w-3.5 mr-1' /> Add tag
             </Button>
           </div>
+
+          {selectedTagIds.size > 0 ? (
+            <div className='rounded-lg border border-action-primary/40 bg-action-primary/5 p-3 space-y-2.5'>
+              <div className='flex items-center justify-between'>
+                <p className='text-xs font-semibold text-espresso'>
+                  {selectedTagIds.size} tag{selectedTagIds.size === 1 ? '' : 's'} selected
+                </p>
+                <Button variant='ghost' size='sm' className='h-6 text-xs px-2' onClick={clearSelection}>Clear</Button>
+              </div>
+
+              <div className='flex flex-wrap items-center gap-1.5'>
+                <span className='text-xs text-clay w-24 shrink-0'>Badge color</span>
+                <input
+                  type='color'
+                  value={/^#[0-9a-fA-F]{6}$/.test(bulkColor) ? bulkColor : '#c98a5e'}
+                  onChange={(event) => setBulkColor(event.target.value)}
+                  className='h-7 w-9 shrink-0 rounded border border-clay/30 p-0.5'
+                />
+                <Input
+                  value={bulkColor}
+                  onChange={(event) => setBulkColor(sanitizeHexInput(event.target.value))}
+                  className='w-24 h-7 font-mono text-xs'
+                  maxLength={7}
+                  aria-label='Bulk badge color hex code'
+                />
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='h-7 text-xs'
+                  disabled={!selectedTags.some((tag) => tag.displayType === 'color')}
+                  onClick={() => void applyBulkColor()}
+                >
+                  Apply
+                </Button>
+                <span className='text-[10px] text-clay/70'>Only affects selected "Text with Color" tags</span>
+              </div>
+
+              <div className='flex flex-wrap items-center gap-1.5'>
+                <span className='text-xs text-clay w-24 shrink-0'>Card visibility</span>
+                <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => void setBulkVisibility(true)}>Show on card</Button>
+                <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => void setBulkVisibility(false)}>Hide on card</Button>
+              </div>
+
+              <div className='flex flex-wrap items-center gap-1.5'>
+                <span className='text-xs text-clay w-24 shrink-0'>Terminal</span>
+                <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => void setBulkTerminal(true)}>Mark terminal</Button>
+                <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => void setBulkTerminal(false)}>Clear terminal</Button>
+              </div>
+
+              <div className='flex flex-wrap items-center gap-1.5'>
+                <span className='text-xs text-clay w-24 shrink-0'>Tag group</span>
+                <Select value={bulkGroupSelection} onValueChange={setBulkGroupSelection}>
+                  <SelectTrigger className='h-7 w-40 text-xs'><SelectValue placeholder='Move to…' /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value='__ungrouped__'>{UNGROUPED_LABEL}</SelectItem>
+                    {sortTagGroups(groups).map((group) => (
+                      <SelectItem key={group.id} value={String(group.id)}>{group.name}</SelectItem>
+                    ))}
+                    <SelectItem value='__new__'>+ New group…</SelectItem>
+                  </SelectContent>
+                </Select>
+                {bulkGroupSelection === '__new__' ? (
+                  <Input
+                    placeholder='New group name'
+                    value={bulkNewGroupName}
+                    onChange={(event) => setBulkNewGroupName(event.target.value)}
+                    className='h-7 w-36 text-xs'
+                  />
+                ) : null}
+                <Button
+                  size='sm'
+                  className='h-7 text-xs'
+                  disabled={!bulkGroupSelection || (bulkGroupSelection === '__new__' && !bulkNewGroupName.trim())}
+                  onClick={() => void applyBulkGroup()}
+                >
+                  Apply
+                </Button>
+                <span className='text-[10px] text-clay/70'>Moves tags here regardless of their current group</span>
+              </div>
+            </div>
+          ) : null}
+
           {buckets.length === 0 ? <p className='text-xs text-clay'>No tags defined yet.</p> : null}
           {buckets.map((bucket) => (
             <div key={bucket.groupId ?? 'ungrouped'} className='space-y-1.5'>
@@ -298,9 +481,24 @@ export const ManageTagsScreen = ({
                     )}
                     {...tagDrag.getItemProps(tag.id as number)}
                   >
+                    <input
+                      type='checkbox'
+                      className={cn('h-4 w-4 shrink-0 accent-action-primary', !selectionMode && 'hidden sm:inline-block')}
+                      checked={tag.id !== undefined && selectedTagIds.has(tag.id)}
+                      onChange={() => toggleTagSelected(tag.id)}
+                      aria-label={`Select ${tag.name}`}
+                    />
                     <DragHandle label={`Drag to reorder ${tag.name}`} dragProps={tagDrag.getHandleProps(tag.id as number)} />
-                    <TagChip tag={tag} />
-                    <span className='flex-1 text-sm text-espresso truncate'>{tag.name}</span>
+                    <div
+                      className='flex items-center gap-2 flex-1 min-w-0'
+                      onTouchStart={() => handleTagContentTouchStart(tag.id)}
+                      onTouchEnd={() => handleTagContentTouchEnd(tag.id)}
+                      onTouchMove={cancelLongPress}
+                      onTouchCancel={cancelLongPress}
+                    >
+                      <TagChip tag={tag} />
+                      <span className='flex-1 text-sm text-espresso truncate'>{tag.name}</span>
+                    </div>
                     {tag.terminal ? <span className='text-[10px] text-clay/70'>Terminal</span> : null}
                     {!tag.visibleOnPatientCard ? <span className='text-[10px] text-clay/70'>Hidden on card</span> : null}
                     <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${tag.name}`} onClick={() => openEditTag(tag)}>

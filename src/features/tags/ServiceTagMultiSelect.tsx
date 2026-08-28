@@ -3,11 +3,13 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { TagDefinition } from '@/types'
 import { findServiceTagByName } from './serviceTagUtils'
-import { TagChip } from './TagChip'
+import { TagChip, type TagChipRoleMarker } from './TagChip'
 
 type ServiceTagMultiSelectProps = {
   ariaLabel: string
   placeholder?: string
+  /** Which role this instance manages; rendered as a small M/R badge on each chip so Main and Referral tags stay distinguishable even though they're drawn from the same shared tag pool. */
+  role: 'main' | 'referral'
   selectedTags: TagDefinition[]
   availableTags: TagDefinition[]
   onAdd: (tag: TagDefinition) => void
@@ -18,12 +20,14 @@ type ServiceTagMultiSelectProps = {
 export const ServiceTagMultiSelect = ({
   ariaLabel,
   placeholder,
+  role,
   selectedTags,
   availableTags,
   onAdd,
   onRemove,
   onCreate,
 }: ServiceTagMultiSelectProps) => {
+  const roleMarker: TagChipRoleMarker = role === 'main' ? 'M' : 'R'
   const [query, setQuery] = useState('')
   const [isOpen, setIsOpen] = useState(false)
 
@@ -78,7 +82,7 @@ export const ServiceTagMultiSelect = ({
               key={tag.id}
               className='inline-flex items-center gap-1 rounded-full border border-clay/25 bg-warm-ivory pl-1.5 pr-1 py-0.5'
             >
-              <TagChip tag={tag} />
+              <TagChip tag={tag} roleMarker={roleMarker} />
               <button
                 type='button'
                 aria-label={`Remove ${tag.name}`}
@@ -115,7 +119,7 @@ export const ServiceTagMultiSelect = ({
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => selectSuggestion(tag)}
                   >
-                    <TagChip tag={tag} />
+                    <TagChip tag={tag} roleMarker={roleMarker} />
                   </button>
                 </li>
               ))}

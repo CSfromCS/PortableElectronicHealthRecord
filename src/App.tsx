@@ -114,7 +114,7 @@ import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardLi
 import type { TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { TagPicker } from './features/tags/TagPicker'
-import { TagChipRow } from './features/tags/TagChip'
+import { TagChip, TagChipRow } from './features/tags/TagChip'
 import { AmbiguityBadge } from './features/tags/AmbiguityBadge'
 import {
   applyTagToPatient,
@@ -3966,6 +3966,7 @@ function App() {
                     <ServiceTagMultiSelect
                       ariaLabel='Main Service'
                       placeholder='Main Service'
+                      role='main'
                       selectedTags={resolveServiceTags(pendingMainServiceTagIds, tagsById)}
                       availableTags={serviceTags}
                       {...makePendingServiceTagHandlers(setPendingMainServiceTagIds)}
@@ -4013,7 +4014,12 @@ function App() {
                 const patientActive = isPatientActive(patient, tagsById)
                 const visibleTags = getVisiblePatientTags(patient, tagsById, tagGroups ?? [])
                 const ambiguity = findTagAmbiguities(patient, tagsById)
-                const mainServiceNames = resolveServiceTagNames(patient.mainServiceTagIds, tagsById)
+                const cardMainServiceTags = resolveServiceTags(patient.mainServiceTagIds, tagsById)
+                const cardReferralServiceTags = resolveServiceTags(patient.referralServiceTagIds, tagsById)
+                const visibleMainServiceTags = cardMainServiceTags.filter((tag) => tag.visibleOnPatientCard)
+                const visibleReferralServiceTags = cardReferralServiceTags.filter((tag) => tag.visibleOnPatientCard)
+                const hasAnyServiceTags = cardMainServiceTags.length > 0 || cardReferralServiceTags.length > 0
+                const hasVisibleServiceTags = visibleMainServiceTags.length > 0 || visibleReferralServiceTags.length > 0
                 return (
                 <Card key={patient.id} className={cn(
                   'border-clay/20 hover:shadow-md hover:border-clay/35 transition-all duration-200 overflow-hidden bg-white/75',
@@ -4034,9 +4040,22 @@ function App() {
                       <p className='font-semibold text-espresso truncate text-sm leading-snug'>
                         {patient.lastName}, {patient.firstName}
                       </p>
-                      <p className='text-xs text-clay mt-0.5 truncate'>
-                        {patient.age}/{patient.sex} · {mainServiceNames.join(', ') || '—'}
-                        {patient.ward ? ` · ${patient.ward}` : ''}
+                      <p className='flex items-center flex-wrap gap-x-1 gap-y-0.5 text-xs text-clay mt-0.5'>
+                        <span>{patient.age}/{patient.sex}</span>
+                        {hasVisibleServiceTags || !hasAnyServiceTags ? (
+                          <>
+                            <span>·</span>
+                            {hasVisibleServiceTags ? (
+                              <span className='flex items-center flex-wrap gap-1'>
+                                {visibleMainServiceTags.map((tag) => <TagChip key={`main-${tag.id}`} tag={tag} roleMarker='M' />)}
+                                {visibleReferralServiceTags.map((tag) => <TagChip key={`referral-${tag.id}`} tag={tag} roleMarker='R' />)}
+                              </span>
+                            ) : (
+                              <span>—</span>
+                            )}
+                          </>
+                        ) : null}
+                        {patient.ward ? <span>· {patient.ward}</span> : null}
                       </p>
                       {patient.diagnosis && (
                         <p className='text-xs text-espresso/50 truncate mt-0.5'>
@@ -4245,6 +4264,7 @@ function App() {
                         <ServiceTagMultiSelect
                           ariaLabel='Main Service'
                           placeholder='Add a main service…'
+                          role='main'
                           selectedTags={resolveServiceTags(selectedPatient.mainServiceTagIds, tagsById)}
                           availableTags={serviceTags}
                           {...makePatientServiceTagHandlers(selectedPatient, addMainServiceTagToPatient, removeMainServiceTagFromPatient)}
@@ -4257,6 +4277,7 @@ function App() {
                         <ServiceTagMultiSelect
                           ariaLabel='Referrals'
                           placeholder='Add a referral service…'
+                          role='referral'
                           selectedTags={resolveServiceTags(selectedPatient.referralServiceTagIds, tagsById)}
                           availableTags={serviceTags}
                           {...makePatientServiceTagHandlers(selectedPatient, addReferralServiceTagToPatient, removeReferralServiceTagFromPatient)}
