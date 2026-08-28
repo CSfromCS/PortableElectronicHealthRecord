@@ -16,7 +16,7 @@ export function FlexibleDateInput({
   value,
   onChange,
   ariaLabel,
-  placeholder = 'e.g. Jan 1, 2026',
+  placeholder = 'e.g. 1 Jan 2026',
   className,
 }: {
   id?: string

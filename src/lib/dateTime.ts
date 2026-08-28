@@ -169,11 +169,16 @@ export const formatFlexibleDateConfirmation = (isoDate: string): string => {
   const month = Number.parseInt(monthText ?? '', 10)
   const day = Number.parseInt(dayText ?? '', 10)
   if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return isoDate
+  if (month < 1 || month > 12) return isoDate
 
   const date = new Date(year, month - 1, day)
   if (Number.isNaN(date.getTime())) return isoDate
 
-  return new Intl.DateTimeFormat(undefined, { month: 'long', day: 'numeric', year: 'numeric' }).format(date)
+  // Fixed "D Mon YYYY" format (not locale-dependent) so the confirmation reads the same for
+  // every user regardless of browser locale.
+  const shortMonthName = MONTH_NAMES[month - 1]
+  const capitalizedMonth = `${shortMonthName[0].toUpperCase()}${shortMonthName.slice(1, 3)}`
+  return `${day} ${capitalizedMonth} ${year}`
 }
 
 export const isWithinDateTimeWindow = (
