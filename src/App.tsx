@@ -452,7 +452,7 @@ function App() {
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
-  const [isEditingTags, setIsEditingTags] = useState(false)
+  const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
   const [sortBy, setSortBy] = useState<'room' | 'name' | 'admitDate'>('room')
@@ -773,6 +773,10 @@ function App() {
     () => selectedPatient ? orderTagsCanonically(getAppliedPatientTags(selectedPatient, tagsById), tagGroups ?? []) : [],
     [selectedPatient, tagsById, tagGroups],
   )
+
+  // Sticky per patient: undefined (never toggled) defaults to expanded. Zero applied tags always forces expanded.
+  const isEditingTags = appliedPatientTags.length === 0
+    || (selectedPatient?.id !== undefined ? (tagsEditOverrideByPatientId.get(selectedPatient.id) ?? true) : true)
 
   const activePatients = useMemo(() => (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)), [patients, tagsById])
 
@@ -1647,7 +1651,6 @@ function App() {
     setAttachmentFilter('all')
     setAttachmentTitle(buildDefaultPhotoTitle('profile'))
     setSelectedAttachmentId(null)
-    setIsEditingTags(false)
     if (!options?.preserveSelectedTab) {
       setSelectedTab('profile')
     }
@@ -4202,13 +4205,21 @@ function App() {
                             variant='ghost'
                             className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
                             aria-label={isEditingTags ? 'Done editing tags' : 'Edit tags'}
-                            onClick={() => setIsEditingTags((previous) => !previous)}
+                            onClick={() => {
+                              const patientId = selectedPatient.id
+                              if (patientId === undefined) return
+                              setTagsEditOverrideByPatientId((previous) => {
+                                const next = new Map(previous)
+                                next.set(patientId, !isEditingTags)
+                                return next
+                              })
+                            }}
                           >
                             <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
                           </Button>
                         ) : null}
                       </div>
-                      {isEditingTags || appliedPatientTags.length === 0 ? (
+                      {isEditingTags ? (
                         <TagPicker
                           patient={selectedPatient}
                           tags={tagDefinitions ?? []}
