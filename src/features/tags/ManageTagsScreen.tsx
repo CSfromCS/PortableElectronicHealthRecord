@@ -21,6 +21,7 @@ type TagFormState = {
   displayType: TagDisplayType
   emoji: string
   color: string
+  displayText: string
   groupId: string
   visibleOnPatientCard: boolean
   terminal: boolean
@@ -32,6 +33,7 @@ const blankTagForm = (defaultGroupId?: string): TagFormState => ({
   displayType: 'emoji',
   emoji: '',
   color: '#c98a5e',
+  displayText: '',
   groupId: defaultGroupId ?? '',
   visibleOnPatientCard: true,
   terminal: false,
@@ -43,11 +45,14 @@ const tagToForm = (tag: TagDefinition): TagFormState => ({
   displayType: tag.displayType,
   emoji: tag.emoji ?? '',
   color: tag.color ?? '#c98a5e',
+  displayText: tag.displayText ?? '',
   groupId: tag.groupId !== undefined ? String(tag.groupId) : '',
   visibleOnPatientCard: tag.visibleOnPatientCard,
   terminal: tag.terminal,
   automationRole: tag.automationRole,
 })
+
+const sanitizeHexInput = (raw: string): string => `#${raw.replace(/[^0-9a-fA-F]/g, '').slice(0, 6)}`
 
 export const ManageTagsScreen = ({
   tags,
@@ -106,6 +111,7 @@ export const ManageTagsScreen = ({
         displayType: tagForm.displayType,
         emoji: tagForm.displayType === 'emoji' ? (tagForm.emoji.trim() || undefined) : undefined,
         color: tagForm.displayType === 'color' ? tagForm.color : undefined,
+        displayText: tagForm.displayType === 'color' ? (tagForm.displayText.trim() || undefined) : undefined,
         groupId,
         visibleOnPatientCard: tagForm.visibleOnPatientCard,
         terminal: tagForm.terminal,
@@ -119,6 +125,7 @@ export const ManageTagsScreen = ({
         displayType: tagForm.displayType,
         emoji: tagForm.displayType === 'emoji' ? (tagForm.emoji.trim() || undefined) : undefined,
         color: tagForm.displayType === 'color' ? tagForm.color : undefined,
+        displayText: tagForm.displayType === 'color' ? (tagForm.displayText.trim() || undefined) : undefined,
         groupId,
         sortOrder: nextSortOrder,
         visibleOnPatientCard: tagForm.visibleOnPatientCard,
@@ -341,10 +348,39 @@ export const ManageTagsScreen = ({
                 <Input id='tag-emoji' value={tagForm.emoji} onChange={(event) => setTagForm({ ...tagForm, emoji: event.target.value })} placeholder='e.g. 🏥' className='w-24' />
               </div>
             ) : (
-              <div className='space-y-1'>
-                <Label htmlFor='tag-color'>Badge color</Label>
-                <input id='tag-color' type='color' value={tagForm.color} onChange={(event) => setTagForm({ ...tagForm, color: event.target.value })} className='h-9 w-16 rounded border border-clay/30' />
-              </div>
+              <>
+                <div className='space-y-1'>
+                  <Label htmlFor='tag-color'>Badge color</Label>
+                  <div className='flex items-center gap-1.5'>
+                    <input
+                      id='tag-color'
+                      type='color'
+                      value={/^#[0-9a-fA-F]{6}$/.test(tagForm.color) ? tagForm.color : '#c98a5e'}
+                      onChange={(event) => setTagForm({ ...tagForm, color: event.target.value })}
+                      className='h-9 w-12 shrink-0 rounded border border-clay/30 p-0.5'
+                    />
+                    <Input
+                      value={tagForm.color}
+                      onChange={(event) => setTagForm({ ...tagForm, color: sanitizeHexInput(event.target.value) })}
+                      placeholder='#c98a5e'
+                      className='w-28 font-mono text-sm'
+                      maxLength={7}
+                      aria-label='Badge color hex code'
+                    />
+                  </div>
+                </div>
+                <div className='space-y-1'>
+                  <Label htmlFor='tag-display-text'>Display text</Label>
+                  <Input
+                    id='tag-display-text'
+                    value={tagForm.displayText}
+                    onChange={(event) => setTagForm({ ...tagForm, displayText: event.target.value })}
+                    placeholder={tagForm.name || 'Text shown on the badge'}
+                    className='w-40'
+                  />
+                  <p className='text-xs text-clay'>What the badge shows (e.g. "Ref" for "Referral"). Leave blank to show the tag's name.</p>
+                </div>
+              </>
             )}
 
             <div className='space-y-1'>
