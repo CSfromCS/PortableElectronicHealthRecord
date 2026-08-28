@@ -4027,11 +4027,24 @@ function App() {
                 )}>
                   <CardContent className='flex items-center gap-3 py-3 px-4'>
                     <div className='flex-1 min-w-0'>
-                      <p className='flex items-baseline gap-1 font-semibold text-espresso text-sm leading-snug'>
-                        <span className='shrink-0'>{patient.roomNumber}</span>
-                        <span className='truncate'>— {patient.lastName}, {patient.firstName}</span>
+                      <p className='flex items-baseline gap-1.5 text-sm leading-snug'>
+                        <span className={cn(
+                          'shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-bold leading-none',
+                          patientActive
+                            ? 'bg-action-primary/10 text-action-primary'
+                            : 'bg-clay/10 text-clay'
+                        )}>
+                          {patient.roomNumber}
+                        </span>
+                        <span className='truncate font-semibold text-espresso'>{patient.lastName}, {patient.firstName}</span>
                       </p>
                       <p className='flex items-center flex-wrap gap-x-1 gap-y-0.5 text-xs text-clay mt-0.5'>
+                        {patient.ward ? (
+                          <>
+                            <span>{patient.ward}</span>
+                            <span>·</span>
+                          </>
+                        ) : null}
                         <span>{patient.age}/{patient.sex}</span>
                         {hasVisibleServiceTags || !hasAnyServiceTags ? (
                           <>
@@ -4046,7 +4059,6 @@ function App() {
                             )}
                           </>
                         ) : null}
-                        {patient.ward ? <span>· {patient.ward}</span> : null}
                       </p>
                       {patient.diagnosis && (
                         <p className='text-xs text-espresso/50 truncate mt-0.5'>
