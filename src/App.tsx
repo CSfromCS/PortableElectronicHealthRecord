@@ -307,6 +307,19 @@ const reorderChecklistItems = (items: DailyChecklistItem[], sourceIndex: number,
   return nextItems
 }
 
+/**
+ * New items go immediately after the last unchecked item (i.e. right before the first checked
+ * item), or at the very top if every existing item is already checked — mirroring where a
+ * reopened item lands via setChecklistItemCompletion below.
+ */
+const insertNewChecklistItem = (items: DailyChecklistItem[], newItem: DailyChecklistItem) => {
+  const firstCompletedIndex = items.findIndex((item) => item.completed)
+  const insertIndex = firstCompletedIndex < 0 ? items.length : firstCompletedIndex
+  const nextItems = [...items]
+  nextItems.splice(insertIndex, 0, newItem)
+  return nextItems
+}
+
 const setChecklistItemCompletion = (items: DailyChecklistItem[], index: number, completed: boolean) => {
   const currentItem = items[index]
   if (!currentItem || currentItem.completed === completed) return items
@@ -1818,7 +1831,7 @@ function App() {
 
     setDailyUpdateForm((previous) => ({
       ...previous,
-      checklist: [...previous.checklist, { text: nextText, completed: false }],
+      checklist: insertNewChecklistItem(previous.checklist, { text: nextText, completed: false }),
     }))
     setDailyChecklistDraft('')
     setDailyDirty(true)
