@@ -6,7 +6,11 @@ export const DEFAULT_TAG_GROUP_NAMES = [
   'Clinical Status',
   'Chart Type',
   'OR Status',
+  'Service',
 ] as const
+
+/** Name of the Tag Group holding Main Service / Referral service tags (kept out of `tagIds`, see Patient.mainServiceTagIds). */
+export const SERVICE_TAG_GROUP_NAME = 'Service'
 
 export type DefaultTagSeed = {
   name: string

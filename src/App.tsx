@@ -5,8 +5,10 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type Dispatch,
   type DragEvent,
   type FormEvent,
+  type SetStateAction,
   type TouchEvent,
 } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
@@ -123,32 +125,47 @@ import {
   renderTagDisplayText,
   toggleTagOnPatient,
 } from './features/tags/tagUtils'
+import { SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
+import {
+  addMainServiceTagToPatient,
+  addReferralServiceTagToPatient,
+  ensureServiceGroupId,
+  getOrCreateServiceTag,
+  removeMainServiceTagFromPatient,
+  removeReferralServiceTagFromPatient,
+  resolveServiceTagNames,
+  resolveServiceTags,
+} from './features/tags/serviceTagUtils'
+import { ServiceTagMultiSelect } from './features/tags/ServiceTagMultiSelect'
 
 type PatientFormState = {
   roomNumber: string
+  ward: string
   firstName: string
   lastName: string
   age: string
   sex: 'M' | 'F' | 'O'
-  service: string
 }
 
 const initialForm: PatientFormState = {
   roomNumber: '',
+  ward: '',
   firstName: '',
   lastName: '',
   age: '',
   sex: 'M',
-  service: '',
 }
 
 type ProfileFormState = {
   roomNumber: string
+  ward: string
+  roomLegacyRaw?: string
   firstName: string
   lastName: string
   age: string
   sex: 'M' | 'F' | 'O'
-  service: string
+  admitDate: string
+  referralDate: string
   diagnosis: string
   chiefComplaint: string
   hpiText: string
@@ -164,11 +181,14 @@ type ProfileFormState = {
 
 const initialProfileForm: ProfileFormState = {
   roomNumber: '',
+  ward: '',
+  roomLegacyRaw: undefined,
   firstName: '',
   lastName: '',
   age: '',
   sex: 'M',
-  service: '',
+  admitDate: '',
+  referralDate: '',
   diagnosis: '',
   chiefComplaint: '',
   hpiText: '',
@@ -438,6 +458,10 @@ const ensurePatientLastModified = (patient: Patient): Patient => {
     ...patient,
     lastModified: patient.lastModified ?? patient.admitDate ?? new Date().toISOString(),
     tagIds: patient.tagIds ?? [],
+    ward: patient.ward ?? '',
+    referralDate: patient.referralDate ?? patient.admitDate ?? toLocalISODate(),
+    mainServiceTagIds: patient.mainServiceTagIds ?? [],
+    referralServiceTagIds: patient.referralServiceTagIds ?? [],
   }
 }
 
@@ -448,6 +472,7 @@ function App() {
   const outputPreviewTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const carouselThumbnailButtonRefs = useRef<Record<number, HTMLButtonElement>>({})
   const [form, setForm] = useState<PatientFormState>(initialForm)
+  const [pendingMainServiceTagIds, setPendingMainServiceTagIds] = useState<number[]>([])
   const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -571,6 +596,58 @@ function App() {
   const tagDefinitions = useLiveQuery(() => db.tagDefinitions.toArray(), [])
   const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
   const dischargedTag = useMemo(() => (tagDefinitions ?? []).find((tag) => tag.name === 'Discharged'), [tagDefinitions])
+  const serviceGroupId = useMemo(
+    () => (tagGroups ?? []).find((group) => group.name === SERVICE_TAG_GROUP_NAME)?.id,
+    [tagGroups],
+  )
+  const serviceTags = useMemo(
+    () => (tagDefinitions ?? []).filter((tag) => tag.groupId !== undefined && tag.groupId === serviceGroupId),
+    [tagDefinitions, serviceGroupId],
+  )
+  const nonServiceTagDefinitions = useMemo(
+    () => (tagDefinitions ?? []).filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId),
+    [tagDefinitions, serviceGroupId],
+  )
+
+  // Add-patient form has no patient record yet, so newly created/selected service tags are staged
+  // in local state (`pendingMainServiceTagIds`) until the patient is created.
+  const makePendingServiceTagHandlers = (setIds: Dispatch<SetStateAction<number[]>>) => ({
+    onAdd: (tag: TagDefinition) => {
+      if (tag.id === undefined) return
+      const tagId = tag.id
+      setIds((previous) => (previous.includes(tagId) ? previous : [...previous, tagId]))
+    },
+    onRemove: (tag: TagDefinition) => {
+      setIds((previous) => previous.filter((id) => id !== tag.id))
+    },
+    onCreate: (name: string) => {
+      void (async () => {
+        const groupId = await ensureServiceGroupId(tagGroups ?? [])
+        const tag = await getOrCreateServiceTag(name, serviceTags, groupId)
+        if (tag.id === undefined) return
+        const tagId = tag.id
+        setIds((previous) => (previous.includes(tagId) ? previous : [...previous, tagId]))
+      })()
+    },
+  })
+
+  // Profile tab edits an existing patient, so service tag changes persist immediately (same
+  // immediate-write pattern as the general Tags picker), rather than staging through profileForm.
+  const makePatientServiceTagHandlers = (
+    patient: Patient,
+    addFn: (patient: Patient, tag: TagDefinition) => Promise<void>,
+    removeFn: (patient: Patient, tag: TagDefinition) => Promise<void>,
+  ) => ({
+    onAdd: (tag: TagDefinition) => void addFn(patient, tag),
+    onRemove: (tag: TagDefinition) => void removeFn(patient, tag),
+    onCreate: (name: string) => {
+      void (async () => {
+        const groupId = await ensureServiceGroupId(tagGroups ?? [])
+        const tag = await getOrCreateServiceTag(name, serviceTags, groupId)
+        await addFn(patient, tag)
+      })()
+    },
+  })
   const refreshSyncInsight = useCallback(async (config: SyncConfig | null) => {
     if (!config) {
       setSyncInsight(null)
@@ -1348,7 +1425,11 @@ function App() {
     const query = searchQuery.trim().toLowerCase()
     const matchesQuery = (patient: Patient) => {
       if (!query) return true
-      return [patient.roomNumber, patient.lastName, patient.firstName, patient.service]
+      const serviceNames = [
+        ...resolveServiceTagNames(patient.mainServiceTagIds, tagsById),
+        ...resolveServiceTagNames(patient.referralServiceTagIds, tagsById),
+      ]
+      return [patient.roomNumber, patient.ward, patient.lastName, patient.firstName, ...serviceNames]
         .join(' ')
         .toLowerCase()
         .includes(query)
@@ -1389,16 +1470,20 @@ function App() {
     const age = Number.parseInt(form.age, 10)
     if (!Number.isFinite(age)) return
 
+    const admissionDate = toLocalISODate()
     const patientPayload: Omit<Patient, 'id'> = {
       lastModified: new Date().toISOString(),
       roomNumber: form.roomNumber.trim(),
+      ward: form.ward.trim(),
       firstName: form.firstName.trim(),
       lastName: form.lastName.trim(),
       age,
       sex: form.sex,
-      service: form.service.trim(),
       diagnosis: '',
-      admitDate: toLocalISODate(),
+      admitDate: admissionDate,
+      referralDate: admissionDate,
+      mainServiceTagIds: pendingMainServiceTagIds,
+      referralServiceTagIds: [],
       attendingPhysician: '',
       chiefComplaint: '',
       hpiText: '',
@@ -1415,6 +1500,7 @@ function App() {
 
     await db.patients.add(patientPayload)
     setForm(initialForm)
+    setPendingMainServiceTagIds([])
   }
 
   const loadDailyUpdate = useCallback(async (patientId: number, date: string) => {
@@ -1546,14 +1632,19 @@ function App() {
       setIsSaving(true)
 
       try {
+        const wardTrimmed = profileForm.ward.trim()
         await db.patients.update(selectedPatientId, {
           lastModified: new Date().toISOString(),
           roomNumber: profileForm.roomNumber.trim(),
+          ward: wardTrimmed,
+          // Resolved once the clerk fills in Ward manually; keep it until then so nothing is lost.
+          roomLegacyRaw: wardTrimmed ? undefined : profileForm.roomLegacyRaw,
           firstName: profileForm.firstName.trim(),
           lastName: profileForm.lastName.trim(),
           ...(ageIsValid ? { age } : {}),
           sex: profileForm.sex,
-          service: profileForm.service.trim(),
+          admitDate: profileForm.admitDate,
+          referralDate: profileForm.referralDate,
           diagnosis: profileForm.diagnosis,
           chiefComplaint: profileForm.chiefComplaint,
           hpiText: profileForm.hpiText,
@@ -1597,11 +1688,14 @@ function App() {
 
     setProfileForm({
       roomNumber: patient.roomNumber,
+      ward: patient.ward ?? '',
+      roomLegacyRaw: patient.roomLegacyRaw,
       firstName: patient.firstName,
       lastName: patient.lastName,
       age: patient.age.toString(),
       sex: patient.sex,
-      service: patient.service,
+      admitDate: patient.admitDate,
+      referralDate: patient.referralDate ?? patient.admitDate,
       diagnosis: patient.diagnosis,
       chiefComplaint: patient.chiefComplaint ?? '',
       hpiText: patient.hpiText ?? '',
@@ -3337,13 +3431,16 @@ function App() {
       samplePatientId = await db.patients.add({
         lastModified: now,
         roomNumber: '512A',
+        ward: '',
         lastName: 'Dela Cruz',
         firstName: 'Juan',
         middleName: 'Santos',
         age: 57,
         sex: 'M',
         admitDate: today,
-        service: 'Internal Medicine',
+        referralDate: today,
+        mainServiceTagIds: [],
+        referralServiceTagIds: [],
         attendingPhysician: 'Dr. Maria C. Garcia',
         diagnosis: 'Community-acquired pneumonia (RLL), improving',
         chiefComplaint: '5 days cough, fever, and dyspnea',
@@ -3616,7 +3713,13 @@ function App() {
               id: 'profile-summary',
               label: 'Profile',
               outputTitle: 'Profile summary',
-              buildText: () => toProfileSummary(selectedPatient, profileForm, getVisiblePatientTags(selectedPatient, tagsById, tagGroups ?? []).map(renderTagDisplayText)),
+              buildText: () => toProfileSummary(
+                selectedPatient,
+                profileForm,
+                getVisiblePatientTags(selectedPatient, tagsById, tagGroups ?? []).map(renderTagDisplayText),
+                resolveServiceTagNames(selectedPatient.mainServiceTagIds, tagsById),
+                resolveServiceTagNames(selectedPatient.referralServiceTagIds, tagsById),
+              ),
             },
             {
               id: 'daily-summary',
@@ -3834,7 +3937,8 @@ function App() {
               </CardHeader>
               <CardContent className='px-3 pb-3'>
                 <form className='grid grid-cols-2 gap-2 sm:grid-cols-3' onSubmit={handleSubmit}>
-                  <Input aria-label='Room' placeholder='Room' value={form.roomNumber} onChange={(event) => setForm({ ...form, roomNumber: event.target.value })} required />
+                  <Input aria-label='Room Number' placeholder='Room Number' value={form.roomNumber} onChange={(event) => setForm({ ...form, roomNumber: event.target.value })} required />
+                  <Input aria-label='Ward/Location' placeholder='Ward/Location' value={form.ward} onChange={(event) => setForm({ ...form, ward: event.target.value })} />
                   <Input aria-label='First name' placeholder='First name' value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required />
                   <Input aria-label='Last name' placeholder='Last name' value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value })} required />
                   <Input aria-label='Age' placeholder='Age' type='number' min='0' value={form.age} onChange={(event) => setForm({ ...form, age: event.target.value })} required />
@@ -3846,7 +3950,15 @@ function App() {
                       <SelectItem value='O'>O</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Input aria-label='Service' placeholder='Service' value={form.service} onChange={(event) => setForm({ ...form, service: event.target.value })} required />
+                  <div className='col-span-2 sm:col-span-3'>
+                    <ServiceTagMultiSelect
+                      ariaLabel='Main Service'
+                      placeholder='Main Service'
+                      selectedTags={resolveServiceTags(pendingMainServiceTagIds, tagsById)}
+                      availableTags={serviceTags}
+                      {...makePendingServiceTagHandlers(setPendingMainServiceTagIds)}
+                    />
+                  </div>
                   <Button type='submit' className='col-span-2 sm:col-span-3'>Add patient</Button>
                 </form>
               </CardContent>
@@ -3889,6 +4001,7 @@ function App() {
                 const patientActive = isPatientActive(patient, tagsById)
                 const visibleTags = getVisiblePatientTags(patient, tagsById, tagGroups ?? [])
                 const ambiguity = findTagAmbiguities(patient, tagsById)
+                const mainServiceNames = resolveServiceTagNames(patient.mainServiceTagIds, tagsById)
                 return (
                 <Card key={patient.id} className={cn(
                   'border-clay/20 hover:shadow-md hover:border-clay/35 transition-all duration-200 overflow-hidden bg-white/75',
@@ -3910,7 +4023,8 @@ function App() {
                         {patient.lastName}, {patient.firstName}
                       </p>
                       <p className='text-xs text-clay mt-0.5 truncate'>
-                        {patient.age}/{patient.sex} · {patient.service.split('\n')[0]}
+                        {patient.age}/{patient.sex} · {mainServiceNames.join(', ') || '—'}
+                        {patient.ward ? ` · ${patient.ward}` : ''}
                       </p>
                       {patient.diagnosis && (
                         <p className='text-xs text-espresso/50 truncate mt-0.5'>
@@ -4030,11 +4144,19 @@ function App() {
                   <div className='space-y-3'>
                     <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-room'>Room</Label>
+                        <Label htmlFor='profile-room'>Room Number</Label>
                         <Input
                           id='profile-room'
                           value={profileForm.roomNumber}
                           onChange={(event) => updateProfileField('roomNumber', event.target.value)}
+                        />
+                      </div>
+                      <div className='space-y-1'>
+                        <Label htmlFor='profile-ward'>Ward/Location</Label>
+                        <Input
+                          id='profile-ward'
+                          value={profileForm.ward}
+                          onChange={(event) => updateProfileField('ward', event.target.value)}
                         />
                       </div>
                       <div className='space-y-1'>
@@ -4080,17 +4202,54 @@ function App() {
                         </Select>
                       </div>
                     </div>
+                    {profileForm.roomLegacyRaw ? (
+                      <p className='text-xs text-action-danger'>
+                        Unresolved combined room value: "{profileForm.roomLegacyRaw}" — split it into Room Number and Ward/Location above to clear this note.
+                      </p>
+                    ) : null}
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='space-y-1'>
+                        <Label htmlFor='profile-admitdate'>Admission Date</Label>
+                        <Input
+                          id='profile-admitdate'
+                          type='date'
+                          value={profileForm.admitDate}
+                          onChange={(event) => updateProfileField('admitDate', event.target.value)}
+                        />
+                      </div>
+                      <div className='space-y-1'>
+                        <Label htmlFor='profile-referraldate'>Referral Date</Label>
+                        <Input
+                          id='profile-referraldate'
+                          type='date'
+                          value={profileForm.referralDate}
+                          onChange={(event) => updateProfileField('referralDate', event.target.value)}
+                        />
+                      </div>
+                    </div>
                     <div className='space-y-1'>
-                      <Label htmlFor='profile-service'>Service</Label>
-                      <PhotoMentionField
-                        ariaLabel='Service'
-                        placeholder='Service'
-                        value={profileForm.service}
-                        onChange={(nextValue) => updateProfileField('service', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
+                      <Label>Main Service</Label>
+                      {selectedPatient ? (
+                        <ServiceTagMultiSelect
+                          ariaLabel='Main Service'
+                          placeholder='Add a main service…'
+                          selectedTags={resolveServiceTags(selectedPatient.mainServiceTagIds, tagsById)}
+                          availableTags={serviceTags}
+                          {...makePatientServiceTagHandlers(selectedPatient, addMainServiceTagToPatient, removeMainServiceTagFromPatient)}
+                        />
+                      ) : null}
+                    </div>
+                    <div className='space-y-1'>
+                      <Label>Referrals</Label>
+                      {selectedPatient ? (
+                        <ServiceTagMultiSelect
+                          ariaLabel='Referrals'
+                          placeholder='Add a referral service…'
+                          selectedTags={resolveServiceTags(selectedPatient.referralServiceTagIds, tagsById)}
+                          availableTags={serviceTags}
+                          {...makePatientServiceTagHandlers(selectedPatient, addReferralServiceTagToPatient, removeReferralServiceTagFromPatient)}
+                        />
+                      ) : null}
                     </div>
                     <div className='space-y-1'>
                       <Label htmlFor='profile-diagnosis'>Diagnosis</Label>
@@ -4190,7 +4349,7 @@ function App() {
                       </div>
                       <TagPicker
                         patient={selectedPatient}
-                        tags={tagDefinitions ?? []}
+                        tags={nonServiceTagDefinitions}
                         groups={tagGroups ?? []}
                         onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
                       />
@@ -5492,7 +5651,7 @@ function App() {
                 <p className='text-[10px] font-extrabold uppercase tracking-widest text-clay/55'>Getting started</p>
                 <ol className='space-y-2'>
                   {([
-                    ['Add a patient', 'Fill in the form on the Patients tab (room, name, age, sex, service) and tap Add patient.'],
+                    ['Add a patient', 'Fill in the form on the Patients tab (room, name, age, sex, main service) and tap Add patient.'],
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
                     ['Navigate on mobile', 'The bottom bar shows all 8 patient sections in a 2-row grid — tap any to switch. Use ← Back to return to the patient list.'],
                     ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. Discharged patients are hidden from this quick-switch list, and you can scroll through the list when many active patients are present.'],

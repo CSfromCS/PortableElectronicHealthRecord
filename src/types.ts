@@ -2,13 +2,20 @@ export interface Patient {
   id?: number
   lastModified: string
   roomNumber: string
+  ward: string
+  /** Set only when the legacy combined Room value couldn't be auto-split into Room Number + Ward; shown as a fallback until manually resolved. */
+  roomLegacyRaw?: string
   lastName: string
   firstName: string
   middleName?: string
   age: number
   sex: 'M' | 'F' | 'O'
   admitDate: string
-  service: string
+  /** One-time copy of admitDate at creation; independently editable afterward. */
+  referralDate: string
+  /** References to TagDefinition rows in the "Service" tag group. Kept separate from the general `tagIds` because the same service tag pool is split into Main vs Referral roles per patient. */
+  mainServiceTagIds: number[]
+  referralServiceTagIds: number[]
   attendingPhysician: string
   diagnosis: string
   chiefComplaint: string

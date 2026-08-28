@@ -71,7 +71,7 @@ Each open patient has eight focused tabs:
 
 ### Reporting & Export
 
-- **Profile summary** follows room/name header, main/referral service split, `Dx`, and optional `Notes` blocks.
+- **Profile summary** follows room/name header, room/ward, admission and referral dates, tag-based Main Service/Referrals, `Dx`, and optional `Notes` blocks.
 - **Problems summary** uses `ROOM - LASTNAME, First — MM-DD-YYYY`, includes numbered problem blocks and daily vitals min–max ranges, and preserves problem/checklist order.
 - **Vitals summary** supports multi-patient selection and date/time window filtering.
 - **Labs summary** supports arbitrary instance selection per patient; comparison mode runs only when exactly 2 instances of the same non-Others lab template are selected.
