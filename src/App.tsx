@@ -34,6 +34,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
+import { DragHandle } from '@/lib/dnd/DragHandle'
+import { moveItemByKey } from '@/lib/dnd/reorderList'
+import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import {
   formatClock,
   formatDateMMDD,
@@ -916,19 +919,10 @@ function App() {
     setSelectedCensusPatientIds([])
   }
 
-  const moveCensusPatientSelection = (patientId: number, direction: 'up' | 'down') => {
-    setSelectedCensusPatientIds((previous) => {
-      const index = previous.indexOf(patientId)
-      if (index < 0) return previous
-
-      const targetIndex = direction === 'up' ? index - 1 : index + 1
-      if (targetIndex < 0 || targetIndex >= previous.length) return previous
-
-      const next = [...previous]
-      ;[next[index], next[targetIndex]] = [next[targetIndex], next[index]]
-      return next
-    })
+  const reorderCensusPatientSelection = (sourcePatientId: number, targetPatientId: number) => {
+    setSelectedCensusPatientIds((previous) => moveItemByKey(previous, (id) => id, sourcePatientId, targetPatientId))
   }
+  const censusPatientDrag = useDragReorder(selectedCensusPatientIds, reorderCensusPatientSelection)
 
   const toggleSelectedPatientLabReportId = (labId: number) => {
     setSelectedPatientLabReportIds((previous) =>
@@ -5347,33 +5341,20 @@ function App() {
                                       return (
                                         <div
                                           key={`ordered-${patientId}`}
-                                          className='flex items-center justify-between gap-2 rounded border border-clay/30 bg-warm-ivory px-2 py-1'
+                                          className={cn(
+                                            'flex items-center gap-2 rounded border border-clay/30 bg-warm-ivory px-2 py-1 transition-shadow',
+                                            censusPatientDrag.isDragging(patientId) && 'opacity-50',
+                                            censusPatientDrag.isDropTarget(patientId) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                                          )}
+                                          {...censusPatientDrag.getItemProps(patientId)}
                                         >
-                                          <p className='text-sm text-espresso'>
+                                          <DragHandle
+                                            label={`Drag to reorder ${patient.lastName}, ${patient.firstName}`}
+                                            dragProps={censusPatientDrag.getHandleProps(patientId)}
+                                          />
+                                          <p className='flex-1 text-sm text-espresso'>
                                             {index + 1}. {patient.roomNumber} — {patient.lastName}, {patient.firstName}
                                           </p>
-                                          <div className='flex gap-1'>
-                                            <Button
-                                              size='sm'
-                                              variant='secondary'
-                                              aria-label='Move up'
-                                              title='Move up'
-                                              onClick={() => moveCensusPatientSelection(patientId, 'up')}
-                                              disabled={index === 0}
-                                            >
-                                              ↑
-                                            </Button>
-                                            <Button
-                                              size='sm'
-                                              variant='secondary'
-                                              aria-label='Move down'
-                                              title='Move down'
-                                              onClick={() => moveCensusPatientSelection(patientId, 'down')}
-                                              disabled={index === selectedCensusPatients.length - 1}
-                                            >
-                                              ↓
-                                            </Button>
-                                          </div>
                                         </div>
                                       )
                                     })}
