@@ -4026,17 +4026,10 @@ function App() {
                     : 'border-l-[3px] border-l-clay/25 opacity-70'
                 )}>
                   <CardContent className='flex items-center gap-3 py-3 px-4'>
-                    <div className={cn(
-                      'shrink-0 flex items-center justify-center w-11 h-11 rounded-xl text-xs font-bold leading-tight text-center px-1',
-                      patientActive
-                        ? 'bg-action-primary/10 text-action-primary'
-                        : 'bg-clay/10 text-clay'
-                    )}>
-                      <span className='truncate max-w-full'>{patient.roomNumber}</span>
-                    </div>
                     <div className='flex-1 min-w-0'>
-                      <p className='font-semibold text-espresso truncate text-sm leading-snug'>
-                        {patient.lastName}, {patient.firstName}
+                      <p className='flex items-baseline gap-1 font-semibold text-espresso text-sm leading-snug'>
+                        <span className='shrink-0'>{patient.roomNumber}</span>
+                        <span className='truncate'>— {patient.lastName}, {patient.firstName}</span>
                       </p>
                       <p className='flex items-center flex-wrap gap-x-1 gap-y-0.5 text-xs text-clay mt-0.5'>
                         <span>{patient.age}/{patient.sex}</span>
