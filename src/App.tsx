@@ -118,8 +118,10 @@ import {
   applyTagToPatient,
   clearTerminalTagsFromPatient,
   findTagAmbiguities,
+  getAppliedPatientTags,
   getVisiblePatientTags,
   isPatientActive,
+  orderTagsCanonically,
   renderTagDisplayText,
   toggleTagOnPatient,
 } from './features/tags/tagUtils'
@@ -450,6 +452,7 @@ function App() {
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
+  const [isEditingTags, setIsEditingTags] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
   const [sortBy, setSortBy] = useState<'room' | 'name' | 'admitDate'>('room')
@@ -764,6 +767,11 @@ function App() {
   const selectedPatient = useMemo(
     () => (patients ?? []).find((patient) => patient.id === selectedPatientId),
     [patients, selectedPatientId],
+  )
+
+  const appliedPatientTags = useMemo(
+    () => selectedPatient ? orderTagsCanonically(getAppliedPatientTags(selectedPatient, tagsById), tagGroups ?? []) : [],
+    [selectedPatient, tagsById, tagGroups],
   )
 
   const activePatients = useMemo(() => (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)), [patients, tagsById])
@@ -1639,6 +1647,7 @@ function App() {
     setAttachmentFilter('all')
     setAttachmentTitle(buildDefaultPhotoTitle('profile'))
     setSelectedAttachmentId(null)
+    setIsEditingTags(false)
     if (!options?.preserveSelectedTab) {
       setSelectedTab('profile')
     }
@@ -4187,13 +4196,28 @@ function App() {
                       <div className='flex items-center gap-1.5'>
                         <Label>Tags</Label>
                         <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
+                        {appliedPatientTags.length > 0 ? (
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
+                            aria-label={isEditingTags ? 'Done editing tags' : 'Edit tags'}
+                            onClick={() => setIsEditingTags((previous) => !previous)}
+                          >
+                            <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                          </Button>
+                        ) : null}
                       </div>
-                      <TagPicker
-                        patient={selectedPatient}
-                        tags={tagDefinitions ?? []}
-                        groups={tagGroups ?? []}
-                        onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
-                      />
+                      {isEditingTags || appliedPatientTags.length === 0 ? (
+                        <TagPicker
+                          patient={selectedPatient}
+                          tags={tagDefinitions ?? []}
+                          groups={tagGroups ?? []}
+                          onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
+                        />
+                      ) : (
+                        <TagChipRow tags={appliedPatientTags} className='justify-start' />
+                      )}
                     </div>
                     <div className='flex gap-2 flex-wrap'>
                       <Button
