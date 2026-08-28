@@ -4003,6 +4003,10 @@ function App() {
               </CardContent>
             </Card>
 
+            <p className='px-1 mb-2 text-xs font-medium text-clay'>
+              {visiblePatients.length} patient{visiblePatients.length === 1 ? '' : 's'}
+            </p>
+
             <div className='flex flex-col gap-2'>
               {visiblePatients.map((patient) => {
                 const patientActive = isPatientActive(patient, tagsById)
