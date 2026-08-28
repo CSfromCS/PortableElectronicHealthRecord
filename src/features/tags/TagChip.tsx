@@ -12,14 +12,33 @@ const getContrastingTextColor = (backgroundColor: string): string => {
   return luminance > 0.6 ? '#1a1a1a' : '#ffffff'
 }
 
-export const TagChip = ({ tag, className }: { tag: TagDefinition; className?: string }) => {
+export type TagChipRoleMarker = 'M' | 'R'
+
+const ROLE_MARKER_LABELS: Record<TagChipRoleMarker, string> = {
+  M: 'Main',
+  R: 'Referral',
+}
+
+const RoleMarkerBadge = ({ roleMarker }: { roleMarker: TagChipRoleMarker }) => (
+  <span
+    className='inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-black/20 text-[9px] font-bold leading-none'
+    aria-hidden='true'
+  >
+    {roleMarker}
+  </span>
+)
+
+export const TagChip = ({ tag, className, roleMarker }: { tag: TagDefinition; className?: string; roleMarker?: TagChipRoleMarker }) => {
+  const title = roleMarker ? `${ROLE_MARKER_LABELS[roleMarker]}: ${tag.name}` : tag.name
+
   if (tag.displayType === 'emoji') {
     return (
       <span
-        className={cn('inline-flex items-center justify-center text-base leading-none', className)}
-        title={tag.name}
-        aria-label={tag.name}
+        className={cn('inline-flex items-center gap-0.5 text-base leading-none', className)}
+        title={title}
+        aria-label={title}
       >
+        {roleMarker ? <RoleMarkerBadge roleMarker={roleMarker} /> : null}
         {tag.emoji || tag.name}
       </span>
     )
@@ -28,10 +47,11 @@ export const TagChip = ({ tag, className }: { tag: TagDefinition; className?: st
   const backgroundColor = tag.color || '#d9c9b8'
   return (
     <span
-      className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-none whitespace-nowrap', className)}
+      className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold leading-none whitespace-nowrap', className)}
       style={{ backgroundColor, color: getContrastingTextColor(backgroundColor) }}
-      title={tag.name}
+      title={title}
     >
+      {roleMarker ? <RoleMarkerBadge roleMarker={roleMarker} /> : null}
       {renderTagDisplayText(tag)}
     </span>
   )

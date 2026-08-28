@@ -35,7 +35,6 @@ type ReportWindow = {
 }
 
 type ProfileSummaryInput = {
-  service: string
   diagnosis: string
   clerkNotes: string
 }
@@ -74,17 +73,6 @@ export const formatOrderEntry = (entry: OrderEntry) => {
   const header = [serviceText, whenText, entry.orderText].filter(Boolean).join(' • ')
   const withNote = [header, entry.note].filter(Boolean).join(' — ')
   return `${withNote || entry.orderText} (${formatOrderStatus(entry.status)})`
-}
-
-const parseServiceLines = (service: string) => {
-  const lines = service
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-  return {
-    main: lines[0] ?? '-',
-    referrals: lines.slice(1),
-  }
 }
 
 const formatRange = (values: number[]) => {
@@ -376,17 +364,22 @@ export const toProfileSummary = (
   patient: Patient,
   profile: ProfileSummaryInput,
   tagDisplayStrings: string[] = [],
+  mainServiceNames: string[] = [],
+  referralServiceNames: string[] = [],
 ) => {
-  const { main, referrals } = parseServiceLines(profile.service || patient.service)
   const diagnosis = profile.diagnosis.trim() || patient.diagnosis.trim() || '-'
   const notes = (profile.clerkNotes || patient.clerkNotes || '').trim()
+  const wardLine = patient.ward ? `Room: ${patient.roomNumber} (${patient.ward})` : `Room: ${patient.roomNumber}`
 
   const lines = [
     formatPatientHeader(patient),
     `${patient.age} / ${patient.sex}`,
     ...(tagDisplayStrings.length > 0 ? [`Tags: ${tagDisplayStrings.join(', ')}`] : []),
-    `Main: ${main}`,
-    `Referrals: ${referrals.length > 0 ? referrals.join(', ') : '-'}`,
+    wardLine,
+    `Admission Date: ${patient.admitDate || '-'}`,
+    `Referral Date: ${patient.referralDate || '-'}`,
+    `Main Service: ${mainServiceNames.length > 0 ? mainServiceNames.join(', ') : '-'}`,
+    `Referrals: ${referralServiceNames.length > 0 ? referralServiceNames.join(', ') : '-'}`,
     `Dx: ${diagnosis}`,
   ]
 
