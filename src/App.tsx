@@ -4390,29 +4390,31 @@ function App() {
                       </div>
                     ) : null}
                     <div className='space-y-1.5'>
-                      <div className='flex items-center gap-1.5'>
-                        {isEditingTags ? <Label>Tags</Label> : null}
-                        <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
-                        {appliedPatientTags.length > 0 ? (
-                          <Button
-                            type='button'
-                            variant='ghost'
-                            className={cn('h-6 w-6 shrink-0 p-0 text-clay', isEditingTags && 'ml-auto')}
-                            aria-label={isEditingTags ? 'Done editing tags' : 'Edit tags'}
-                            onClick={() => {
-                              const patientId = selectedPatient.id
-                              if (patientId === undefined) return
-                              setTagsEditOverrideByPatientId((previous) => {
-                                const next = new Map(previous)
-                                next.set(patientId, !isEditingTags)
-                                return next
-                              })
-                            }}
-                          >
-                            <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
-                          </Button>
-                        ) : null}
-                      </div>
+                      {isEditingTags ? (
+                        <div className='flex items-center gap-1.5'>
+                          <Label>Tags</Label>
+                          <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
+                          {appliedPatientTags.length > 0 ? (
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
+                              aria-label='Done editing tags'
+                              onClick={() => {
+                                const patientId = selectedPatient.id
+                                if (patientId === undefined) return
+                                setTagsEditOverrideByPatientId((previous) => {
+                                  const next = new Map(previous)
+                                  next.set(patientId, !isEditingTags)
+                                  return next
+                                })
+                              }}
+                            >
+                              <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {isEditingTags ? (
                         <TagPicker
                           patient={selectedPatient}
@@ -4421,10 +4423,31 @@ function App() {
                           onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
                         />
                       ) : (
-                        <TagChipRow
-                          tags={appliedPatientTags.filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId)}
-                          className='justify-start'
-                        />
+                        <div className='flex items-center gap-1.5'>
+                          <TagChipRow
+                            tags={appliedPatientTags.filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId)}
+                            className='justify-start'
+                          />
+                          {appliedPatientTags.length > 0 ? (
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
+                              aria-label='Edit tags'
+                              onClick={() => {
+                                const patientId = selectedPatient.id
+                                if (patientId === undefined) return
+                                setTagsEditOverrideByPatientId((previous) => {
+                                  const next = new Map(previous)
+                                  next.set(patientId, !isEditingTags)
+                                  return next
+                                })
+                              }}
+                            >
+                              <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                            </Button>
+                          ) : null}
+                        </div>
                       )}
                     </div>
                     <div className='space-y-1'>
