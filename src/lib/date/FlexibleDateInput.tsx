@@ -18,6 +18,8 @@ export function FlexibleDateInput({
   ariaLabel,
   placeholder = 'e.g. 1 Jan 2026',
   className,
+  defaultIso = null,
+  emitEmptyOnClear = false,
 }: {
   id?: string
   value: string
@@ -25,6 +27,10 @@ export function FlexibleDateInput({
   ariaLabel: string
   placeholder?: string
   className?: string
+  /** When `value` is empty, shows this date below the field labeled "(Default)" instead of showing nothing — for fields (like Discharge Date) that fall back to a computed value until the user explicitly types an override. */
+  defaultIso?: string | null
+  /** When true, clearing the field calls onChange('') so the parent's stored value actually reverts to empty (and therefore back to `defaultIso`) instead of silently keeping the last committed value. Off by default so required date fields (Admission Date, etc.) can't be blanked by a stray clear. */
+  emitEmptyOnClear?: boolean
 }) {
   const [draft, setDraft] = useState(() => (value ? formatFlexibleDateConfirmation(value) : ''))
   const [error, setError] = useState<string | null>(null)
@@ -47,6 +53,10 @@ export function FlexibleDateInput({
     if (!raw.trim()) {
       setError(null)
       setResolvedIso(null)
+      if (emitEmptyOnClear) {
+        setCommittedValue('')
+        onChange('')
+      }
       return
     }
 
@@ -110,6 +120,8 @@ export function FlexibleDateInput({
         <p className='text-xs text-action-danger'>{error}</p>
       ) : resolvedIso ? (
         <p className='text-xs text-clay'>{formatFlexibleDateConfirmation(resolvedIso)}</p>
+      ) : defaultIso ? (
+        <p className='text-xs text-clay'>{formatFlexibleDateConfirmation(defaultIso)} (Default)</p>
       ) : null}
     </div>
   )

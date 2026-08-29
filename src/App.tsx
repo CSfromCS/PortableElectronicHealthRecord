@@ -788,6 +788,10 @@ function App() {
       return a.createdAt.localeCompare(b.createdAt)
     })
   }, [selectedPatientId])
+  const patientTagEvents = useLiveQuery(async () => {
+    if (selectedPatientId === null) return [] as TagEvent[]
+    return db.tagEvents.where('patientId').equals(selectedPatientId).toArray()
+  }, [selectedPatientId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -884,6 +888,19 @@ function App() {
     () => selectedPatient ? orderTagsCanonically(getAppliedPatientTags(selectedPatient, tagsById), tagGroups ?? []) : [],
     [selectedPatient, tagsById, tagGroups],
   )
+
+  // Discharge Date's default: the most recent "added" Tag Event for any Terminal-flagged tag the
+  // patient currently carries. Purely computed — never persisted unless the user types an override.
+  const defaultDischargeDateIso = useMemo(() => {
+    const terminalTagIds = new Set(appliedPatientTags.filter((tag) => tag.terminal).map((tag) => tag.id))
+    if (terminalTagIds.size === 0) return null
+
+    const addedEvents = (patientTagEvents ?? []).filter((event) => event.action === 'added' && terminalTagIds.has(event.tagId))
+    if (addedEvents.length === 0) return null
+
+    const latestEvent = addedEvents.reduce((latest, event) => (event.at > latest.at ? event : latest))
+    return toLocalISODate(new Date(latestEvent.at))
+  }, [appliedPatientTags, patientTagEvents])
 
   // Sticky per patient: undefined (never toggled) defaults to expanded. Zero applied tags always forces expanded.
   const isEditingTags = appliedPatientTags.length === 0
@@ -4367,8 +4384,9 @@ function App() {
                           ariaLabel='Discharge Date'
                           value={profileForm.dischargeDate}
                           onChange={(isoDate) => updateProfileField('dischargeDate', isoDate)}
+                          defaultIso={defaultDischargeDateIso}
+                          emitEmptyOnClear
                         />
-                        <p className='text-xs text-clay'>Defaults to the date a terminal tag (e.g. Discharged) was applied; only shown while one is attached.</p>
                       </div>
                     ) : null}
                     <div className='space-y-1.5'>
