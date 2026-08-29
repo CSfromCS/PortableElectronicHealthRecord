@@ -84,7 +84,16 @@ import {
   type ReviewablePhotoAttachment,
 } from './features/photos/photoMentions'
 import { ProblemListEditor } from './features/problems/ProblemListEditor'
-import { normalizeDailyUpdate, normalizeProblemBlocks } from './features/problems/problemUtils'
+import { normalizeDailyUpdate, normalizeProblemBlocks, toPendingProblemBlocks } from './features/problems/problemUtils'
+import { TabSettingsScreen } from './features/tabs/TabSettingsScreen'
+import {
+  PATIENT_TAB_DESCRIPTIONS,
+  PATIENT_TAB_LABELS,
+  loadPatientTabSettings,
+  savePatientTabSettings,
+  type PatientTabId,
+  type PatientTabSetting,
+} from './features/tabs/tabConfig'
 import {
   PHOTO_CATEGORY_OPTIONS,
   buildDefaultPhotoTitle,
@@ -114,7 +123,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid } from 'lucide-react'
 import type { TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { TagPicker } from './features/tags/TagPicker'
@@ -172,17 +181,14 @@ type ProfileFormState = {
   sex: 'M' | 'F' | 'O'
   admitDate: string
   referralDate: string
+  dischargeDate: string
   diagnosis: string
-  chiefComplaint: string
-  hpiText: string
-  pmhText: string
-  peText: string
   clinicalSummary: string
+  database: string
   plans: string
   medications: string
   labs: string
   pendings: string
-  clerkNotes: string
 }
 
 const initialProfileForm: ProfileFormState = {
@@ -195,17 +201,14 @@ const initialProfileForm: ProfileFormState = {
   sex: 'M',
   admitDate: '',
   referralDate: '',
+  dischargeDate: '',
   diagnosis: '',
-  chiefComplaint: '',
-  hpiText: '',
-  pmhText: '',
-  peText: '',
   clinicalSummary: '',
+  database: '',
   plans: '',
   medications: '',
   labs: '',
   pendings: '',
-  clerkNotes: '',
 }
 
 type DailyUpdateFormState = Omit<DailyUpdate, 'id' | 'patientId' | 'date' | 'lastUpdated'>
@@ -472,6 +475,17 @@ const comparePhotoGroupsByNewest = (a: PhotoAttachmentGroup, b: PhotoAttachmentG
   return b.groupId.localeCompare(a.groupId)
 }
 
+// Device-local UI preference (not clinical data), same rationale as patientTabSettings.
+const ADD_PATIENT_COLLAPSED_STORAGE_KEY = 'puhrr.addPatientCollapsed'
+
+const loadAddPatientCollapsed = (): boolean => {
+  try {
+    return window.localStorage.getItem(ADD_PATIENT_COLLAPSED_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
 const ensurePatientLastModified = (patient: Patient): Patient => {
   return {
     ...patient,
@@ -492,10 +506,11 @@ function App() {
   const carouselThumbnailButtonRefs = useRef<Record<number, HTMLButtonElement>>({})
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [pendingMainServiceTagIds, setPendingMainServiceTagIds] = useState<number[]>([])
-  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags'>('patients')
+  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags' | 'tabSettings'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
   const [searchQuery, setSearchQuery] = useState('')
+  const [isAddPatientCollapsed, setIsAddPatientCollapsed] = useState(() => loadAddPatientCollapsed())
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
   const [sortBy, setSortBy] = useState<'room' | 'name' | 'admitDate'>('room')
   const [profileForm, setProfileForm] = useState<ProfileFormState>(initialProfileForm)
@@ -536,7 +551,32 @@ function App() {
   const [pendingLatestDailyUpdate, setPendingLatestDailyUpdate] = useState<DailyUpdate | null>(null)
   const [deleteDailyConfirmOpen, setDeleteDailyConfirmOpen] = useState(false)
   const [pendingDeleteDailyUpdate, setPendingDeleteDailyUpdate] = useState<DailyUpdate | null>(null)
-  const [selectedTab, setSelectedTab] = useState<'profile' | 'problems' | 'vitals' | 'labs' | 'medications' | 'orders' | 'photos' | 'reporting'>('profile')
+  const [selectedTab, setSelectedTab] = useState<PatientTabId>('profile')
+  const [patientTabSettings, setPatientTabSettings] = useState<PatientTabSetting[]>(() => loadPatientTabSettings())
+  const updatePatientTabSettings = useCallback((next: PatientTabSetting[]) => {
+    setPatientTabSettings(next)
+    savePatientTabSettings(next)
+  }, [])
+  const toggleAddPatientCollapsed = useCallback(() => {
+    setIsAddPatientCollapsed((previous) => {
+      const next = !previous
+      try {
+        window.localStorage.setItem(ADD_PATIENT_COLLAPSED_STORAGE_KEY, String(next))
+      } catch {
+        // Storage can fail (private browsing, quota) — collapsed state just won't persist this session.
+      }
+      return next
+    })
+  }, [])
+  const visiblePatientTabs = useMemo(
+    () => patientTabSettings.filter((tab) => tab.visible).map((tab) => tab.id),
+    [patientTabSettings],
+  )
+  useEffect(() => {
+    if (visiblePatientTabs.length > 0 && !visiblePatientTabs.includes(selectedTab)) {
+      setSelectedTab(visiblePatientTabs[0])
+    }
+  }, [selectedTab, visiblePatientTabs])
   const [notice, setNotice] = useState('')
   const [noticeIsDecaying, setNoticeIsDecaying] = useState(false)
   const [clipboardCopied, setClipboardCopied] = useState(false)
@@ -771,6 +811,10 @@ function App() {
       return a.createdAt.localeCompare(b.createdAt)
     })
   }, [selectedPatientId])
+  const patientTagEvents = useLiveQuery(async () => {
+    if (selectedPatientId === null) return [] as TagEvent[]
+    return db.tagEvents.where('patientId').equals(selectedPatientId).toArray()
+  }, [selectedPatientId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -867,6 +911,19 @@ function App() {
     () => selectedPatient ? orderTagsCanonically(getAppliedPatientTags(selectedPatient, tagsById), tagGroups ?? []) : [],
     [selectedPatient, tagsById, tagGroups],
   )
+
+  // Discharge Date's default: the most recent "added" Tag Event for any Terminal-flagged tag the
+  // patient currently carries. Purely computed — never persisted unless the user types an override.
+  const defaultDischargeDateIso = useMemo(() => {
+    const terminalTagIds = new Set(appliedPatientTags.filter((tag) => tag.terminal).map((tag) => tag.id))
+    if (terminalTagIds.size === 0) return null
+
+    const addedEvents = (patientTagEvents ?? []).filter((event) => event.action === 'added' && terminalTagIds.has(event.tagId))
+    if (addedEvents.length === 0) return null
+
+    const latestEvent = addedEvents.reduce((latest, event) => (event.at > latest.at ? event : latest))
+    return toLocalISODate(new Date(latestEvent.at))
+  }, [appliedPatientTags, patientTagEvents])
 
   // Sticky per patient: undefined (never toggled) defaults to expanded. Zero applied tags always forces expanded.
   const isEditingTags = appliedPatientTags.length === 0
@@ -1505,16 +1562,12 @@ function App() {
       mainServiceTagIds: pendingMainServiceTagIds,
       referralServiceTagIds: [],
       attendingPhysician: '',
-      chiefComplaint: '',
-      hpiText: '',
-      pmhText: '',
-      peText: '',
       clinicalSummary: '',
+      database: '',
       plans: '',
       medications: '',
       labs: '',
       pendings: '',
-      clerkNotes: '',
       tagIds: [],
     }
 
@@ -1532,6 +1585,7 @@ function App() {
       setDailyUpdateId(undefined)
       setDailyUpdateForm({
         ...initialDailyUpdateForm,
+        problems: toPendingProblemBlocks(latestPriorUpdate?.problems),
         checklist: toPendingChecklistItems(latestPriorUpdate?.checklist),
       })
       setDailyChecklistDraft('')
@@ -1665,17 +1719,14 @@ function App() {
           sex: profileForm.sex,
           admitDate: profileForm.admitDate,
           referralDate: profileForm.referralDate,
+          dischargeDate: profileForm.dischargeDate || undefined,
           diagnosis: profileForm.diagnosis,
-          chiefComplaint: profileForm.chiefComplaint,
-          hpiText: profileForm.hpiText,
-          pmhText: profileForm.pmhText,
-          peText: profileForm.peText,
           clinicalSummary: profileForm.clinicalSummary,
+          database: profileForm.database,
           plans: profileForm.plans,
           medications: profileForm.medications,
           labs: profileForm.labs,
           pendings: profileForm.pendings,
-          clerkNotes: profileForm.clerkNotes,
         })
 
         setLastSavedAt(new Date().toISOString())
@@ -1716,17 +1767,14 @@ function App() {
       sex: patient.sex,
       admitDate: patient.admitDate,
       referralDate: patient.referralDate ?? patient.admitDate,
+      dischargeDate: patient.dischargeDate ?? '',
       diagnosis: patient.diagnosis,
-      chiefComplaint: patient.chiefComplaint ?? '',
-      hpiText: patient.hpiText ?? '',
-      pmhText: patient.pmhText ?? '',
-      peText: patient.peText ?? '',
       clinicalSummary: patient.clinicalSummary ?? '',
+      database: patient.database ?? '',
       plans: patient.plans,
       medications: patient.medications,
       labs: patient.labs,
       pendings: patient.pendings,
-      clerkNotes: patient.clerkNotes,
     })
     setLastSavedAt(null)
     setProfileDirty(false)
@@ -2480,6 +2528,76 @@ function App() {
 
     return () => window.clearTimeout(timeoutId)
   }, [dailyDirty, saveDailyUpdate, selectedPatientId])
+
+  // Shared by the Problems and Checklist tabs — both edit the same per-date DailyUpdate record,
+  // so each tab gets its own self-contained date/copy/delete controls bound to the same state.
+  const renderDailyDateHeader = useCallback((context: 'problems' | 'checklist') => (
+    <>
+      <div className='flex flex-wrap items-end gap-2'>
+        <div className='space-y-1 max-w-60'>
+          <Label htmlFor={`daily-date-${context}`}>Date</Label>
+          <FlexibleDateInput
+            id={`daily-date-${context}`}
+            ariaLabel='Daily update date'
+            value={dailyDate}
+            onChange={(nextDate) => {
+              if (dailyDirty) {
+                void saveDailyUpdate()
+              }
+              setDailyDate(nextDate)
+              if (selectedPatient?.id) {
+                void loadDailyUpdate(selectedPatient.id, nextDate)
+              }
+            }}
+          />
+        </div>
+        <Button
+          type='button'
+          variant='secondary'
+          onClick={() => void copyLatestDailyUpdateToForm()}
+          disabled={selectedPatientId === null}
+        >
+          Copy latest entry
+        </Button>
+        <Button
+          type='button'
+          variant='destructive'
+          onClick={() => void requestDeleteDailyUpdate()}
+          disabled={selectedPatientId === null}
+        >
+          Delete day entry
+        </Button>
+      </div>
+      <div className='space-y-1'>
+        <p className='text-xs text-clay'>Saved entry dates</p>
+        {(savedDailyEntryDates ?? []).length > 0 ? (
+          <div className='flex flex-wrap gap-1'>
+            {(savedDailyEntryDates ?? []).map((entryDate) => (
+              <Button
+                key={entryDate}
+                type='button'
+                variant={entryDate === dailyDate ? 'default' : 'outline'}
+                className='h-7 px-2 text-xs'
+                onClick={() => {
+                  if (dailyDirty) {
+                    void saveDailyUpdate()
+                  }
+                  setDailyDate(entryDate)
+                  if (selectedPatient?.id) {
+                    void loadDailyUpdate(selectedPatient.id, entryDate)
+                  }
+                }}
+              >
+                {entryDate}
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <p className='text-xs text-clay'>No saved daily entries yet.</p>
+        )}
+      </div>
+    </>
+  ), [copyLatestDailyUpdateToForm, dailyDate, dailyDirty, loadDailyUpdate, requestDeleteDailyUpdate, saveDailyUpdate, savedDailyEntryDates, selectedPatient?.id, selectedPatientId])
 
   const openCopyModal = (text: string, title: string) => {
     setOutputPreview(text)
@@ -3452,7 +3570,7 @@ function App() {
         lastModified: now,
         roomNumber: '512A',
         ward: '',
-        lastName: 'Dela Cruz',
+        lastName: 'DELA CRUZ',
         firstName: 'Juan',
         middleName: 'Santos',
         age: 57,
@@ -3463,16 +3581,18 @@ function App() {
         referralServiceTagIds: [],
         attendingPhysician: 'Dr. Maria C. Garcia',
         diagnosis: 'Community-acquired pneumonia (RLL), improving',
-        chiefComplaint: '5 days cough, fever, and dyspnea',
-        hpiText: '57-year-old male with productive cough and intermittent fever for 5 days, associated with mild dyspnea on exertion. No chest pain. Symptoms improved after IV antibiotics.',
-        pmhText: 'Hypertension (8 years), Type 2 Diabetes Mellitus (5 years), ex-smoker',
-        peText: 'Awake and coherent, speaks in full sentences.\nVS: BP 128/76, HR 84, RR 18, Temp 37.3°C, SpO2 96% room air.\nChest: bibasal crackles right greater than left, no retractions.\nCVS: adynamic precordium, regular rhythm.\nAbdomen: soft, non-tender.',
         clinicalSummary: 'CAP improving on empiric antibiotics with stable hemodynamics and improving respiratory symptoms. Continue monitoring trends and prepare for oral step-down when afebrile and clinically stable.',
+        database: [
+          'Chief Complaint:\n5 days cough, fever, and dyspnea',
+          'History of Present Illness:\n57-year-old male with productive cough and intermittent fever for 5 days, associated with mild dyspnea on exertion. No chest pain. Symptoms improved after IV antibiotics.',
+          'Past Medical History:\nHypertension (8 years), Type 2 Diabetes Mellitus (5 years), ex-smoker',
+          'Physical Examination:\nAwake and coherent, speaks in full sentences.\nVS: BP 128/76, HR 84, RR 18, Temp 37.3°C, SpO2 96% room air.\nChest: bibasal crackles right greater than left, no retractions.\nCVS: adynamic precordium, regular rhythm.\nAbdomen: soft, non-tender.',
+          'Clerk Notes:\nPatient reports better appetite and less cough overnight.',
+        ].join('\n\n'),
         plans: 'Continue IV to oral antibiotic step-down tomorrow if afebrile.\nPulmonary hygiene and ambulation as tolerated.\nRepeat CBC and electrolytes in AM.',
         medications: 'Nebulization PRN for dyspnea episodes.',
         labs: 'Follow-up trends: CBC improving, renal panel stable.',
         pendings: 'Sputum culture and sensitivity result.\nRepeat chest x-ray in 48-72 hours.',
-        clerkNotes: 'Patient reports better appetite and less cough overnight.',
         tagIds: [],
       }) as number
 
@@ -3558,16 +3678,19 @@ function App() {
             id: `sample-cap-${samplePatientId}`,
             title: 'Community-acquired pneumonia, moderate risk',
             notes: 'Cough less frequent, afebrile for >24h, no accessory muscle use, and saturating well on room air. Continue antibiotics and monitor culture results.',
+            completed: false,
           },
           {
             id: `sample-hypertension-${samplePatientId}`,
             title: 'Hypertension',
             notes: 'Hemodynamically stable on Amlodipine 10 mg PO OD. No chest pain or palpitations.',
+            completed: false,
           },
           {
             id: `sample-diabetes-${samplePatientId}`,
             title: 'Type 2 diabetes mellitus',
             notes: 'Capillary glucose acceptable on Metformin 500 mg PO BID.',
+            completed: false,
           },
         ],
         assessment: 'CAP, clinically improving with stable cardiorespiratory parameters.',
@@ -3931,7 +4054,7 @@ function App() {
                 </Button>
               ) : null}
               <Button variant={view === 'checklist' ? 'default' : 'ghost'} size='sm' onClick={() => setView('checklist')}>Checklist</Button>
-              <Button variant={view === 'settings' || view === 'manageTags' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
+              <Button variant={view === 'settings' || view === 'manageTags' || view === 'tabSettings' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
             </div>
           </div>
         </div>
@@ -3947,20 +4070,35 @@ function App() {
             patients={patients ?? []}
             onBack={() => setView('settings')}
           />
+        ) : view === 'tabSettings' ? (
+          <TabSettingsScreen
+            settings={patientTabSettings}
+            onChange={updatePatientTabSettings}
+            onBack={() => setView('settings')}
+          />
         ) : view !== 'settings' ? (
           <>
             {view === 'patients' ? (
               <>
             <Card className='bg-white/80 border-clay/30 mb-4 shadow-sm'>
               <CardHeader className='py-2.5 px-3 pb-0'>
-                <CardTitle className='text-sm font-semibold text-espresso'>Add patient</CardTitle>
+                <button
+                  type='button'
+                  className='w-full flex items-center justify-between gap-2'
+                  onClick={toggleAddPatientCollapsed}
+                  aria-expanded={!isAddPatientCollapsed}
+                >
+                  <CardTitle className='text-sm font-semibold text-espresso'>Add patient</CardTitle>
+                  <ChevronDown className={cn('h-4 w-4 shrink-0 text-clay transition-transform', isAddPatientCollapsed && '-rotate-90')} aria-hidden='true' />
+                </button>
               </CardHeader>
+              {!isAddPatientCollapsed ? (
               <CardContent className='px-3 pb-3'>
                 <form className='grid grid-cols-2 gap-2 sm:grid-cols-3' onSubmit={handleSubmit}>
                   <Input aria-label='Room Number' placeholder='Room Number' value={form.roomNumber} onChange={(event) => setForm({ ...form, roomNumber: event.target.value })} required />
                   <Input aria-label='Ward/Location' placeholder='Ward/Location' value={form.ward} onChange={(event) => setForm({ ...form, ward: event.target.value })} />
+                  <Input aria-label='Last name' placeholder='Last name' value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value.toUpperCase() })} required />
                   <Input aria-label='First name' placeholder='First name' value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required />
-                  <Input aria-label='Last name' placeholder='Last name' value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value })} required />
                   <Input aria-label='Age' placeholder='Age' type='number' min='0' value={form.age} onChange={(event) => setForm({ ...form, age: event.target.value })} required />
                   <Select value={form.sex} onValueChange={(v) => setForm({ ...form, sex: v as 'M' | 'F' | 'O' })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -3983,6 +4121,7 @@ function App() {
                   <Button type='submit' className='col-span-2 sm:col-span-3'>Add patient</Button>
                 </form>
               </CardContent>
+              ) : null}
             </Card>
 
             <Card className='bg-white/80 border-clay/30 mb-4 shadow-sm'>
@@ -4177,15 +4316,10 @@ function App() {
                 </CardHeader>
                 <CardContent className='px-0 pb-5 sm:px-4 sm:pb-4'>
                 <Tabs value={selectedTab} onValueChange={(v) => setSelectedTab(v as typeof selectedTab)}>
-                  <TabsList className='hidden sm:grid sm:grid-cols-4 lg:grid-cols-8 h-auto w-full gap-0.5 px-1 mb-4 mt-2'>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='profile'>Profile</TabsTrigger>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='problems'>Problems</TabsTrigger>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='vitals'>Vitals</TabsTrigger>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='labs'>Labs</TabsTrigger>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='medications'>Meds</TabsTrigger>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='orders'>Orders</TabsTrigger>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='photos'>Photos</TabsTrigger>
-                    <TabsTrigger className='w-full text-xs px-2.5' value='reporting'>Report</TabsTrigger>
+                  <TabsList className='hidden sm:flex h-auto w-full items-stretch gap-0.5 overflow-x-auto px-1 mb-4 mt-2'>
+                    {visiblePatientTabs.map((tab) => (
+                      <TabsTrigger key={tab} className='shrink-0 text-xs px-2.5' value={tab}>{PATIENT_TAB_LABELS[tab]}</TabsTrigger>
+                    ))}
                   </TabsList>
 
                 <TabsContent value='profile'>
@@ -4208,19 +4342,19 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
+                        <Label htmlFor='profile-lastname'>Last name</Label>
+                        <Input
+                          id='profile-lastname'
+                          value={profileForm.lastName}
+                          onChange={(event) => updateProfileField('lastName', event.target.value.toUpperCase())}
+                        />
+                      </div>
+                      <div className='space-y-1'>
                         <Label htmlFor='profile-firstname'>First name</Label>
                         <Input
                           id='profile-firstname'
                           value={profileForm.firstName}
                           onChange={(event) => updateProfileField('firstName', event.target.value)}
-                        />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-lastname'>Last name</Label>
-                        <Input
-                          id='profile-lastname'
-                          value={profileForm.lastName}
-                          onChange={(event) => updateProfileField('lastName', event.target.value)}
                         />
                       </div>
                       <div className='space-y-1'>
@@ -4275,6 +4409,80 @@ function App() {
                         />
                       </div>
                     </div>
+                    {!isPatientActive(selectedPatient, tagsById) ? (
+                      <div className='space-y-1'>
+                        <Label htmlFor='profile-dischargedate'>Discharge Date</Label>
+                        <FlexibleDateInput
+                          id='profile-dischargedate'
+                          ariaLabel='Discharge Date'
+                          value={profileForm.dischargeDate}
+                          onChange={(isoDate) => updateProfileField('dischargeDate', isoDate)}
+                          defaultIso={defaultDischargeDateIso}
+                          emitEmptyOnClear
+                        />
+                      </div>
+                    ) : null}
+                    <div className='space-y-1.5'>
+                      {isEditingTags ? (
+                        <div className='flex items-center gap-1.5'>
+                          <Label>Tags</Label>
+                          <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
+                          {appliedPatientTags.length > 0 ? (
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
+                              aria-label='Done editing tags'
+                              onClick={() => {
+                                const patientId = selectedPatient.id
+                                if (patientId === undefined) return
+                                setTagsEditOverrideByPatientId((previous) => {
+                                  const next = new Map(previous)
+                                  next.set(patientId, !isEditingTags)
+                                  return next
+                                })
+                              }}
+                            >
+                              <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {isEditingTags ? (
+                        <TagPicker
+                          patient={selectedPatient}
+                          tags={nonServiceTagDefinitions}
+                          groups={tagGroups ?? []}
+                          onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
+                        />
+                      ) : (
+                        <div className='flex items-center gap-1.5'>
+                          <TagChipRow
+                            tags={appliedPatientTags.filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId)}
+                            className='justify-start'
+                          />
+                          {appliedPatientTags.length > 0 ? (
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
+                              aria-label='Edit tags'
+                              onClick={() => {
+                                const patientId = selectedPatient.id
+                                if (patientId === undefined) return
+                                setTagsEditOverrideByPatientId((previous) => {
+                                  const next = new Map(previous)
+                                  next.set(patientId, !isEditingTags)
+                                  return next
+                                })
+                              }}
+                            >
+                              <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                            </Button>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
                     <div className='space-y-1'>
                       <Label>Main Service</Label>
                       {selectedPatient ? (
@@ -4327,109 +4535,6 @@ function App() {
                         onOpenPhotoById={openPhotoById}
                       />
                     </div>
-                    <div className='space-y-1'>
-                      <Label htmlFor='profile-chiefcomplaint'>Chief Complaint</Label>
-                      <PhotoMentionField
-                        ariaLabel='Chief Complaint'
-                        placeholder='Chief Complaint'
-                        className='min-h-32'
-                        value={profileForm.chiefComplaint}
-                        onChange={(nextValue) => updateProfileField('chiefComplaint', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label htmlFor='profile-hpi'>History of Present Illness</Label>
-                      <PhotoMentionField
-                        ariaLabel='History of Present Illness'
-                        placeholder='History of Present Illness'
-                        className='min-h-32'
-                        value={profileForm.hpiText}
-                        onChange={(nextValue) => updateProfileField('hpiText', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label htmlFor='profile-pmh'>Past Medical History</Label>
-                      <PhotoMentionField
-                        ariaLabel='Past Medical History'
-                        placeholder='Past Medical History'
-                        className='min-h-32'
-                        value={profileForm.pmhText}
-                        onChange={(nextValue) => updateProfileField('pmhText', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label htmlFor='profile-pe'>Physical Examination</Label>
-                      <PhotoMentionField
-                        ariaLabel='Physical Examination'
-                        placeholder='Physical Examination'
-                        className='min-h-32'
-                        value={profileForm.peText}
-                        onChange={(nextValue) => updateProfileField('peText', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label htmlFor='profile-clerknotes'>Clerk notes</Label>
-                      <PhotoMentionField
-                        ariaLabel='Clerk notes'
-                        placeholder='Clerk notes'
-                        className='min-h-24'
-                        value={profileForm.clerkNotes}
-                        onChange={(nextValue) => updateProfileField('clerkNotes', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
-                      />
-                    </div>
-                    <div className='space-y-1.5'>
-                      <div className='flex items-center gap-1.5'>
-                        <Label>Tags</Label>
-                        <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
-                        {appliedPatientTags.length > 0 ? (
-                          <Button
-                            type='button'
-                            variant='ghost'
-                            className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
-                            aria-label={isEditingTags ? 'Done editing tags' : 'Edit tags'}
-                            onClick={() => {
-                              const patientId = selectedPatient.id
-                              if (patientId === undefined) return
-                              setTagsEditOverrideByPatientId((previous) => {
-                                const next = new Map(previous)
-                                next.set(patientId, !isEditingTags)
-                                return next
-                              })
-                            }}
-                          >
-                            <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
-                          </Button>
-                        ) : null}
-                      </div>
-                      {isEditingTags ? (
-                        <TagPicker
-                          patient={selectedPatient}
-                          tags={nonServiceTagDefinitions}
-                          groups={tagGroups ?? []}
-                          onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
-                        />
-                      ) : (
-                        <TagChipRow
-                          tags={appliedPatientTags.filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId)}
-                          className='justify-start'
-                        />
-                      )}
-                    </div>
                     <div className='flex gap-2 flex-wrap'>
                       <Button
                         variant={isPatientActive(selectedPatient, tagsById) ? 'destructive' : 'secondary'}
@@ -4441,99 +4546,26 @@ function App() {
                     </div>
                   </div>
                 </TabsContent>
+                <TabsContent value='database'>
+                  <div className='space-y-1'>
+                    <Label htmlFor='profile-database'>Database</Label>
+                    <p className='text-xs text-clay'>Unstructured scratch pad — chief complaint, history, exam findings, clerk notes, or anything else that doesn't need its own field.</p>
+                    <PhotoMentionField
+                      ariaLabel='Database'
+                      placeholder='Chief complaint, HPI, PMH, PE, clerk notes…'
+                      className='min-h-72'
+                      value={profileForm.database}
+                      onChange={(nextValue) => updateProfileField('database', nextValue)}
+                      attachments={mentionableAttachments}
+                      attachmentByTitle={mentionableAttachmentByTitle}
+                      onOpenPhotoById={openPhotoById}
+                    />
+                  </div>
+                </TabsContent>
                 <TabsContent value='problems'>
                   <div className='space-y-3'>
-                    <div className='flex flex-wrap items-end gap-2'>
-                      <div className='space-y-1 max-w-60'>
-                        <Label htmlFor='daily-date'>Date</Label>
-                        <FlexibleDateInput
-                          id='daily-date'
-                          ariaLabel='Daily update date'
-                          value={dailyDate}
-                          onChange={(nextDate) => {
-                            if (dailyDirty) {
-                              void saveDailyUpdate()
-                            }
-                            setDailyDate(nextDate)
-                            if (selectedPatient?.id) {
-                              void loadDailyUpdate(selectedPatient.id, nextDate)
-                            }
-                          }}
-                        />
-                      </div>
-                      <Button
-                        type='button'
-                        variant='secondary'
-                        onClick={() => void copyLatestDailyUpdateToForm()}
-                        disabled={selectedPatientId === null}
-                      >
-                        Copy latest entry
-                      </Button>
-                      <Button
-                        type='button'
-                        variant='destructive'
-                        onClick={() => void requestDeleteDailyUpdate()}
-                        disabled={selectedPatientId === null}
-                      >
-                        Delete day entry
-                      </Button>
-                    </div>
-                    <div className='space-y-1'>
-                      <p className='text-xs text-clay'>Saved entry dates</p>
-                      {(savedDailyEntryDates ?? []).length > 0 ? (
-                        <div className='flex flex-wrap gap-1'>
-                          {(savedDailyEntryDates ?? []).map((entryDate) => (
-                            <Button
-                              key={entryDate}
-                              type='button'
-                              variant={entryDate === dailyDate ? 'default' : 'outline'}
-                              className='h-7 px-2 text-xs'
-                              onClick={() => {
-                                if (dailyDirty) {
-                                  void saveDailyUpdate()
-                                }
-                                setDailyDate(entryDate)
-                                if (selectedPatient?.id) {
-                                  void loadDailyUpdate(selectedPatient.id, entryDate)
-                                }
-                              }}
-                            >
-                              {entryDate}
-                            </Button>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className='text-xs text-clay'>No saved daily entries yet.</p>
-                      )}
-                    </div>
-                    <p className='text-xs text-clay'>Copies all problem blocks in their current order, assessment, and plan. Only pending checklist items carry over from the source date.</p>
-                    <div className='space-y-2'>
-                      <Label>Checklist</Label>
-                      <p className='text-xs text-clay'>Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
-                      <div className='flex flex-wrap gap-2'>
-                        <Input
-                          value={dailyChecklistDraft}
-                          onChange={(event) => setDailyChecklistDraft(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault()
-                              addDailyChecklistItem()
-                            }
-                          }}
-                          placeholder='Add checklist item'
-                          aria-label='Add checklist item'
-                        />
-                        <Button type='button' variant='secondary' onClick={addDailyChecklistItem}>
-                          Add item
-                        </Button>
-                      </div>
-                      <div className='space-y-2'>
-                        {dailyUpdateForm.checklist.map((item, index) => renderDailyChecklistItem(item, index))}
-                        {dailyUpdateForm.checklist.length === 0 && (
-                          <p className='text-xs text-clay'>No checklist items yet.</p>
-                        )}
-                      </div>
-                    </div>
+                    {renderDailyDateHeader('problems')}
+                    <p className='text-xs text-clay'>Copies all problem blocks in their current order, assessment, and plan. Only pending checklist items carry over from the source date. Unresolved problems also carry forward automatically when you move to a new date.</p>
                     <ProblemListEditor
                       problems={dailyUpdateForm.problems}
                       onChange={(problems) => {
@@ -4573,6 +4605,37 @@ function App() {
                         attachmentByTitle={mentionableAttachmentByTitle}
                         onOpenPhotoById={openPhotoById}
                       />
+                    </div>
+                  </div>
+                </TabsContent>
+                <TabsContent value='checklist'>
+                  <div className='space-y-3'>
+                    {renderDailyDateHeader('checklist')}
+                    <div className='space-y-2'>
+                      <p className='text-xs text-clay'>Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
+                      <div className='flex flex-wrap gap-2'>
+                        <Input
+                          value={dailyChecklistDraft}
+                          onChange={(event) => setDailyChecklistDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              addDailyChecklistItem()
+                            }
+                          }}
+                          placeholder='Add checklist item'
+                          aria-label='Add checklist item'
+                        />
+                        <Button type='button' variant='secondary' onClick={addDailyChecklistItem}>
+                          Add item
+                        </Button>
+                      </div>
+                      <div className='space-y-2'>
+                        {dailyUpdateForm.checklist.map((item, index) => renderDailyChecklistItem(item, index))}
+                        {dailyUpdateForm.checklist.length === 0 && (
+                          <p className='text-xs text-clay'>No checklist items yet.</p>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </TabsContent>
@@ -5654,6 +5717,25 @@ function App() {
                   </button>
                 </div>
               </div>
+              {/* Tabs */}
+              <div className='space-y-2'>
+                <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tabs</p>
+                <div className='flex flex-col gap-2'>
+                  <button
+                    type='button'
+                    onClick={() => setView('tabSettings')}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-primary/10 flex items-center justify-center shrink-0'>
+                      <LayoutGrid className='h-4 w-4 text-action-primary' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-espresso'>Patient Tabs</p>
+                      <p className='text-xs text-clay mt-0.5'>Show, hide, and reorder the tabs shown inside a patient</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
               {/* App */}
               <div className='space-y-2'>
                 <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>App</p>
@@ -5714,9 +5796,11 @@ function App() {
                   {([
                     ['Add a patient', 'Fill in the form on the Patients tab (room, name, age, sex, main service) and tap Add patient.'],
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
-                    ['Navigate on mobile', 'The bottom bar shows all 8 patient sections in a 2-row grid — tap any to switch. Use ← Back to return to the patient list.'],
+                    ['Navigate on mobile', 'The bottom bar shows your visible patient tabs in a scrollable row — swipe or tap to switch. Use ← Back to return to the patient list.'],
+                    ['Customize your tabs', 'Go to Settings → Patient Tabs to hide tabs you don\'t use and drag the rest into your preferred order. Hiding a tab only hides it — the data underneath is never deleted.'],
                     ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. Discharged patients are hidden from this quick-switch list, and you can scroll through the list when many active patients are present.'],
-                    ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes. Drag blocks to set their priority. Assessment, Plan, and Checklist remain below the list. Tap Copy latest entry to copy the previous problem blocks in order, assessment, plan, and pending checklist items.'],
+                    ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes. Drag blocks to set their priority. Unresolved problems carry forward to the next date automatically — mark one Resolved once it no longer needs tracking. Tap Copy latest entry to copy the previous problem blocks in order, assessment, and plan.'],
+                    ['Track a daily checklist', 'Open Checklist, add short tasks for the date, and check them off as you go. Pending items carry forward automatically to the next date; completed items move to the bottom. Drag any item to override that order.'],
                     ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Completing an item moves it to the bottom; reopening it moves it before the first completed item. Drag any item to override that order.'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],
                     ['Back up your data', 'Go to Settings → Export backup regularly, especially before switching devices or browsers.'],
@@ -5732,20 +5816,12 @@ function App() {
               {/* Patient tabs quick reference */}
               <div className='px-4 py-3 space-y-2.5 border-b border-clay/15'>
                 <p className='text-[10px] font-extrabold uppercase tracking-widest text-clay/55'>Patient tabs</p>
+                <p className='text-[11px] text-clay'>Shown in your current order — hidden tabs are omitted. Change this in Settings → Patient Tabs.</p>
                 <div className='grid grid-cols-2 gap-1.5'>
-                  {([
-                    ['Profile', 'Demographics, diagnosis, clinical summary, HPI, PMH, PE, meds, labs, and clerk notes'],
-                    ['Problems', 'Ordered, date-based problem blocks with free-text notes, assessment, plan, and checklist'],
-                    ['Vitals', 'Structured BP/HR/RR/Temp/SpO2 log with date & time entries'],
-                    ['Labs', 'CBC, UA, Blood Chem, ABG templates + free-text with date/time'],
-                    ['Meds', 'Structured medication list: drug, dose, route, frequency, status, plus drag-to-reorder'],
-                    ['Orders', "Doctor's orders with date, time, service & status tracking"],
-                    ['Photos', 'Categorized image attachments with grouped uploads & carousel'],
-                    ['Report', 'Copy-ready text exports for handoffs, census, vitals & labs'],
-                  ] as [string, string][]).map(([name, desc]) => (
-                    <div key={name} className='rounded-lg bg-warm-ivory border border-clay/20 px-2.5 py-2'>
-                      <p className='text-xs font-bold text-espresso'>{name}</p>
-                      <p className='text-[11px] text-clay leading-snug mt-0.5'>{desc}</p>
+                  {visiblePatientTabs.map((tab) => (
+                    <div key={tab} className='rounded-lg bg-warm-ivory border border-clay/20 px-2.5 py-2'>
+                      <p className='text-xs font-bold text-espresso'>{PATIENT_TAB_LABELS[tab]}</p>
+                      <p className='text-[11px] text-clay leading-snug mt-0.5'>{PATIENT_TAB_DESCRIPTIONS[tab]}</p>
                     </div>
                   ))}
                 </div>
@@ -6238,7 +6314,7 @@ function App() {
         isStandaloneDisplayMode ? 'pb-[calc(0.375rem+env(safe-area-inset-bottom))]' : 'pb-1.5',
       )}>
         {view === 'patient' && selectedPatient ? (
-          /* Patient tab navigation — 4×2 grid, no scrolling */
+          /* Patient tab navigation — horizontally scrollable so it works for any number of visible tabs */
           <div className='flex items-stretch'>
             <button
               className='shrink-0 flex flex-col items-center justify-center gap-0.5 px-2.5 text-clay/70 hover:text-espresso hover:bg-clay/5 border-r border-clay/20 transition-colors'
@@ -6248,33 +6324,21 @@ function App() {
               <ChevronLeft className='h-3.5 w-3.5' />
               <span className='text-[9px] font-bold leading-none'>Back</span>
             </button>
-            <div className='flex-1 grid grid-cols-4 gap-px p-1'>
-              {((['profile', 'problems', 'vitals', 'labs', 'medications', 'orders', 'photos', 'reporting'] as const)).map((tab) => {
-                const tabLabels: Record<typeof tab, string> = {
-                  profile: 'Profile',
-                  problems: 'Problems',
-                  vitals: 'Vitals',
-                  labs: 'Labs',
-                  medications: 'Meds',
-                  orders: 'Orders',
-                  photos: 'Photos',
-                  reporting: 'Report',
-                }
-                return (
-                  <button
-                    key={tab}
-                    onClick={() => setSelectedTab(tab)}
-                    className={cn(
-                      'flex items-center justify-center py-1.5 text-[11px] font-semibold rounded-md transition-all duration-150',
-                      selectedTab === tab
-                        ? 'text-action-primary bg-action-primary/10'
-                        : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
-                    )}
-                  >
-                    {tabLabels[tab]}
-                  </button>
-                )
-              })}
+            <div className='flex-1 flex items-stretch gap-0.5 overflow-x-auto p-1'>
+              {visiblePatientTabs.map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setSelectedTab(tab)}
+                  className={cn(
+                    'shrink-0 flex items-center justify-center px-3 py-1.5 text-[11px] font-semibold rounded-md transition-all duration-150',
+                    selectedTab === tab
+                      ? 'text-action-primary bg-action-primary/10'
+                      : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
+                  )}
+                >
+                  {PATIENT_TAB_LABELS[tab]}
+                </button>
+              ))}
             </div>
           </div>
         ) : (
@@ -6321,7 +6385,7 @@ function App() {
             <button
               className={cn(
                 'flex flex-1 flex-col items-center gap-0.5 px-2 py-1.5 text-xs font-semibold rounded-xl transition-all duration-200',
-                view === 'settings' || view === 'manageTags'
+                view === 'settings' || view === 'manageTags' || view === 'tabSettings'
                   ? 'text-action-primary bg-action-primary/10'
                   : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
               )}

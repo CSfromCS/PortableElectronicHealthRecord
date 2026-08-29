@@ -1,5 +1,5 @@
 import { useState, type DragEvent, type TouchEvent } from 'react'
-import { GripVertical, Plus, Trash2 } from 'lucide-react'
+import { CheckCircle2, Circle, GripVertical, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -39,6 +39,12 @@ export function ProblemListEditor({
   const updateProblem = (id: string, field: 'title' | 'notes', value: string) => {
     onChange(problems.map((problem) => (
       problem.id === id ? { ...problem, [field]: value } : problem
+    )))
+  }
+
+  const toggleProblemCompleted = (id: string) => {
+    onChange(problems.map((problem) => (
+      problem.id === id ? { ...problem, completed: !problem.completed } : problem
     )))
   }
 
@@ -96,13 +102,13 @@ export function ProblemListEditor({
       <div className='flex items-center justify-between gap-2'>
         <div>
           <Label>Problems List</Label>
-          <p className='text-xs text-clay'>Drag blocks to set priority. Their order is preserved when copied.</p>
+          <p className='text-xs text-clay'>Drag blocks to set priority. Unresolved problems carry forward to the next date automatically; mark a problem Resolved once it no longer needs daily tracking.</p>
         </div>
         <Button
           type='button'
           variant='secondary'
           size='sm'
-          onClick={() => onChange([...problems, { id: createProblemBlockId(), title: '', notes: '' }])}
+          onClick={() => onChange([...problems, { id: createProblemBlockId(), title: '', notes: '', completed: false }])}
         >
           <Plus className='h-4 w-4' aria-hidden='true' />
           Add problem
@@ -157,12 +163,26 @@ export function ProblemListEditor({
               </Button>
               <div className='min-w-0 flex-1 space-y-2'>
                 <div className='space-y-1'>
-                  <Label htmlFor={`problem-title-${problem.id}`}>Problem {index + 1}</Label>
+                  <div className='flex items-center justify-between gap-2'>
+                    <Label htmlFor={`problem-title-${problem.id}`}>Problem {index + 1}</Label>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      className={cn('h-6 gap-1 px-1.5 text-xs', problem.completed ? 'text-action-edit' : 'text-clay')}
+                      aria-pressed={problem.completed}
+                      onClick={() => toggleProblemCompleted(problem.id)}
+                    >
+                      {problem.completed ? <CheckCircle2 className='h-3.5 w-3.5' aria-hidden='true' /> : <Circle className='h-3.5 w-3.5' aria-hidden='true' />}
+                      {problem.completed ? 'Resolved' : 'Mark resolved'}
+                    </Button>
+                  </div>
                   <Input
                     id={`problem-title-${problem.id}`}
                     value={problem.title}
                     onChange={(event) => updateProblem(problem.id, 'title', event.target.value)}
                     placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
+                    className={cn(problem.completed && 'line-through text-clay')}
                   />
                 </div>
                 <div className='space-y-1'>

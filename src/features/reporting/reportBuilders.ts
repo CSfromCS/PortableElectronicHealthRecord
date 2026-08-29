@@ -36,7 +36,7 @@ type ReportWindow = {
 
 type ProfileSummaryInput = {
   diagnosis: string
-  clerkNotes: string
+  database: string
 }
 
 type DailySummaryInput = {
@@ -368,7 +368,7 @@ export const toProfileSummary = (
   referralServiceNames: string[] = [],
 ) => {
   const diagnosis = profile.diagnosis.trim() || patient.diagnosis.trim() || '-'
-  const notes = (profile.clerkNotes || patient.clerkNotes || '').trim()
+  const notes = (profile.database || patient.database || '').trim()
   const wardLine = patient.ward ? `Room: ${patient.roomNumber} (${patient.ward})` : `Room: ${patient.roomNumber}`
 
   const lines = [
@@ -384,7 +384,7 @@ export const toProfileSummary = (
   ]
 
   if (notes) {
-    lines.push('Notes:')
+    lines.push('Database:')
     lines.push(notes)
   }
 
@@ -401,7 +401,7 @@ export const toProblemsSummary = (
   const checklistItems = (update.checklist ?? []).filter((item) => (item.text ?? '').trim().length > 0)
   const problems = (update.problems ?? []).filter((problem) => problem.title.trim() || problem.notes.trim())
   const problemLines = problems.flatMap((problem, index) => [
-    `${index + 1}. ${problem.title.trim() || 'Untitled problem'}`,
+    `${index + 1}. ${problem.title.trim() || 'Untitled problem'}${problem.completed ? ' (resolved)' : ''}`,
     problem.notes.trim(),
   ].filter(Boolean))
 
