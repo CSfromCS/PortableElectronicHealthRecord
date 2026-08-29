@@ -123,7 +123,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid } from 'lucide-react'
 import type { TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { TagPicker } from './features/tags/TagPicker'
@@ -475,6 +475,17 @@ const comparePhotoGroupsByNewest = (a: PhotoAttachmentGroup, b: PhotoAttachmentG
   return b.groupId.localeCompare(a.groupId)
 }
 
+// Device-local UI preference (not clinical data), same rationale as patientTabSettings.
+const ADD_PATIENT_COLLAPSED_STORAGE_KEY = 'puhrr.addPatientCollapsed'
+
+const loadAddPatientCollapsed = (): boolean => {
+  try {
+    return window.localStorage.getItem(ADD_PATIENT_COLLAPSED_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
 const ensurePatientLastModified = (patient: Patient): Patient => {
   return {
     ...patient,
@@ -499,6 +510,7 @@ function App() {
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
   const [searchQuery, setSearchQuery] = useState('')
+  const [isAddPatientCollapsed, setIsAddPatientCollapsed] = useState(() => loadAddPatientCollapsed())
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
   const [sortBy, setSortBy] = useState<'room' | 'name' | 'admitDate'>('room')
   const [profileForm, setProfileForm] = useState<ProfileFormState>(initialProfileForm)
@@ -544,6 +556,17 @@ function App() {
   const updatePatientTabSettings = useCallback((next: PatientTabSetting[]) => {
     setPatientTabSettings(next)
     savePatientTabSettings(next)
+  }, [])
+  const toggleAddPatientCollapsed = useCallback(() => {
+    setIsAddPatientCollapsed((previous) => {
+      const next = !previous
+      try {
+        window.localStorage.setItem(ADD_PATIENT_COLLAPSED_STORAGE_KEY, String(next))
+      } catch {
+        // Storage can fail (private browsing, quota) — collapsed state just won't persist this session.
+      }
+      return next
+    })
   }, [])
   const visiblePatientTabs = useMemo(
     () => patientTabSettings.filter((tab) => tab.visible).map((tab) => tab.id),
@@ -4059,14 +4082,23 @@ function App() {
               <>
             <Card className='bg-white/80 border-clay/30 mb-4 shadow-sm'>
               <CardHeader className='py-2.5 px-3 pb-0'>
-                <CardTitle className='text-sm font-semibold text-espresso'>Add patient</CardTitle>
+                <button
+                  type='button'
+                  className='w-full flex items-center justify-between gap-2'
+                  onClick={toggleAddPatientCollapsed}
+                  aria-expanded={!isAddPatientCollapsed}
+                >
+                  <CardTitle className='text-sm font-semibold text-espresso'>Add patient</CardTitle>
+                  <ChevronDown className={cn('h-4 w-4 shrink-0 text-clay transition-transform', isAddPatientCollapsed && '-rotate-90')} aria-hidden='true' />
+                </button>
               </CardHeader>
+              {!isAddPatientCollapsed ? (
               <CardContent className='px-3 pb-3'>
                 <form className='grid grid-cols-2 gap-2 sm:grid-cols-3' onSubmit={handleSubmit}>
                   <Input aria-label='Room Number' placeholder='Room Number' value={form.roomNumber} onChange={(event) => setForm({ ...form, roomNumber: event.target.value })} required />
                   <Input aria-label='Ward/Location' placeholder='Ward/Location' value={form.ward} onChange={(event) => setForm({ ...form, ward: event.target.value })} />
-                  <Input aria-label='First name' placeholder='First name' value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required />
                   <Input aria-label='Last name' placeholder='Last name' value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value.toUpperCase() })} required />
+                  <Input aria-label='First name' placeholder='First name' value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required />
                   <Input aria-label='Age' placeholder='Age' type='number' min='0' value={form.age} onChange={(event) => setForm({ ...form, age: event.target.value })} required />
                   <Select value={form.sex} onValueChange={(v) => setForm({ ...form, sex: v as 'M' | 'F' | 'O' })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -4089,6 +4121,7 @@ function App() {
                   <Button type='submit' className='col-span-2 sm:col-span-3'>Add patient</Button>
                 </form>
               </CardContent>
+              ) : null}
             </Card>
 
             <Card className='bg-white/80 border-clay/30 mb-4 shadow-sm'>
