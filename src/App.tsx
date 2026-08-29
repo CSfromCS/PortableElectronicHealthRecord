@@ -4391,13 +4391,13 @@ function App() {
                     ) : null}
                     <div className='space-y-1.5'>
                       <div className='flex items-center gap-1.5'>
-                        <Label>Tags</Label>
+                        {isEditingTags ? <Label>Tags</Label> : null}
                         <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
                         {appliedPatientTags.length > 0 ? (
                           <Button
                             type='button'
                             variant='ghost'
-                            className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
+                            className={cn('h-6 w-6 shrink-0 p-0 text-clay', isEditingTags && 'ml-auto')}
                             aria-label={isEditingTags ? 'Done editing tags' : 'Edit tags'}
                             onClick={() => {
                               const patientId = selectedPatient.id
