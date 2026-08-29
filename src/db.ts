@@ -10,6 +10,7 @@ import type {
   OrderEntry,
   Patient,
   PhotoAttachment,
+  ProblemBlock,
   TagDefinition,
   TagEvent,
   TagGroupDefinition,
@@ -292,6 +293,62 @@ db.version(6).stores({
       referralServiceTagIds,
     })
   }
+})
+
+db.version(7).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+}).upgrade(async (tx) => {
+  // Splits the Profile tab into Profile + Database: Chief Complaint, HPI, PMH, PE, and Clerk
+  // notes merge into one unstructured `database` field so no existing text is lost. See issue #70.
+  const patientTable = tx.table<Patient, number>('patients')
+  const dailyUpdateTable = tx.table<DailyUpdate, number>('dailyUpdates')
+
+  const legacyPatients = await patientTable.toArray()
+  for (const patient of legacyPatients) {
+    if (patient.id === undefined) continue
+    const legacy = patient as Patient & {
+      chiefComplaint?: string
+      hpiText?: string
+      pmhText?: string
+      peText?: string
+      clerkNotes?: string
+    }
+
+    const database = [
+      legacy.chiefComplaint?.trim() ? `Chief Complaint:\n${legacy.chiefComplaint.trim()}` : '',
+      legacy.hpiText?.trim() ? `History of Present Illness:\n${legacy.hpiText.trim()}` : '',
+      legacy.pmhText?.trim() ? `Past Medical History:\n${legacy.pmhText.trim()}` : '',
+      legacy.peText?.trim() ? `Physical Examination:\n${legacy.peText.trim()}` : '',
+      legacy.clerkNotes?.trim() ? `Clerk Notes:\n${legacy.clerkNotes.trim()}` : '',
+    ].filter(Boolean).join('\n\n')
+
+    delete legacy.chiefComplaint
+    delete legacy.hpiText
+    delete legacy.pmhText
+    delete legacy.peText
+    delete legacy.clerkNotes
+    await patientTable.put({ ...legacy, database })
+  }
+
+  // Problems now carry an explicit `completed` flag (default false) so they can roll forward
+  // per-date the same way Checklist items already do.
+  const dailyUpdates = await dailyUpdateTable.toArray()
+  await Promise.all(dailyUpdates.map((entry) => {
+    if (entry.id === undefined) return Promise.resolve()
+    const problems = entry.problems.map((problem) => ({ ...problem, completed: Boolean((problem as ProblemBlock).completed) }))
+    return dailyUpdateTable.update(entry.id, { problems })
+  }))
 })
 
 export { db }

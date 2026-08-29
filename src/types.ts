@@ -18,16 +18,13 @@ export interface Patient {
   referralServiceTagIds: number[]
   attendingPhysician: string
   diagnosis: string
-  chiefComplaint: string
-  hpiText: string
-  pmhText: string
-  peText: string
   clinicalSummary: string
+  /** Unstructured scratch pad — merges the legacy Chief Complaint / HPI / PMH / PE / Clerk notes fields into a single free-text area (Database tab). */
+  database: string
   plans: string
   medications: string
   labs: string
   pendings: string
-  clerkNotes: string
   tagIds: number[]
 }
 
@@ -75,6 +72,8 @@ export interface ProblemBlock {
   id: string
   title: string
   notes: string
+  /** Adopts the Checklist tab's per-date carry-forward model: unresolved problems roll forward to the next date automatically; resolved ones stay put. */
+  completed: boolean
 }
 
 export interface DailyUpdate {

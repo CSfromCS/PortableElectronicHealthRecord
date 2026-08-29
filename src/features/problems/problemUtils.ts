@@ -37,9 +37,14 @@ export const normalizeProblemBlocks = (value: unknown, idSeed = 'problem'): Prob
         : `${idSeed}-${index}`,
       title,
       notes,
+      completed: Boolean(candidate.completed),
     }]
   })
 }
+
+/** Mirrors toPendingChecklistItems: carries only unresolved problems forward onto a new date. */
+export const toPendingProblemBlocks = (value: unknown): ProblemBlock[] =>
+  normalizeProblemBlocks(value).filter((problem) => !problem.completed)
 
 export const normalizeDailyUpdate = (value: unknown): DailyUpdate => {
   const candidate = value as Record<string, unknown>
@@ -60,6 +65,7 @@ export const normalizeDailyUpdate = (value: unknown): DailyUpdate => {
         id: `legacy-${patientId}-${date}-${recordId}`,
         title: 'Legacy daily note',
         notes: legacyNotes.join('\n'),
+        completed: false,
       }]
     }
   }
