@@ -351,4 +351,30 @@ db.version(7).stores({
   }))
 })
 
+db.version(8).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+}).upgrade(async (tx) => {
+  // Last names are now encoded in all caps by default (new entries are uppercased as typed) —
+  // uppercase existing records too so the whole app is consistent.
+  const patientTable = tx.table<Patient, number>('patients')
+  const patients = await patientTable.toArray()
+  await Promise.all(patients.map((patient) => {
+    if (patient.id === undefined) return Promise.resolve()
+    const uppercased = patient.lastName.toUpperCase()
+    if (uppercased === patient.lastName) return Promise.resolve()
+    return patientTable.update(patient.id, { lastName: uppercased })
+  }))
+})
+
 export { db }

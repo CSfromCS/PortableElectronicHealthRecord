@@ -3526,7 +3526,7 @@ function App() {
         lastModified: now,
         roomNumber: '512A',
         ward: '',
-        lastName: 'Dela Cruz',
+        lastName: 'DELA CRUZ',
         firstName: 'Juan',
         middleName: 'Santos',
         age: 57,
@@ -4045,7 +4045,7 @@ function App() {
                   <Input aria-label='Room Number' placeholder='Room Number' value={form.roomNumber} onChange={(event) => setForm({ ...form, roomNumber: event.target.value })} required />
                   <Input aria-label='Ward/Location' placeholder='Ward/Location' value={form.ward} onChange={(event) => setForm({ ...form, ward: event.target.value })} />
                   <Input aria-label='First name' placeholder='First name' value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required />
-                  <Input aria-label='Last name' placeholder='Last name' value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value })} required />
+                  <Input aria-label='Last name' placeholder='Last name' value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value.toUpperCase() })} required />
                   <Input aria-label='Age' placeholder='Age' type='number' min='0' value={form.age} onChange={(event) => setForm({ ...form, age: event.target.value })} required />
                   <Select value={form.sex} onValueChange={(v) => setForm({ ...form, sex: v as 'M' | 'F' | 'O' })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -4288,19 +4288,19 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
+                        <Label htmlFor='profile-lastname'>Last name</Label>
+                        <Input
+                          id='profile-lastname'
+                          value={profileForm.lastName}
+                          onChange={(event) => updateProfileField('lastName', event.target.value.toUpperCase())}
+                        />
+                      </div>
+                      <div className='space-y-1'>
                         <Label htmlFor='profile-firstname'>First name</Label>
                         <Input
                           id='profile-firstname'
                           value={profileForm.firstName}
                           onChange={(event) => updateProfileField('firstName', event.target.value)}
-                        />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-lastname'>Last name</Label>
-                        <Input
-                          id='profile-lastname'
-                          value={profileForm.lastName}
-                          onChange={(event) => updateProfileField('lastName', event.target.value)}
                         />
                       </div>
                       <div className='space-y-1'>
