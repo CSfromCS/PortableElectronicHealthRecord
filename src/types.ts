@@ -13,6 +13,8 @@ export interface Patient {
   admitDate: string
   /** One-time copy of admitDate at creation; independently editable afterward. */
   referralDate: string
+  /** Defaults to the date a Terminal-flagged tag (e.g. Discharged) was applied; independently editable afterward. Only shown in the UI while a terminal tag is currently attached. */
+  dischargeDate?: string
   /** References to TagDefinition rows in the "Service" tag group. Kept separate from the general `tagIds` because the same service tag pool is split into Main vs Referral roles per patient. */
   mainServiceTagIds: number[]
   referralServiceTagIds: number[]

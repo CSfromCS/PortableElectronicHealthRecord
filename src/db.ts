@@ -2,6 +2,7 @@ import Dexie, { type EntityTable } from 'dexie'
 import { normalizeDailyUpdate } from './features/problems/problemUtils'
 import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
+import { toLocalISODate } from './lib/dateTime'
 import { splitCombinedRoomValue } from './lib/roomSplit'
 import type {
   DailyUpdate,
@@ -375,6 +376,47 @@ db.version(8).stores({
     if (uppercased === patient.lastName) return Promise.resolve()
     return patientTable.update(patient.id, { lastName: uppercased })
   }))
+})
+
+db.version(9).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+}).upgrade(async (tx) => {
+  // Backfills the new Discharge Date field for patients who already have a Terminal-flagged tag
+  // (e.g. Discharged) applied, using the most recent "added" Tag Event for that tag as the date.
+  const patientTable = tx.table<Patient, number>('patients')
+  const tagDefinitionTable = tx.table<TagDefinition, number>('tagDefinitions')
+  const tagEventTable = tx.table<TagEvent, number>('tagEvents')
+
+  const tagDefinitions = await tagDefinitionTable.toArray()
+  const terminalTagIds = new Set(
+    tagDefinitions.filter((tag) => tag.terminal && tag.id !== undefined).map((tag) => tag.id as number),
+  )
+  if (terminalTagIds.size === 0) return
+
+  const patients = await patientTable.toArray()
+  for (const patient of patients) {
+    if (patient.id === undefined) continue
+    const appliedTerminalTagIds = (patient.tagIds ?? []).filter((tagId) => terminalTagIds.has(tagId))
+    if (appliedTerminalTagIds.length === 0) continue
+
+    const events = await tagEventTable.where('patientId').equals(patient.id).toArray()
+    const addedEvents = events.filter((event) => event.action === 'added' && appliedTerminalTagIds.includes(event.tagId))
+    if (addedEvents.length === 0) continue
+
+    const latestEvent = addedEvents.reduce((latest, event) => (event.at > latest.at ? event : latest))
+    await patientTable.update(patient.id, { dischargeDate: toLocalISODate(new Date(latestEvent.at)) })
+  }
 })
 
 export { db }

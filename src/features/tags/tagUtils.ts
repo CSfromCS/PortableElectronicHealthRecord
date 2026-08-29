@@ -1,4 +1,5 @@
 import { db } from '@/db'
+import { toLocalISODate } from '@/lib/dateTime'
 import type { Patient, TagDefinition, TagGroupDefinition } from '@/types'
 import { AUTOMATION_ROLE_FAMILY, type AutomationRoleFamily, UNGROUPED_LABEL } from './tagConstants'
 
@@ -127,6 +128,9 @@ export const applyTagToPatient = async (patient: Patient, tag: TagDefinition): P
     await db.patients.update(patient.id as number, {
       tagIds: [...(patient.tagIds ?? []), tag.id as number],
       lastModified: now,
+      // Terminal tags (e.g. Discharged) default the Discharge Date field to today; it stays
+      // independently editable afterward, same pattern as referralDate defaulting from admitDate.
+      ...(tag.terminal ? { dischargeDate: toLocalISODate() } : {}),
     })
     await db.tagEvents.add({
       patientId: patient.id as number,

@@ -181,6 +181,7 @@ type ProfileFormState = {
   sex: 'M' | 'F' | 'O'
   admitDate: string
   referralDate: string
+  dischargeDate: string
   diagnosis: string
   clinicalSummary: string
   database: string
@@ -200,6 +201,7 @@ const initialProfileForm: ProfileFormState = {
   sex: 'M',
   admitDate: '',
   referralDate: '',
+  dischargeDate: '',
   diagnosis: '',
   clinicalSummary: '',
   database: '',
@@ -1677,6 +1679,7 @@ function App() {
           sex: profileForm.sex,
           admitDate: profileForm.admitDate,
           referralDate: profileForm.referralDate,
+          dischargeDate: profileForm.dischargeDate || undefined,
           diagnosis: profileForm.diagnosis,
           clinicalSummary: profileForm.clinicalSummary,
           database: profileForm.database,
@@ -1724,6 +1727,7 @@ function App() {
       sex: patient.sex,
       admitDate: patient.admitDate,
       referralDate: patient.referralDate ?? patient.admitDate,
+      dischargeDate: patient.dischargeDate ?? '',
       diagnosis: patient.diagnosis,
       clinicalSummary: patient.clinicalSummary ?? '',
       database: patient.database ?? '',
@@ -4355,6 +4359,56 @@ function App() {
                         />
                       </div>
                     </div>
+                    {!isPatientActive(selectedPatient, tagsById) ? (
+                      <div className='space-y-1'>
+                        <Label htmlFor='profile-dischargedate'>Discharge Date</Label>
+                        <FlexibleDateInput
+                          id='profile-dischargedate'
+                          ariaLabel='Discharge Date'
+                          value={profileForm.dischargeDate}
+                          onChange={(isoDate) => updateProfileField('dischargeDate', isoDate)}
+                        />
+                        <p className='text-xs text-clay'>Defaults to the date a terminal tag (e.g. Discharged) was applied; only shown while one is attached.</p>
+                      </div>
+                    ) : null}
+                    <div className='space-y-1.5'>
+                      <div className='flex items-center gap-1.5'>
+                        <Label>Tags</Label>
+                        <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
+                        {appliedPatientTags.length > 0 ? (
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
+                            aria-label={isEditingTags ? 'Done editing tags' : 'Edit tags'}
+                            onClick={() => {
+                              const patientId = selectedPatient.id
+                              if (patientId === undefined) return
+                              setTagsEditOverrideByPatientId((previous) => {
+                                const next = new Map(previous)
+                                next.set(patientId, !isEditingTags)
+                                return next
+                              })
+                            }}
+                          >
+                            <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                          </Button>
+                        ) : null}
+                      </div>
+                      {isEditingTags ? (
+                        <TagPicker
+                          patient={selectedPatient}
+                          tags={nonServiceTagDefinitions}
+                          groups={tagGroups ?? []}
+                          onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
+                        />
+                      ) : (
+                        <TagChipRow
+                          tags={appliedPatientTags.filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId)}
+                          className='justify-start'
+                        />
+                      )}
+                    </div>
                     <div className='space-y-1'>
                       <Label>Main Service</Label>
                       {selectedPatient ? (
@@ -4406,44 +4460,6 @@ function App() {
                         attachmentByTitle={mentionableAttachmentByTitle}
                         onOpenPhotoById={openPhotoById}
                       />
-                    </div>
-                    <div className='space-y-1.5'>
-                      <div className='flex items-center gap-1.5'>
-                        <Label>Tags</Label>
-                        <AmbiguityBadge ambiguity={findTagAmbiguities(selectedPatient, tagsById)} />
-                        {appliedPatientTags.length > 0 ? (
-                          <Button
-                            type='button'
-                            variant='ghost'
-                            className='h-6 w-6 shrink-0 p-0 text-clay ml-auto'
-                            aria-label={isEditingTags ? 'Done editing tags' : 'Edit tags'}
-                            onClick={() => {
-                              const patientId = selectedPatient.id
-                              if (patientId === undefined) return
-                              setTagsEditOverrideByPatientId((previous) => {
-                                const next = new Map(previous)
-                                next.set(patientId, !isEditingTags)
-                                return next
-                              })
-                            }}
-                          >
-                            <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
-                          </Button>
-                        ) : null}
-                      </div>
-                      {isEditingTags ? (
-                        <TagPicker
-                          patient={selectedPatient}
-                          tags={nonServiceTagDefinitions}
-                          groups={tagGroups ?? []}
-                          onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
-                        />
-                      ) : (
-                        <TagChipRow
-                          tags={appliedPatientTags.filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId)}
-                          className='justify-start'
-                        />
-                      )}
                     </div>
                     <div className='flex gap-2 flex-wrap'>
                       <Button
