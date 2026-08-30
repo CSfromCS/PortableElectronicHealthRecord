@@ -4582,12 +4582,14 @@ function App() {
                       </div>
                       <div className='space-y-1'>
                         <Label htmlFor='profile-age'>Age</Label>
-                        <Input
-                          id='profile-age'
-                          type='number'
-                          min='0'
+                        <TapToEditField
+                          ariaLabel='Age'
+                          emptyText='Tap to add an age'
                           value={profileForm.age}
-                          onChange={(event) => updateProfileField('age', event.target.value)}
+                          onCommit={(nextValue) => updateProfileField('age', nextValue)}
+                          renderEditor={({ value, onChange }) => (
+                            <Input id='profile-age' value={value} onChange={(event) => onChange(event.target.value)} />
+                          )}
                         />
                       </div>
                       <div className='space-y-1'>
@@ -4596,7 +4598,10 @@ function App() {
                           value={profileForm.sex}
                           onValueChange={(v) => updateProfileField('sex', v as 'M' | 'F' | 'O')}
                         >
-                          <SelectTrigger id='profile-sex'>
+                          <SelectTrigger
+                            id='profile-sex'
+                            className='h-auto rounded-lg border border-transparent bg-transparent px-3 py-2 text-[15px] shadow-none transition-colors hover:border-clay/25 hover:bg-white/60 focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
