@@ -133,6 +133,15 @@ h1, h2, h3, h4, h5, h6 {
   background-color: rgba(138, 99, 85, 0.42);
 }
 
+/* Grid items default to min-width:auto, which lets a wide-enough child (like a native
+   date/time input on mobile, which renders larger than on desktop) force its whole grid
+   track wider than the column allows and overlap neighboring cells. Letting grid items
+   shrink below their content's natural width fixes that without affecting layouts that
+   already have room to spare. */
+.grid > * {
+  min-width: 0;
+}
+
 /* Smooth interactive transitions */
 button, a, [role="button"] {
   transition-property: color, background-color, border-color, opacity, box-shadow, transform;
