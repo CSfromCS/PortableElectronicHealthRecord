@@ -163,42 +163,42 @@ export function ProblemListEditor({
                 <GripVertical className='h-4 w-4' aria-hidden='true' />
               </Button>
               <div className='min-w-0 flex-1 space-y-2'>
-                <div className='space-y-1'>
-                  <div className='flex items-center justify-between gap-2'>
-                    <Label htmlFor={`problem-title-${problem.id}`}>Problem {index + 1}</Label>
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      className={cn('h-6 gap-1 px-1.5 text-xs', problem.completed ? 'text-action-edit' : 'text-clay')}
-                      aria-pressed={problem.completed}
-                      onClick={() => toggleProblemCompleted(problem.id)}
-                    >
-                      {problem.completed ? <CheckCircle2 className='h-3.5 w-3.5' aria-hidden='true' /> : <Circle className='h-3.5 w-3.5' aria-hidden='true' />}
-                      {problem.completed ? 'Resolved' : 'Mark resolved'}
-                    </Button>
+                <div className='flex items-center gap-2'>
+                  <span className='shrink-0 text-sm font-medium text-clay' aria-hidden='true'>{index + 1}.</span>
+                  <div className='min-w-0 flex-1'>
+                    <TapToEditField
+                      ariaLabel={`Problem ${index + 1} title`}
+                      emptyText='Tap to name this problem'
+                      value={problem.title}
+                      onCommit={(nextValue) => updateProblem(problem.id, 'title', nextValue)}
+                      renderView={(text) => (
+                        <span className={problem.completed ? 'line-through text-clay' : undefined}>{text}</span>
+                      )}
+                      renderEditor={({ value, onChange }) => (
+                        <Input
+                          id={`problem-title-${problem.id}`}
+                          aria-label={`Problem ${index + 1} title`}
+                          value={value}
+                          onChange={(event) => onChange(event.target.value)}
+                          placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
+                          className={cn(problem.completed && 'line-through text-clay')}
+                        />
+                      )}
+                    />
                   </div>
-                  <TapToEditField
-                    ariaLabel={`Problem ${index + 1} title`}
-                    emptyText='Tap to name this problem'
-                    value={problem.title}
-                    onCommit={(nextValue) => updateProblem(problem.id, 'title', nextValue)}
-                    renderView={(text) => (
-                      <span className={problem.completed ? 'line-through text-clay' : undefined}>{text}</span>
-                    )}
-                    renderEditor={({ value, onChange }) => (
-                      <Input
-                        id={`problem-title-${problem.id}`}
-                        value={value}
-                        onChange={(event) => onChange(event.target.value)}
-                        placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
-                        className={cn(problem.completed && 'line-through text-clay')}
-                      />
-                    )}
-                  />
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='sm'
+                    className={cn('h-6 shrink-0 gap-1 px-1.5 text-xs', problem.completed ? 'text-action-edit' : 'text-clay')}
+                    aria-pressed={problem.completed}
+                    onClick={() => toggleProblemCompleted(problem.id)}
+                  >
+                    {problem.completed ? <CheckCircle2 className='h-3.5 w-3.5' aria-hidden='true' /> : <Circle className='h-3.5 w-3.5' aria-hidden='true' />}
+                    {problem.completed ? 'Resolved' : 'Mark resolved'}
+                  </Button>
                 </div>
                 <div className='space-y-1'>
-                  <Label>Notes</Label>
                   <TapToEditField
                     ariaLabel={`Notes for problem ${index + 1}`}
                     emptyText='Tap to add notes'

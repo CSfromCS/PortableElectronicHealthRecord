@@ -297,6 +297,9 @@ const initialDailyUpdateForm: DailyUpdateFormState = {
   checklist: [],
 }
 
+// Once a field has a value, its label recedes so the value itself carries the visual weight.
+const fieldLabelClassName = (hasValue: boolean) => (hasValue ? 'text-xs font-normal text-clay/70 transition-colors' : undefined)
+
 const normalizeChecklistItems = (items: DailyChecklistItem[] | undefined) =>
   (items ?? [])
     .map((item) => ({
@@ -4535,7 +4538,7 @@ function App() {
                   <div className='space-y-3'>
                     <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-room'>Room Number</Label>
+                        <Label htmlFor='profile-room' className={fieldLabelClassName(Boolean(profileForm.roomNumber.trim()))}>Room Number</Label>
                         <TapToEditField
                           ariaLabel='Room Number'
                           emptyText='Tap to add a room number'
@@ -4547,7 +4550,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-ward'>Ward/Location</Label>
+                        <Label htmlFor='profile-ward' className={fieldLabelClassName(Boolean(profileForm.ward.trim()))}>Ward/Location</Label>
                         <TapToEditField
                           ariaLabel='Ward/Location'
                           emptyText='Tap to add a ward/location'
@@ -4559,7 +4562,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-lastname'>Last name</Label>
+                        <Label htmlFor='profile-lastname' className={fieldLabelClassName(Boolean(profileForm.lastName.trim()))}>Last name</Label>
                         <TapToEditField
                           ariaLabel='Last name'
                           emptyText='Tap to add a last name'
@@ -4571,7 +4574,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-firstname'>First name</Label>
+                        <Label htmlFor='profile-firstname' className={fieldLabelClassName(Boolean(profileForm.firstName.trim()))}>First name</Label>
                         <TapToEditField
                           ariaLabel='First name'
                           emptyText='Tap to add a first name'
@@ -4583,7 +4586,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-age'>Age</Label>
+                        <Label htmlFor='profile-age' className={fieldLabelClassName(Boolean(profileForm.age.trim()))}>Age</Label>
                         <TapToEditField
                           ariaLabel='Age'
                           emptyText='Tap to add an age'
@@ -4595,7 +4598,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-sex'>Sex</Label>
+                        <Label htmlFor='profile-sex' className={fieldLabelClassName(Boolean(profileForm.sex))}>Sex</Label>
                         <Select
                           value={profileForm.sex}
                           onValueChange={(v) => updateProfileField('sex', v as 'M' | 'F' | 'O')}
@@ -4740,7 +4743,7 @@ function App() {
                       ) : null}
                     </div>
                     <div className='space-y-1'>
-                      <Label htmlFor='profile-diagnosis'>Diagnosis</Label>
+                      <Label htmlFor='profile-diagnosis' className={fieldLabelClassName(Boolean(profileForm.diagnosis.trim()))}>Diagnosis</Label>
                       <TapToEditField
                         ariaLabel='Diagnosis'
                         emptyText='Tap to add a diagnosis'
@@ -4765,7 +4768,7 @@ function App() {
                       />
                     </div>
                     <div className='space-y-1'>
-                      <Label htmlFor='profile-clinicalsummary'>Clinical Summary</Label>
+                      <Label htmlFor='profile-clinicalsummary' className={fieldLabelClassName(Boolean(profileForm.clinicalSummary.trim()))}>Clinical Summary</Label>
                       <TapToEditField
                         ariaLabel='Clinical Summary'
                         emptyText='Tap to add a clinical summary'
