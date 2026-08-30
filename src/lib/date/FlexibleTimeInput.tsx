@@ -1,40 +1,37 @@
 import { useRef, useState } from 'react'
-import { CalendarDays } from 'lucide-react'
+import { Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { formatFlexibleDateConfirmation, parseFlexibleDate } from '@/lib/dateTime'
+import { formatClock, parseFlexibleTime } from '@/lib/dateTime'
 
 /**
- * Free-typed date entry: accepts permissive formats ("jan 1", "1/1", "january 1 2026", …),
- * shows the fully resolved date once parsed, and keeps unparseable text on screen with an
- * inline error instead of clearing it. A calendar icon still opens the native date picker
- * as a secondary input path; picking a date there overwrites the typed text.
+ * Free-typed time entry: accepts permissive formats ("8pm", "730 pm", "15:00", "1500H", …),
+ * shows the fully resolved time once parsed, and keeps unparseable text on screen with an
+ * inline error instead of clearing it. A clock icon still opens the native time picker as a
+ * secondary input path; picking a time there overwrites the typed text.
  */
-export function FlexibleDateInput({
+export function FlexibleTimeInput({
   id,
   value,
   onChange,
   ariaLabel,
-  placeholder = 'e.g. 1 Jan 2026',
+  placeholder = 'e.g. 3:30 pm',
   className,
-  defaultIso = null,
   emitEmptyOnClear = false,
 }: {
   id?: string
   value: string
-  onChange: (isoDate: string) => void
+  onChange: (hhmm: string) => void
   ariaLabel: string
   placeholder?: string
   className?: string
-  /** When `value` is empty, shows this date below the field labeled "(Default)" instead of showing nothing — for fields (like Discharge Date) that fall back to a computed value until the user explicitly types an override. */
-  defaultIso?: string | null
-  /** When true, clearing the field calls onChange('') so the parent's stored value actually reverts to empty (and therefore back to `defaultIso`) instead of silently keeping the last committed value. Off by default so required date fields (Admission Date, etc.) can't be blanked by a stray clear. */
+  /** When true, clearing the field calls onChange('') so the parent's stored value actually reverts to empty instead of silently keeping the last committed value. Off by default so required time fields can't be blanked by a stray clear. */
   emitEmptyOnClear?: boolean
 }) {
-  const [draft, setDraft] = useState(() => (value ? formatFlexibleDateConfirmation(value) : ''))
+  const [draft, setDraft] = useState(() => (value ? formatClock(value) : ''))
   const [error, setError] = useState<string | null>(null)
-  const [resolvedIso, setResolvedIso] = useState<string | null>(value || null)
+  const [resolvedHhmm, setResolvedHhmm] = useState<string | null>(value || null)
   const [committedValue, setCommittedValue] = useState(value)
   const nativeInputRef = useRef<HTMLInputElement>(null)
 
@@ -43,8 +40,8 @@ export function FlexibleDateInput({
   // which would otherwise stomp the user's raw typed text with the resolved format mid-edit.
   if (value !== committedValue) {
     setCommittedValue(value)
-    setDraft(value ? formatFlexibleDateConfirmation(value) : '')
-    setResolvedIso(value || null)
+    setDraft(value ? formatClock(value) : '')
+    setResolvedHhmm(value || null)
     setError(null)
   }
 
@@ -52,7 +49,7 @@ export function FlexibleDateInput({
     setDraft(raw)
     if (!raw.trim()) {
       setError(null)
-      setResolvedIso(null)
+      setResolvedHhmm(null)
       if (emitEmptyOnClear) {
         setCommittedValue('')
         onChange('')
@@ -60,15 +57,15 @@ export function FlexibleDateInput({
       return
     }
 
-    const result = parseFlexibleDate(raw)
+    const result = parseFlexibleTime(raw)
     if (result.ok) {
       setError(null)
-      setResolvedIso(result.iso)
-      setCommittedValue(result.iso)
-      onChange(result.iso)
+      setResolvedHhmm(result.hhmm)
+      setCommittedValue(result.hhmm)
+      onChange(result.hhmm)
     } else {
       setError(result.error)
-      setResolvedIso(null)
+      setResolvedHhmm(null)
     }
   }
 
@@ -98,17 +95,17 @@ export function FlexibleDateInput({
           variant='outline'
           size='icon'
           className='relative shrink-0'
-          aria-label={`Open calendar for ${ariaLabel}`}
+          aria-label={`Open time picker for ${ariaLabel}`}
           onClick={openNativePicker}
         >
-          <CalendarDays className='h-4 w-4' aria-hidden='true' />
+          <Clock className='h-4 w-4' aria-hidden='true' />
           <input
             ref={nativeInputRef}
-            type='date'
+            type='time'
             value={value}
             onChange={(event) => {
               if (!event.target.value) return
-              commitDraft(formatFlexibleDateConfirmation(event.target.value))
+              commitDraft(formatClock(event.target.value))
             }}
             className='sr-only'
             tabIndex={-1}
@@ -118,10 +115,8 @@ export function FlexibleDateInput({
       </div>
       {error ? (
         <p className='text-xs text-action-danger'>{error}</p>
-      ) : resolvedIso ? (
-        <p className='text-xs text-clay'>{formatFlexibleDateConfirmation(resolvedIso)}</p>
-      ) : defaultIso ? (
-        <p className='text-xs text-clay'>{formatFlexibleDateConfirmation(defaultIso)} (Default)</p>
+      ) : resolvedHhmm ? (
+        <p className='text-xs text-clay'>{formatClock(resolvedHhmm)}</p>
       ) : null}
     </div>
   )

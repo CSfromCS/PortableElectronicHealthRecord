@@ -40,6 +40,7 @@ import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
+import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import {
   formatClock,
   formatDateMMDD,
@@ -295,6 +296,9 @@ const initialDailyUpdateForm: DailyUpdateFormState = {
   plans: '',
   checklist: [],
 }
+
+// Once a field has a value, its label recedes so the value itself carries the visual weight.
+const fieldLabelClassName = (hasValue: boolean) => (hasValue ? 'text-xs font-normal text-clay/70 transition-colors' : undefined)
 
 const normalizeChecklistItems = (items: DailyChecklistItem[] | undefined) =>
   (items ?? [])
@@ -1642,8 +1646,9 @@ function App() {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const age = Number.parseInt(form.age, 10)
-    if (!Number.isFinite(age)) return
+    if (!form.lastName.trim()) return
+    const parsedAge = Number.parseInt(form.age, 10)
+    const age = Number.isFinite(parsedAge) ? parsedAge : 0
 
     const admissionDate = toLocalISODate()
     const patientPayload: Omit<Patient, 'id'> = {
@@ -4187,11 +4192,11 @@ function App() {
               {!isAddPatientCollapsed ? (
               <CardContent className='px-3 pb-3'>
                 <form className='grid grid-cols-2 gap-2 sm:grid-cols-3' onSubmit={handleSubmit}>
-                  <Input aria-label='Room Number' placeholder='Room Number' value={form.roomNumber} onChange={(event) => setForm({ ...form, roomNumber: event.target.value })} required />
+                  <Input aria-label='Room Number' placeholder='Room Number' value={form.roomNumber} onChange={(event) => setForm({ ...form, roomNumber: event.target.value })} />
                   <Input aria-label='Ward/Location' placeholder='Ward/Location' value={form.ward} onChange={(event) => setForm({ ...form, ward: event.target.value })} />
                   <Input aria-label='Last name' placeholder='Last name' value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value.toUpperCase() })} required />
-                  <Input aria-label='First name' placeholder='First name' value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required />
-                  <Input aria-label='Age' placeholder='Age' type='number' min='0' value={form.age} onChange={(event) => setForm({ ...form, age: event.target.value })} required />
+                  <Input aria-label='First name' placeholder='First name' value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} />
+                  <Input aria-label='Age' placeholder='Age' type='number' min='0' value={form.age} onChange={(event) => setForm({ ...form, age: event.target.value })} />
                   <Select value={form.sex} onValueChange={(v) => setForm({ ...form, sex: v as 'M' | 'F' | 'O' })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -4533,7 +4538,7 @@ function App() {
                   <div className='space-y-3'>
                     <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-room'>Room Number</Label>
+                        <Label htmlFor='profile-room' className={fieldLabelClassName(Boolean(profileForm.roomNumber.trim()))}>Room Number</Label>
                         <TapToEditField
                           ariaLabel='Room Number'
                           emptyText='Tap to add a room number'
@@ -4545,7 +4550,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-ward'>Ward/Location</Label>
+                        <Label htmlFor='profile-ward' className={fieldLabelClassName(Boolean(profileForm.ward.trim()))}>Ward/Location</Label>
                         <TapToEditField
                           ariaLabel='Ward/Location'
                           emptyText='Tap to add a ward/location'
@@ -4557,7 +4562,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-lastname'>Last name</Label>
+                        <Label htmlFor='profile-lastname' className={fieldLabelClassName(Boolean(profileForm.lastName.trim()))}>Last name</Label>
                         <TapToEditField
                           ariaLabel='Last name'
                           emptyText='Tap to add a last name'
@@ -4569,7 +4574,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-firstname'>First name</Label>
+                        <Label htmlFor='profile-firstname' className={fieldLabelClassName(Boolean(profileForm.firstName.trim()))}>First name</Label>
                         <TapToEditField
                           ariaLabel='First name'
                           emptyText='Tap to add a first name'
@@ -4581,7 +4586,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-age'>Age</Label>
+                        <Label htmlFor='profile-age' className={fieldLabelClassName(Boolean(profileForm.age.trim()))}>Age</Label>
                         <TapToEditField
                           ariaLabel='Age'
                           emptyText='Tap to add an age'
@@ -4593,7 +4598,7 @@ function App() {
                         />
                       </div>
                       <div className='space-y-1'>
-                        <Label htmlFor='profile-sex'>Sex</Label>
+                        <Label htmlFor='profile-sex' className={fieldLabelClassName(Boolean(profileForm.sex))}>Sex</Label>
                         <Select
                           value={profileForm.sex}
                           onValueChange={(v) => updateProfileField('sex', v as 'M' | 'F' | 'O')}
@@ -4738,7 +4743,7 @@ function App() {
                       ) : null}
                     </div>
                     <div className='space-y-1'>
-                      <Label htmlFor='profile-diagnosis'>Diagnosis</Label>
+                      <Label htmlFor='profile-diagnosis' className={fieldLabelClassName(Boolean(profileForm.diagnosis.trim()))}>Diagnosis</Label>
                       <TapToEditField
                         ariaLabel='Diagnosis'
                         emptyText='Tap to add a diagnosis'
@@ -4763,7 +4768,7 @@ function App() {
                       />
                     </div>
                     <div className='space-y-1'>
-                      <Label htmlFor='profile-clinicalsummary'>Clinical Summary</Label>
+                      <Label htmlFor='profile-clinicalsummary' className={fieldLabelClassName(Boolean(profileForm.clinicalSummary.trim()))}>Clinical Summary</Label>
                       <TapToEditField
                         ariaLabel='Clinical Summary'
                         emptyText='Tap to add a clinical summary'
@@ -4941,7 +4946,7 @@ function App() {
                           </div>
                           <div className='space-y-1'>
                             <Label>Time</Label>
-                            <Input type='time' aria-label='Vital time' value={vitalForm.time} onChange={(event) => updateVitalField('time', event.target.value)} />
+                            <FlexibleTimeInput ariaLabel='Vital time' value={vitalForm.time} onChange={(hhmm) => updateVitalField('time', hhmm)} />
                           </div>
                           <div className='space-y-1'>
                             <Label>BP</Label>
@@ -5311,11 +5316,10 @@ function App() {
                           </div>
                           <div className='space-y-1'>
                             <Label>Time</Label>
-                            <Input
-                              type='time'
-                              aria-label='Lab time'
+                            <FlexibleTimeInput
+                              ariaLabel='Lab time'
                               value={labTemplateTime}
-                              onChange={(event) => setLabTemplateTime(event.target.value)}
+                              onChange={setLabTemplateTime}
                             />
                           </div>
                           <div className='space-y-1'>
@@ -5585,7 +5589,7 @@ function App() {
                           </div>
                           <div className='space-y-1'>
                             <Label>Time</Label>
-                            <Input type='time' aria-label='Order time' value={orderForm.orderTime} onChange={(event) => updateOrderField('orderTime', event.target.value)} />
+                            <FlexibleTimeInput ariaLabel='Order time' value={orderForm.orderTime} onChange={(hhmm) => updateOrderField('orderTime', hhmm)} />
                           </div>
                           <div className='space-y-1 col-span-2'>
                             <Label>Service</Label>
@@ -5989,7 +5993,7 @@ function App() {
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>From time</Label>
-                                    <Input type='time' value={reportVitalsTimeFrom} onChange={(event) => setReportVitalsTimeFrom(event.target.value)} />
+                                    <FlexibleTimeInput ariaLabel='Vitals filter from time' value={reportVitalsTimeFrom} onChange={setReportVitalsTimeFrom} />
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>Until date</Label>
@@ -5997,7 +6001,7 @@ function App() {
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>Until time</Label>
-                                    <Input type='time' value={reportVitalsTimeTo} onChange={(event) => setReportVitalsTimeTo(event.target.value)} />
+                                    <FlexibleTimeInput ariaLabel='Vitals filter until time' value={reportVitalsTimeTo} onChange={setReportVitalsTimeTo} />
                                   </div>
                                 </div>
                               </div>
@@ -6011,7 +6015,7 @@ function App() {
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>From time</Label>
-                                    <Input type='time' value={reportOrdersTimeFrom} onChange={(event) => setReportOrdersTimeFrom(event.target.value)} />
+                                    <FlexibleTimeInput ariaLabel='Orders filter from time' value={reportOrdersTimeFrom} onChange={setReportOrdersTimeFrom} />
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>Until date</Label>
@@ -6019,7 +6023,7 @@ function App() {
                                   </div>
                                   <div className='space-y-1'>
                                     <Label className='text-xs'>Until time</Label>
-                                    <Input type='time' value={reportOrdersTimeTo} onChange={(event) => setReportOrdersTimeTo(event.target.value)} />
+                                    <FlexibleTimeInput ariaLabel='Orders filter until time' value={reportOrdersTimeTo} onChange={setReportOrdersTimeTo} />
                                   </div>
                                 </div>
                               </div>

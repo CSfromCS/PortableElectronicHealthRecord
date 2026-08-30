@@ -181,6 +181,63 @@ export const formatFlexibleDateConfirmation = (isoDate: string): string => {
   return `${day} ${capitalizedMonth} ${year}`
 }
 
+export type FlexibleTimeParseResult =
+  | { ok: true; hhmm: string }
+  | { ok: false; error: string }
+
+const buildHhmm = (hour: number, minute: number): FlexibleTimeParseResult => {
+  if (hour < 0 || hour > 23) return { ok: false, error: 'Enter a valid hour.' }
+  if (minute < 0 || minute > 59) return { ok: false, error: 'Enter a valid minute.' }
+  return { ok: true, hhmm: `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}` }
+}
+
+/**
+ * Permissively parses free-typed time entry into a 24h "HH:MM" string. A trailing am/pm
+ * marker ("8pm", "7:30 pm", "3 p.m.") resolves a 12-hour hour; without one, the input is
+ * treated as already 24-hour ("15:00", "1500", "1500H", "730" -> 07:30), matching standard
+ * clinical/military time notation.
+ */
+export const parseFlexibleTime = (input: string): FlexibleTimeParseResult => {
+  const trimmed = input.trim()
+  if (!trimmed) return { ok: false, error: 'Enter a time.' }
+
+  const meridiemMatch = /^(.*?)\s*([ap])\.?\s*m\.?\s*$/i.exec(trimmed)
+  const mainPart = (meridiemMatch ? meridiemMatch[1] : trimmed).trim().replace(/h$/i, '')
+  const meridiem = meridiemMatch ? meridiemMatch[2].toLowerCase() : null
+
+  if (!mainPart) return { ok: false, error: 'Enter a time.' }
+
+  let hour: number
+  let minute: number
+
+  const colonMatch = /^(\d{1,2}):(\d{2})$/.exec(mainPart)
+  const digitsOnlyMatch = /^(\d{1,4})$/.exec(mainPart)
+
+  if (colonMatch) {
+    hour = Number.parseInt(colonMatch[1], 10)
+    minute = Number.parseInt(colonMatch[2], 10)
+  } else if (digitsOnlyMatch) {
+    const digits = digitsOnlyMatch[1]
+    if (digits.length <= 2) {
+      hour = Number.parseInt(digits, 10)
+      minute = 0
+    } else {
+      hour = Number.parseInt(digits.slice(0, -2), 10)
+      minute = Number.parseInt(digits.slice(-2), 10)
+    }
+  } else {
+    return { ok: false, error: 'Unrecognized time. Try "3:30 pm", "1530", or "1530H".' }
+  }
+
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return { ok: false, error: 'Enter a valid hour (1-12) with am/pm.' }
+    if (meridiem === 'p' && hour !== 12) hour += 12
+    if (meridiem === 'a' && hour === 12) hour = 0
+  }
+
+  return buildHhmm(hour, minute)
+}
+
 export const isWithinDateTimeWindow = (
   date: string,
   time: string,
