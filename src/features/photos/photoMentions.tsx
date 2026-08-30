@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -7,14 +6,10 @@ import {
   type ReactNode,
   type SyntheticEvent,
 } from 'react'
-import { Expand, Minimize2 } from 'lucide-react'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import type { PhotoAttachment, PhotoCategory } from '../../types'
 import { formatPhotoCategory } from './photoUtils'
-
-const DEFAULT_MULTILINE_HEIGHT = 100
 
 export type MentionablePhoto = {
   id: number
@@ -131,10 +126,7 @@ type PhotoMentionFieldProps = {
   attachments: MentionablePhoto[]
   attachmentByTitle: Map<string, MentionablePhoto>
   onOpenPhotoById: (attachmentId: number) => void
-  multiline?: boolean
   autoFocus?: boolean
-  /** Starts already sized to fit its content instead of collapsed to the default height — for contexts (like tap-to-edit) that already showed the full text before this field mounted. */
-  autoExpand?: boolean
 }
 
 export const PhotoMentionField = ({
@@ -146,15 +138,10 @@ export const PhotoMentionField = ({
   attachments,
   attachmentByTitle,
   onOpenPhotoById,
-  multiline = true,
   autoFocus,
-  autoExpand,
 }: PhotoMentionFieldProps) => {
-  const inputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [activeMention, setActiveMention] = useState<ActivePhotoMention | null>(null)
-  const [isExpanded, setIsExpanded] = useState(Boolean(autoExpand))
-  const [showExpandToggle, setShowExpandToggle] = useState(false)
 
   const filteredSuggestions = useMemo(() => {
     if (!activeMention) return [] as MentionablePhoto[]
@@ -170,7 +157,7 @@ export const PhotoMentionField = ({
     [attachmentByTitle, value],
   )
 
-  const applyValueChange = (nextValue: string, target: HTMLInputElement | HTMLTextAreaElement) => {
+  const applyValueChange = (nextValue: string, target: HTMLTextAreaElement) => {
     onChange(nextValue)
     const caretPosition = target.selectionStart ?? nextValue.length
     setActiveMention(findActivePhotoMention(nextValue, caretPosition))
@@ -189,7 +176,7 @@ export const PhotoMentionField = ({
     setActiveMention(null)
 
     requestAnimationFrame(() => {
-      const field = multiline ? textareaRef.current : inputRef.current
+      const field = textareaRef.current
       field?.focus()
       field?.setSelectionRange(nextCaretPosition, nextCaretPosition)
     })
@@ -199,7 +186,7 @@ export const PhotoMentionField = ({
     window.setTimeout(() => setActiveMention(null), 120)
   }
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Escape') {
       setActiveMention(null)
     }
@@ -209,109 +196,30 @@ export const PhotoMentionField = ({
     }
   }
 
-  const handleInputSelect = (event: SyntheticEvent<HTMLInputElement>) => {
-    const target = event.target as HTMLInputElement
-    const caretPosition = target.selectionStart ?? target.value.length
-    setActiveMention(findActivePhotoMention(target.value, caretPosition))
-  }
-
   const handleTextareaSelect = (event: SyntheticEvent<HTMLTextAreaElement>) => {
     const target = event.target as HTMLTextAreaElement
     const caretPosition = target.selectionStart ?? target.value.length
     setActiveMention(findActivePhotoMention(target.value, caretPosition))
   }
 
-  useEffect(() => {
-    if (!multiline) return
-
-    const textarea = textareaRef.current
-    if (!textarea) return
-
-    const frame = requestAnimationFrame(() => {
-      const hasOverflowAtDefaultHeight = textarea.scrollHeight > DEFAULT_MULTILINE_HEIGHT + 1
-
-      if (isExpanded) {
-        textarea.style.height = 'auto'
-        textarea.style.height = `${textarea.scrollHeight}px`
-        setShowExpandToggle(true)
-        return
-      }
-
-      textarea.style.height = `${DEFAULT_MULTILINE_HEIGHT}px`
-      setShowExpandToggle(hasOverflowAtDefaultHeight)
-    })
-
-    return () => {
-      cancelAnimationFrame(frame)
-    }
-  }, [isExpanded, multiline, value])
-
-  const toggleExpanded = () => {
-    if (!multiline) return
-
-    const textarea = textareaRef.current
-    if (!textarea) return
-
-    if (isExpanded) {
-      textarea.style.height = `${DEFAULT_MULTILINE_HEIGHT}px`
-      setIsExpanded(false)
-      return
-    }
-
-    textarea.style.height = 'auto'
-    requestAnimationFrame(() => {
-      const expandedHeight = textarea.scrollHeight
-      textarea.style.height = `${expandedHeight}px`
-      setIsExpanded(true)
-    })
-  }
-
   return (
     <div className='space-y-1'>
       <div className='relative'>
-        {multiline ? (
-          <>
-            {showExpandToggle ? (
-              <button
-                type='button'
-                className='absolute right-0 -top-7 inline-flex h-6 w-6 items-center justify-center rounded border border-clay/30 bg-white/90 text-clay transition-colors hover:bg-blush-sand/60'
-                onClick={toggleExpanded}
-                aria-label={isExpanded ? 'Collapse text area' : 'Expand text area'}
-              >
-                {isExpanded ? <Minimize2 className='h-3.5 w-3.5' /> : <Expand className='h-3.5 w-3.5' />}
-              </button>
-            ) : null}
-            <Textarea
-              ref={textareaRef}
-              aria-label={ariaLabel}
-              placeholder={placeholder}
-              autoFocus={autoFocus}
-              className={cn(
-                className,
-                'h-25 min-h-25 overflow-auto resize-none transition-[height] duration-200 ease-in-out',
-                isExpanded && 'photo-mention-field-expanded',
-              )}
-              value={value}
-              onChange={(event) => applyValueChange(event.target.value, event.target)}
-              onSelect={handleTextareaSelect}
-              onBlur={handleBlur}
-              onKeyDown={handleKeyDown}
-            />
-          </>
-        ) : (
-          <Input
-            ref={inputRef}
+        <div className='autogrow-field' data-grow-value={value}>
+          <Textarea
+            ref={textareaRef}
             aria-label={ariaLabel}
             placeholder={placeholder}
             autoFocus={autoFocus}
-            className={className}
+            rows={1}
+            className={cn('min-h-0', className)}
             value={value}
             onChange={(event) => applyValueChange(event.target.value, event.target)}
-            onSelect={handleInputSelect}
+            onSelect={handleTextareaSelect}
             onBlur={handleBlur}
             onKeyDown={handleKeyDown}
           />
-        )}
+        </div>
         {activeMention !== null && filteredSuggestions.length > 0 ? (
           <div className='absolute left-0 right-0 z-20 mt-1 rounded-lg border border-clay/25 bg-white/97 shadow-lg shadow-espresso/8 backdrop-blur-sm overflow-hidden'>
             <ul className='max-h-44 overflow-auto py-1'>

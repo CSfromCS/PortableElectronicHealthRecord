@@ -2,9 +2,9 @@ import { useState, type DragEvent, type TouchEvent } from 'react'
 import { CheckCircle2, Circle, GripVertical, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { MentionText, PhotoMentionField, type MentionablePhoto } from '@/features/photos/photoMentions'
+import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { cn } from '@/lib/utils'
 import type { ProblemBlock } from '@/types'
@@ -175,11 +175,11 @@ export function ProblemListEditor({
                         <span className={problem.completed ? 'line-through text-clay' : undefined}>{text}</span>
                       )}
                       renderEditor={({ value, onChange }) => (
-                        <Input
+                        <AutoGrowTextField
                           id={`problem-title-${problem.id}`}
                           aria-label={`Problem ${index + 1} title`}
                           value={value}
-                          onChange={(event) => onChange(event.target.value)}
+                          onChange={onChange}
                           placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
                           className={cn(problem.completed && 'line-through text-clay')}
                         />
@@ -214,7 +214,6 @@ export function ProblemListEditor({
                         className='min-h-28'
                         value={value}
                         onChange={onChange}
-                        autoExpand
                         attachments={attachments}
                         attachmentByTitle={attachmentByTitle}
                         onOpenPhotoById={onOpenPhotoById}

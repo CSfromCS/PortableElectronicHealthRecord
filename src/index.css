@@ -142,6 +142,34 @@ h1, h2, h3, h4, h5, h6 {
   min-width: 0;
 }
 
+/* Auto-growing text field: a hidden mirror of the typed text (via the data-grow-value
+   attribute) shares the textarea's grid cell, so the textarea's height simply follows the
+   mirror's natural wrapped height — text always wraps instead of scrolling out of view, and
+   the box grows to fit it with no JS style.height mutation. (The old approach set height to
+   "auto" then back to scrollHeight on every keystroke, which kept retriggering the browser's
+   "scroll the focused element into view" behavior and made the page jump away from the
+   cursor while typing, especially on mobile.) */
+.autogrow-field {
+  display: grid;
+}
+.autogrow-field::after {
+  content: attr(data-grow-value) ' ';
+  white-space: pre-wrap;
+  word-break: break-word;
+  visibility: hidden;
+  padding: 0;
+  font: inherit;
+}
+.autogrow-field > textarea {
+  resize: none;
+  overflow: hidden;
+}
+.autogrow-field > textarea,
+.autogrow-field::after {
+  grid-area: 1 / 1 / 2 / 2;
+  min-width: 0;
+}
+
 /* Smooth interactive transitions */
 button, a, [role="button"] {
   transition-property: color, background-color, border-color, opacity, box-shadow, transform;
