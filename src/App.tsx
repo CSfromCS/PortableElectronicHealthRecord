@@ -34,6 +34,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
+import { MasterChecklistQuickAdd } from '@/features/checklist/MasterChecklistQuickAdd'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
@@ -2182,6 +2183,13 @@ function App() {
       </Button>
     </div>
   ), [allowDailyChecklistDrop, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, moveDailyChecklistItemByDirection, requestEditDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistTouchTarget])
+
+  const addMasterChecklistItem = useCallback((patientId: number, text: string) => {
+    const nextText = text.trim()
+    if (!nextText) return
+
+    void updateMasterChecklist(patientId, (previous) => insertNewChecklistItem(previous, { text: nextText, completed: false }))
+  }, [updateMasterChecklist])
 
   const updateMasterChecklistItemCompletion = useCallback((patientId: number, index: number, completed: boolean) => {
     void updateMasterChecklist(patientId, (previous) => setChecklistItemCompletion(previous, index, completed))
@@ -4468,6 +4476,7 @@ function App() {
                   <p className='text-xs text-clay'>
                     Viewing checklist state for {formatDateShortMonthDay(masterChecklistDate)}. Pending items carry forward to future dates; completed items stay on their original completion date.
                   </p>
+                  <MasterChecklistQuickAdd patients={reportingSelectablePatients} onAdd={addMasterChecklistItem} />
                   <div className='space-y-3'>
                     {masterChecklistGroupedByPatient.map((group) => {
                       const groupPatient = patientsById.get(group.patientId)
