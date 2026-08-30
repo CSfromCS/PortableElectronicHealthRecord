@@ -36,6 +36,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { MasterChecklistQuickAdd } from '@/features/checklist/MasterChecklistQuickAdd'
 import { DragHandle } from '@/lib/dnd/DragHandle'
+import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
@@ -2145,10 +2146,10 @@ function App() {
           <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
         )}
         renderEditor={({ value, onChange }) => (
-          <Input
+          <AutoGrowTextField
             aria-label='Checklist item text'
             value={value}
-            onChange={(event) => onChange(event.target.value)}
+            onChange={onChange}
           />
         )}
       />
@@ -2349,10 +2350,10 @@ function App() {
               <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
             )}
             renderEditor={({ value, onChange }) => (
-              <Input
+              <AutoGrowTextField
                 aria-label='Checklist item text'
                 value={value}
-                onChange={(event) => onChange(event.target.value)}
+                onChange={onChange}
               />
             )}
           />
@@ -4545,7 +4546,7 @@ function App() {
                           value={profileForm.roomNumber}
                           onCommit={(nextValue) => updateProfileField('roomNumber', nextValue)}
                           renderEditor={({ value, onChange }) => (
-                            <Input id='profile-room' value={value} onChange={(event) => onChange(event.target.value)} />
+                            <AutoGrowTextField id='profile-room' value={value} onChange={onChange} />
                           )}
                         />
                       </div>
@@ -4557,7 +4558,7 @@ function App() {
                           value={profileForm.ward}
                           onCommit={(nextValue) => updateProfileField('ward', nextValue)}
                           renderEditor={({ value, onChange }) => (
-                            <Input id='profile-ward' value={value} onChange={(event) => onChange(event.target.value)} />
+                            <AutoGrowTextField id='profile-ward' value={value} onChange={onChange} />
                           )}
                         />
                       </div>
@@ -4569,7 +4570,7 @@ function App() {
                           value={profileForm.lastName}
                           onCommit={(nextValue) => updateProfileField('lastName', nextValue.toUpperCase())}
                           renderEditor={({ value, onChange }) => (
-                            <Input id='profile-lastname' value={value} onChange={(event) => onChange(event.target.value.toUpperCase())} />
+                            <AutoGrowTextField id='profile-lastname' value={value} onChange={(nextValue) => onChange(nextValue.toUpperCase())} />
                           )}
                         />
                       </div>
@@ -4581,7 +4582,7 @@ function App() {
                           value={profileForm.firstName}
                           onCommit={(nextValue) => updateProfileField('firstName', nextValue)}
                           renderEditor={({ value, onChange }) => (
-                            <Input id='profile-firstname' value={value} onChange={(event) => onChange(event.target.value)} />
+                            <AutoGrowTextField id='profile-firstname' value={value} onChange={onChange} />
                           )}
                         />
                       </div>
@@ -4593,7 +4594,7 @@ function App() {
                           value={profileForm.age}
                           onCommit={(nextValue) => updateProfileField('age', nextValue)}
                           renderEditor={({ value, onChange }) => (
-                            <Input id='profile-age' value={value} onChange={(event) => onChange(event.target.value)} />
+                            <AutoGrowTextField id='profile-age' value={value} onChange={onChange} />
                           )}
                         />
                       </div>
@@ -4759,7 +4760,6 @@ function App() {
                             className='min-h-24'
                             value={value}
                             onChange={onChange}
-                            autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
                             onOpenPhotoById={openPhotoById}
@@ -4784,7 +4784,6 @@ function App() {
                             className='min-h-32'
                             value={value}
                             onChange={onChange}
-                            autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
                             onOpenPhotoById={openPhotoById}
@@ -4822,7 +4821,6 @@ function App() {
                           className='min-h-72'
                           value={value}
                           onChange={onChange}
-                          autoExpand
                           attachments={mentionableAttachments}
                           attachmentByTitle={mentionableAttachmentByTitle}
                           onOpenPhotoById={openPhotoById}
@@ -4864,7 +4862,6 @@ function App() {
                             placeholder='Assessment'
                             value={value}
                             onChange={onChange}
-                            autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
                             onOpenPhotoById={openPhotoById}
@@ -4891,7 +4888,6 @@ function App() {
                             placeholder='Plan'
                             value={value}
                             onChange={onChange}
-                            autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
                             onOpenPhotoById={openPhotoById}
@@ -4956,7 +4952,7 @@ function App() {
                               value={vitalForm.bp}
                               onCommit={(nextValue) => updateVitalField('bp', nextValue)}
                               renderEditor={({ value, onChange }) => (
-                                <Input className='placeholder:text-clay/60' aria-label='Vital blood pressure' placeholder='120/80' value={value} onChange={(event) => onChange(event.target.value)} />
+                                <AutoGrowTextField className='placeholder:text-clay/60' aria-label='Vital blood pressure' placeholder='120/80' value={value} onChange={onChange} />
                               )}
                             />
                           </div>
@@ -4968,7 +4964,7 @@ function App() {
                               value={vitalForm.hr}
                               onCommit={(nextValue) => updateVitalField('hr', nextValue)}
                               renderEditor={({ value, onChange }) => (
-                                <Input className='placeholder:text-clay/60' aria-label='Vital heart rate' placeholder='80' value={value} onChange={(event) => onChange(event.target.value)} />
+                                <AutoGrowTextField className='placeholder:text-clay/60' aria-label='Vital heart rate' placeholder='80' value={value} onChange={onChange} />
                               )}
                             />
                           </div>
@@ -4980,7 +4976,7 @@ function App() {
                               value={vitalForm.rr}
                               onCommit={(nextValue) => updateVitalField('rr', nextValue)}
                               renderEditor={({ value, onChange }) => (
-                                <Input className='placeholder:text-clay/60' aria-label='Vital respiratory rate' placeholder='18' value={value} onChange={(event) => onChange(event.target.value)} />
+                                <AutoGrowTextField className='placeholder:text-clay/60' aria-label='Vital respiratory rate' placeholder='18' value={value} onChange={onChange} />
                               )}
                             />
                           </div>
@@ -4992,7 +4988,7 @@ function App() {
                               value={vitalForm.temp}
                               onCommit={(nextValue) => updateVitalField('temp', nextValue)}
                               renderEditor={({ value, onChange }) => (
-                                <Input className='placeholder:text-clay/60' aria-label='Vital temperature' placeholder='37.0' value={value} onChange={(event) => onChange(event.target.value)} />
+                                <AutoGrowTextField className='placeholder:text-clay/60' aria-label='Vital temperature' placeholder='37.0' value={value} onChange={onChange} />
                               )}
                             />
                           </div>
@@ -5004,7 +5000,7 @@ function App() {
                               value={vitalForm.spo2}
                               onCommit={(nextValue) => updateVitalField('spo2', nextValue)}
                               renderEditor={({ value, onChange }) => (
-                                <Input className='placeholder:text-clay/60' aria-label='Vital oxygen saturation' placeholder='99' value={value} onChange={(event) => onChange(event.target.value)} />
+                                <AutoGrowTextField className='placeholder:text-clay/60' aria-label='Vital oxygen saturation' placeholder='99' value={value} onChange={onChange} />
                               )}
                             />
                           </div>
@@ -5027,7 +5023,6 @@ function App() {
                                   attachments={mentionableAttachments}
                                   attachmentByTitle={mentionableAttachmentByTitle}
                                   onOpenPhotoById={openPhotoById}
-                                  multiline={false}
                                 />
                               )}
                             />
@@ -5096,7 +5091,6 @@ function App() {
                             placeholder='Medications'
                             value={value}
                             onChange={onChange}
-                            autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
                             onOpenPhotoById={openPhotoById}
@@ -5118,11 +5112,11 @@ function App() {
                               value={medicationForm.medication}
                               onCommit={(nextValue) => setMedicationForm({ ...medicationForm, medication: nextValue })}
                               renderEditor={({ value, onChange }) => (
-                                <Input
+                                <AutoGrowTextField
                                   aria-label='Medication name'
                                   placeholder='Medication'
                                   value={value}
-                                  onChange={(event) => onChange(event.target.value)}
+                                  onChange={onChange}
                                 />
                               )}
                             />
@@ -5135,7 +5129,7 @@ function App() {
                               value={medicationForm.dose}
                               onCommit={(nextValue) => setMedicationForm({ ...medicationForm, dose: nextValue })}
                               renderEditor={({ value, onChange }) => (
-                                <Input aria-label='Medication dose' placeholder='Dose' value={value} onChange={(event) => onChange(event.target.value)} />
+                                <AutoGrowTextField aria-label='Medication dose' placeholder='Dose' value={value} onChange={onChange} />
                               )}
                             />
                           </div>
@@ -5147,7 +5141,7 @@ function App() {
                               value={medicationForm.route}
                               onCommit={(nextValue) => setMedicationForm({ ...medicationForm, route: nextValue })}
                               renderEditor={({ value, onChange }) => (
-                                <Input aria-label='Medication route' placeholder='Route' value={value} onChange={(event) => onChange(event.target.value)} />
+                                <AutoGrowTextField aria-label='Medication route' placeholder='Route' value={value} onChange={onChange} />
                               )}
                             />
                           </div>
@@ -5159,7 +5153,7 @@ function App() {
                               value={medicationForm.frequency}
                               onCommit={(nextValue) => setMedicationForm({ ...medicationForm, frequency: nextValue })}
                               renderEditor={({ value, onChange }) => (
-                                <Input aria-label='Medication frequency' placeholder='Frequency' value={value} onChange={(event) => onChange(event.target.value)} />
+                                <AutoGrowTextField aria-label='Medication frequency' placeholder='Frequency' value={value} onChange={onChange} />
                               )}
                             />
                           </div>
@@ -5179,7 +5173,6 @@ function App() {
                                   placeholder='Note'
                                   value={value}
                                   onChange={onChange}
-                                  autoExpand
                                   attachments={mentionableAttachments}
                                   attachmentByTitle={mentionableAttachmentByTitle}
                                   onOpenPhotoById={openPhotoById}
@@ -5292,7 +5285,6 @@ function App() {
                             placeholder='Labs'
                             value={value}
                             onChange={onChange}
-                            autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
                             onOpenPhotoById={openPhotoById}
@@ -5353,11 +5345,11 @@ function App() {
                                   value={labTemplateValues[OTHERS_LABEL_KEY] ?? ''}
                                   onCommit={(nextValue) => updateLabTemplateValue(OTHERS_LABEL_KEY, nextValue)}
                                   renderEditor={({ value, onChange }) => (
-                                    <Input
+                                    <AutoGrowTextField
                                       aria-label='Other lab label'
                                       placeholder='Example: ABG, Troponin, Coagulation Profile'
                                       value={value}
-                                      onChange={(event) => onChange(event.target.value)}
+                                      onChange={onChange}
                                     />
                                   )}
                                 />
@@ -5378,7 +5370,6 @@ function App() {
                                       placeholder='Enter full lab result as freeform text'
                                       value={value}
                                       onChange={onChange}
-                                      autoExpand
                                       attachments={mentionableAttachments}
                                       attachmentByTitle={mentionableAttachmentByTitle}
                                       onOpenPhotoById={openPhotoById}
@@ -5437,11 +5428,11 @@ function App() {
                                             value={labTemplateValues[test.key] ?? ''}
                                             onCommit={(nextValue) => updateLabTemplateValue(test.key, nextValue)}
                                             renderEditor={({ value, onChange }) => (
-                                              <Input
+                                              <AutoGrowTextField
                                                 aria-label={`${selectedLabTemplate.name} ${test.key} value`}
                                                 placeholder={abgPlaceholder}
                                                 value={value}
-                                                onChange={(event) => onChange(event.target.value)}
+                                                onChange={onChange}
                                               />
                                             )}
                                           />
@@ -5453,11 +5444,11 @@ function App() {
                                             value={labTemplateValues[getUlnFieldKey(test.key)] ?? ''}
                                             onCommit={(nextValue) => updateLabTemplateValue(getUlnFieldKey(test.key), nextValue)}
                                             renderEditor={({ value, onChange }) => (
-                                              <Input
+                                              <AutoGrowTextField
                                                 aria-label={`${selectedLabTemplate.name} ${test.key} upper limit of normal`}
                                                 placeholder='ULN (upper limit of normal)'
                                                 value={value}
-                                                onChange={(event) => onChange(event.target.value)}
+                                                onChange={onChange}
                                               />
                                             )}
                                           />
@@ -5469,11 +5460,11 @@ function App() {
                                             value={labTemplateValues[getNormalRangeFieldKey(test.key)] ?? ''}
                                             onCommit={(nextValue) => updateLabTemplateValue(getNormalRangeFieldKey(test.key), nextValue)}
                                             renderEditor={({ value, onChange }) => (
-                                              <Input
+                                              <AutoGrowTextField
                                                 aria-label={`${selectedLabTemplate.name} ${test.key} normal range`}
                                                 placeholder='Normal range (e.g., 1.71-3.71)'
                                                 value={value}
-                                                onChange={(event) => onChange(event.target.value)}
+                                                onChange={onChange}
                                               />
                                             )}
                                           />
@@ -5519,7 +5510,6 @@ function App() {
                                 placeholder='Optional note for this lab run'
                                 value={value}
                                 onChange={onChange}
-                                autoExpand
                                 attachments={mentionableAttachments}
                                 attachmentByTitle={mentionableAttachmentByTitle}
                                 onOpenPhotoById={openPhotoById}
@@ -5617,7 +5607,6 @@ function App() {
                                   placeholder='Order'
                                   value={value}
                                   onChange={onChange}
-                                  autoExpand
                                   attachments={mentionableAttachments}
                                   attachmentByTitle={mentionableAttachmentByTitle}
                                   onOpenPhotoById={openPhotoById}
@@ -5644,7 +5633,6 @@ function App() {
                                   attachments={mentionableAttachments}
                                   attachmentByTitle={mentionableAttachmentByTitle}
                                   onOpenPhotoById={openPhotoById}
-                                  multiline={false}
                                 />
                               )}
                             />
