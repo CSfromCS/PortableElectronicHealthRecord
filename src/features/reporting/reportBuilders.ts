@@ -75,6 +75,14 @@ export const formatOrderEntry = (entry: OrderEntry) => {
   return `${withNote || entry.orderText} (${formatOrderStatus(entry.status)})`
 }
 
+/** Same as `formatOrderEntry` but omits the service segment — for UI that already shows the service as its own chip. */
+export const formatOrderEntryWithoutService = (entry: OrderEntry) => {
+  const whenText = [entry.orderDate ?? '', entry.orderTime ?? ''].filter(Boolean).join(' ')
+  const header = [whenText, entry.orderText].filter(Boolean).join(' • ')
+  const withNote = [header, entry.note].filter(Boolean).join(' — ')
+  return `${withNote || entry.orderText} (${formatOrderStatus(entry.status)})`
+}
+
 const formatRange = (values: number[]) => {
   if (values.length === 0) return ''
   const min = Math.min(...values)

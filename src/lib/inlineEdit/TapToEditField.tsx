@@ -1,8 +1,17 @@
-import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FocusEvent, type MouseEvent, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 const DEBOUNCE_MS = 1200
 const BLUR_CHECK_DELAY_MS = 120
+
+// Strips the editor's own box chrome so it reads as the same text becoming editable in
+// place (notepad-style), rather than a differently-styled input box appearing over it.
+const SEAMLESS_EDITOR_RESET = cn(
+  '[&_input]:rounded-none [&_input]:border-0 [&_input]:bg-transparent [&_input]:shadow-none',
+  '[&_input]:ring-0 [&_input]:ring-offset-0 [&_input]:focus-visible:ring-0 [&_input]:focus-visible:ring-offset-0',
+  '[&_textarea]:rounded-none [&_textarea]:border-0 [&_textarea]:bg-transparent [&_textarea]:shadow-none',
+  '[&_textarea]:ring-0 [&_textarea]:ring-offset-0 [&_textarea]:focus-visible:ring-0 [&_textarea]:focus-visible:ring-offset-0',
+)
 
 type TapToEditFieldProps = {
   value: string
@@ -11,7 +20,7 @@ type TapToEditFieldProps = {
   emptyText: string
   className?: string
   renderView?: (value: string) => ReactNode
-  renderEditor: (params: { value: string; onChange: (nextValue: string) => void; autoFocus: boolean }) => ReactNode
+  renderEditor: (params: { value: string; onChange: (nextValue: string) => void }) => ReactNode
 }
 
 type EditorHostProps = {
@@ -23,12 +32,45 @@ type EditorHostProps = {
 // Isolated from TapToEditField's own refs so the render-prop call below can't be mistaken
 // for a same-scope ref read by the react-hooks/refs rule.
 const EditorHost = ({ draft, onChange, renderEditor }: EditorHostProps) => (
-  <>{renderEditor({ value: draft, onChange, autoFocus: true })}</>
+  <>{renderEditor({ value: draft, onChange })}</>
 )
 
+const findEditableField = (container: HTMLElement) => {
+  const field = container.querySelector('input, textarea')
+  return field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement ? field : null
+}
+
+type LegacyCaretPositionSource = {
+  caretPositionFromPoint: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+}
+
+/** Maps a click's page coordinates to a character offset within `container`'s full text content. */
+const computeClickOffset = (container: HTMLElement, clientX: number, clientY: number): number | null => {
+  let range: Range | null = null
+  if (typeof document.caretRangeFromPoint === 'function') {
+    range = document.caretRangeFromPoint(clientX, clientY)
+  } else if (typeof (document as unknown as Partial<LegacyCaretPositionSource>).caretPositionFromPoint === 'function') {
+    const position = (document as unknown as LegacyCaretPositionSource).caretPositionFromPoint(clientX, clientY)
+    if (position) {
+      range = document.createRange()
+      range.setStart(position.offsetNode, position.offset)
+    }
+  }
+  if (!range || !container.contains(range.startContainer)) return null
+
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+  let offset = 0
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node === range.startContainer) return offset + range.startOffset
+    offset += node.textContent?.length ?? 0
+  }
+  return null
+}
+
 /**
- * Tapping the displayed text swaps it for the live editor in place; edits autosave via
- * `onCommit` after a short typing pause and immediately on blur — no Save button, no modal.
+ * Tapping the displayed text swaps it for the live editor in place, styled to match the
+ * read view exactly (no visible box) — edits autosave after a short typing pause and
+ * immediately on blur. The cursor lands where the user clicked, not at the start/end.
  */
 export const TapToEditField = ({
   value,
@@ -43,6 +85,7 @@ export const TapToEditField = ({
   const [draft, setDraft] = useState(value)
   const debounceRef = useRef<number | null>(null)
   const lastCommittedRef = useRef(value)
+  const pendingCaretOffsetRef = useRef<number | null>(null)
 
   const clearDebounce = () => {
     if (debounceRef.current === null) return
@@ -59,7 +102,8 @@ export const TapToEditField = ({
 
   useEffect(() => clearDebounce, [])
 
-  const enterEditMode = () => {
+  const enterEditMode = (caretOffset: number | null) => {
+    pendingCaretOffsetRef.current = caretOffset
     setDraft(value)
     lastCommittedRef.current = value
     setIsEditing(true)
@@ -84,9 +128,20 @@ export const TapToEditField = ({
     }, BLUR_CHECK_DELAY_MS)
   }
 
+  const attachEditingSurface = (node: HTMLDivElement | null) => {
+    if (!node) return
+    const field = findEditableField(node)
+    if (!field) return
+    field.focus()
+    const maxOffset = field.value.length
+    const requestedOffset = pendingCaretOffsetRef.current
+    const caretPosition = requestedOffset === null ? maxOffset : Math.max(0, Math.min(requestedOffset, maxOffset))
+    field.setSelectionRange(caretPosition, caretPosition)
+  }
+
   if (isEditing) {
     return (
-      <div onBlur={handleContainerBlur}>
+      <div ref={attachEditingSurface} onBlur={handleContainerBlur} className={cn(className, SEAMLESS_EDITOR_RESET)}>
         <EditorHost draft={draft} onChange={handleChange} renderEditor={renderEditor} />
       </div>
     )
@@ -103,11 +158,11 @@ export const TapToEditField = ({
         'cursor-text rounded-lg border border-transparent px-3 py-2 text-[15px] transition-colors hover:border-clay/25 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
         className,
       )}
-      onClick={enterEditMode}
+      onClick={(event: MouseEvent<HTMLDivElement>) => enterEditMode(computeClickOffset(event.currentTarget, event.clientX, event.clientY))}
       onKeyDown={(event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
-        enterEditMode()
+        enterEditMode(null)
       }}
     >
       {isEmpty ? (

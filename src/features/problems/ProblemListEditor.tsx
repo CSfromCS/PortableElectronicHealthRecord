@@ -186,13 +186,12 @@ export function ProblemListEditor({
                     renderView={(text) => (
                       <span className={problem.completed ? 'line-through text-clay' : undefined}>{text}</span>
                     )}
-                    renderEditor={({ value, onChange, autoFocus }) => (
+                    renderEditor={({ value, onChange }) => (
                       <Input
                         id={`problem-title-${problem.id}`}
                         value={value}
                         onChange={(event) => onChange(event.target.value)}
                         placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
-                        autoFocus={autoFocus}
                         className={cn(problem.completed && 'line-through text-clay')}
                       />
                     )}
@@ -208,14 +207,13 @@ export function ProblemListEditor({
                     renderView={(text) => (
                       <MentionText text={text} attachmentByTitle={attachmentByTitle} onOpenPhotoById={onOpenPhotoById} />
                     )}
-                    renderEditor={({ value, onChange, autoFocus }) => (
+                    renderEditor={({ value, onChange }) => (
                       <PhotoMentionField
                         ariaLabel={`Notes for problem ${index + 1}`}
                         placeholder='Plan, trend, pending workup, or other notes'
                         className='min-h-28'
                         value={value}
                         onChange={onChange}
-                        autoFocus={autoFocus}
                         autoExpand
                         attachments={attachments}
                         attachmentByTitle={attachmentByTitle}

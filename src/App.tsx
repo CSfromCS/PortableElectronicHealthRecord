@@ -51,7 +51,7 @@ import {
 } from '@/lib/dateTime'
 import {
   buildStructuredLabLines,
-  formatOrderEntry,
+  formatOrderEntryWithoutService,
   toCensusEntry,
   toLabsSummary,
   toMedicationsSummary,
@@ -150,6 +150,7 @@ import {
   addMainServiceTagToPatient,
   addReferralServiceTagToPatient,
   ensureServiceGroupId,
+  findServiceTagByName,
   getOrCreateServiceTag,
   removeMainServiceTagFromPatient,
   removeReferralServiceTagFromPatient,
@@ -157,6 +158,7 @@ import {
   resolveServiceTags,
 } from './features/tags/serviceTagUtils'
 import { ServiceTagMultiSelect } from './features/tags/ServiceTagMultiSelect'
+import { ServiceTagSelect } from './features/tags/ServiceTagSelect'
 
 type PatientFormState = {
   roomNumber: string
@@ -2137,12 +2139,11 @@ function App() {
         renderView={(text) => (
           <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
         )}
-        renderEditor={({ value, onChange, autoFocus }) => (
+        renderEditor={({ value, onChange }) => (
           <Input
             aria-label='Checklist item text'
             value={value}
             onChange={(event) => onChange(event.target.value)}
-            autoFocus={autoFocus}
           />
         )}
       />
@@ -2342,12 +2343,11 @@ function App() {
             renderView={(text) => (
               <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
             )}
-            renderEditor={({ value, onChange, autoFocus }) => (
+            renderEditor={({ value, onChange }) => (
               <Input
                 aria-label='Checklist item text'
                 value={value}
                 onChange={(event) => onChange(event.target.value)}
-                autoFocus={autoFocus}
               />
             )}
           />
@@ -4534,34 +4534,50 @@ function App() {
                     <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
                       <div className='space-y-1'>
                         <Label htmlFor='profile-room'>Room Number</Label>
-                        <Input
-                          id='profile-room'
+                        <TapToEditField
+                          ariaLabel='Room Number'
+                          emptyText='Tap to add a room number'
                           value={profileForm.roomNumber}
-                          onChange={(event) => updateProfileField('roomNumber', event.target.value)}
+                          onCommit={(nextValue) => updateProfileField('roomNumber', nextValue)}
+                          renderEditor={({ value, onChange }) => (
+                            <Input id='profile-room' value={value} onChange={(event) => onChange(event.target.value)} />
+                          )}
                         />
                       </div>
                       <div className='space-y-1'>
                         <Label htmlFor='profile-ward'>Ward/Location</Label>
-                        <Input
-                          id='profile-ward'
+                        <TapToEditField
+                          ariaLabel='Ward/Location'
+                          emptyText='Tap to add a ward/location'
                           value={profileForm.ward}
-                          onChange={(event) => updateProfileField('ward', event.target.value)}
+                          onCommit={(nextValue) => updateProfileField('ward', nextValue)}
+                          renderEditor={({ value, onChange }) => (
+                            <Input id='profile-ward' value={value} onChange={(event) => onChange(event.target.value)} />
+                          )}
                         />
                       </div>
                       <div className='space-y-1'>
                         <Label htmlFor='profile-lastname'>Last name</Label>
-                        <Input
-                          id='profile-lastname'
+                        <TapToEditField
+                          ariaLabel='Last name'
+                          emptyText='Tap to add a last name'
                           value={profileForm.lastName}
-                          onChange={(event) => updateProfileField('lastName', event.target.value.toUpperCase())}
+                          onCommit={(nextValue) => updateProfileField('lastName', nextValue.toUpperCase())}
+                          renderEditor={({ value, onChange }) => (
+                            <Input id='profile-lastname' value={value} onChange={(event) => onChange(event.target.value.toUpperCase())} />
+                          )}
                         />
                       </div>
                       <div className='space-y-1'>
                         <Label htmlFor='profile-firstname'>First name</Label>
-                        <Input
-                          id='profile-firstname'
+                        <TapToEditField
+                          ariaLabel='First name'
+                          emptyText='Tap to add a first name'
                           value={profileForm.firstName}
-                          onChange={(event) => updateProfileField('firstName', event.target.value)}
+                          onCommit={(nextValue) => updateProfileField('firstName', nextValue)}
+                          renderEditor={({ value, onChange }) => (
+                            <Input id='profile-firstname' value={value} onChange={(event) => onChange(event.target.value)} />
+                          )}
                         />
                       </div>
                       <div className='space-y-1'>
@@ -4726,14 +4742,13 @@ function App() {
                         renderView={(text) => (
                           <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                         )}
-                        renderEditor={({ value, onChange, autoFocus }) => (
+                        renderEditor={({ value, onChange }) => (
                           <PhotoMentionField
                             ariaLabel='Diagnosis'
                             placeholder='Diagnosis'
                             className='min-h-24'
                             value={value}
                             onChange={onChange}
-                            autoFocus={autoFocus}
                             autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
@@ -4752,14 +4767,13 @@ function App() {
                         renderView={(text) => (
                           <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                         )}
-                        renderEditor={({ value, onChange, autoFocus }) => (
+                        renderEditor={({ value, onChange }) => (
                           <PhotoMentionField
                             ariaLabel='Clinical Summary'
                             placeholder='Clinical Summary'
                             className='min-h-32'
                             value={value}
                             onChange={onChange}
-                            autoFocus={autoFocus}
                             autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
@@ -4791,14 +4805,13 @@ function App() {
                       renderView={(text) => (
                         <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                       )}
-                      renderEditor={({ value, onChange, autoFocus }) => (
+                      renderEditor={({ value, onChange }) => (
                         <PhotoMentionField
                           ariaLabel='Database'
                           placeholder='Chief complaint, HPI, PMH, PE, clerk notes…'
                           className='min-h-72'
                           value={value}
                           onChange={onChange}
-                          autoFocus={autoFocus}
                           autoExpand
                           attachments={mentionableAttachments}
                           attachmentByTitle={mentionableAttachmentByTitle}
@@ -4835,13 +4848,12 @@ function App() {
                         renderView={(text) => (
                           <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                         )}
-                        renderEditor={({ value, onChange, autoFocus }) => (
+                        renderEditor={({ value, onChange }) => (
                           <PhotoMentionField
                             ariaLabel='Assessment'
                             placeholder='Assessment'
                             value={value}
                             onChange={onChange}
-                            autoFocus={autoFocus}
                             autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
@@ -4863,13 +4875,12 @@ function App() {
                         renderView={(text) => (
                           <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                         )}
-                        renderEditor={({ value, onChange, autoFocus }) => (
+                        renderEditor={({ value, onChange }) => (
                           <PhotoMentionField
                             ariaLabel='Daily plan'
                             placeholder='Plan'
                             value={value}
                             onChange={onChange}
-                            autoFocus={autoFocus}
                             autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
@@ -4929,52 +4940,62 @@ function App() {
                           </div>
                           <div className='space-y-1'>
                             <Label>BP</Label>
-                            <Input
-                              className='placeholder:text-clay/60'
-                              aria-label='Vital blood pressure'
-                              placeholder='120/80'
+                            <TapToEditField
+                              ariaLabel='Vital blood pressure'
+                              emptyText='120/80'
                               value={vitalForm.bp}
-                              onChange={(event) => updateVitalField('bp', event.target.value)}
+                              onCommit={(nextValue) => updateVitalField('bp', nextValue)}
+                              renderEditor={({ value, onChange }) => (
+                                <Input className='placeholder:text-clay/60' aria-label='Vital blood pressure' placeholder='120/80' value={value} onChange={(event) => onChange(event.target.value)} />
+                              )}
                             />
                           </div>
                           <div className='space-y-1'>
                             <Label>HR</Label>
-                            <Input
-                              className='placeholder:text-clay/60'
-                              aria-label='Vital heart rate'
-                              placeholder='80'
+                            <TapToEditField
+                              ariaLabel='Vital heart rate'
+                              emptyText='80'
                               value={vitalForm.hr}
-                              onChange={(event) => updateVitalField('hr', event.target.value)}
+                              onCommit={(nextValue) => updateVitalField('hr', nextValue)}
+                              renderEditor={({ value, onChange }) => (
+                                <Input className='placeholder:text-clay/60' aria-label='Vital heart rate' placeholder='80' value={value} onChange={(event) => onChange(event.target.value)} />
+                              )}
                             />
                           </div>
                           <div className='space-y-1'>
                             <Label>RR</Label>
-                            <Input
-                              className='placeholder:text-clay/60'
-                              aria-label='Vital respiratory rate'
-                              placeholder='18'
+                            <TapToEditField
+                              ariaLabel='Vital respiratory rate'
+                              emptyText='18'
                               value={vitalForm.rr}
-                              onChange={(event) => updateVitalField('rr', event.target.value)}
+                              onCommit={(nextValue) => updateVitalField('rr', nextValue)}
+                              renderEditor={({ value, onChange }) => (
+                                <Input className='placeholder:text-clay/60' aria-label='Vital respiratory rate' placeholder='18' value={value} onChange={(event) => onChange(event.target.value)} />
+                              )}
                             />
                           </div>
                           <div className='space-y-1'>
                             <Label>Temp</Label>
-                            <Input
-                              className='placeholder:text-clay/60'
-                              aria-label='Vital temperature'
-                              placeholder='37.0'
+                            <TapToEditField
+                              ariaLabel='Vital temperature'
+                              emptyText='37.0'
                               value={vitalForm.temp}
-                              onChange={(event) => updateVitalField('temp', event.target.value)}
+                              onCommit={(nextValue) => updateVitalField('temp', nextValue)}
+                              renderEditor={({ value, onChange }) => (
+                                <Input className='placeholder:text-clay/60' aria-label='Vital temperature' placeholder='37.0' value={value} onChange={(event) => onChange(event.target.value)} />
+                              )}
                             />
                           </div>
                           <div className='space-y-1'>
                             <Label>SpO2</Label>
-                            <Input
-                              className='placeholder:text-clay/60'
-                              aria-label='Vital oxygen saturation'
-                              placeholder='99'
+                            <TapToEditField
+                              ariaLabel='Vital oxygen saturation'
+                              emptyText='99'
                               value={vitalForm.spo2}
-                              onChange={(event) => updateVitalField('spo2', event.target.value)}
+                              onCommit={(nextValue) => updateVitalField('spo2', nextValue)}
+                              renderEditor={({ value, onChange }) => (
+                                <Input className='placeholder:text-clay/60' aria-label='Vital oxygen saturation' placeholder='99' value={value} onChange={(event) => onChange(event.target.value)} />
+                              )}
                             />
                           </div>
                           <div className='space-y-1 col-span-2'>
@@ -4987,13 +5008,12 @@ function App() {
                               renderView={(text) => (
                                 <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                               )}
-                              renderEditor={({ value, onChange, autoFocus }) => (
+                              renderEditor={({ value, onChange }) => (
                                 <PhotoMentionField
                                   ariaLabel='Vital note'
                                   placeholder='Note'
                                   value={value}
                                   onChange={onChange}
-                                  autoFocus={autoFocus}
                                   attachments={mentionableAttachments}
                                   attachmentByTitle={mentionableAttachmentByTitle}
                                   onOpenPhotoById={openPhotoById}
@@ -5060,13 +5080,12 @@ function App() {
                         renderView={(text) => (
                           <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                         )}
-                        renderEditor={({ value, onChange, autoFocus }) => (
+                        renderEditor={({ value, onChange }) => (
                           <PhotoMentionField
                             ariaLabel='Medications'
                             placeholder='Medications'
                             value={value}
                             onChange={onChange}
-                            autoFocus={autoFocus}
                             autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
@@ -5088,28 +5107,51 @@ function App() {
                               emptyText='Tap to add a medication'
                               value={medicationForm.medication}
                               onCommit={(nextValue) => setMedicationForm({ ...medicationForm, medication: nextValue })}
-                              renderEditor={({ value, onChange, autoFocus }) => (
+                              renderEditor={({ value, onChange }) => (
                                 <Input
                                   aria-label='Medication name'
                                   placeholder='Medication'
                                   value={value}
                                   onChange={(event) => onChange(event.target.value)}
-                                  autoFocus={autoFocus}
                                 />
                               )}
                             />
                           </div>
                           <div className='space-y-1'>
                             <Label>Dose</Label>
-                            <Input aria-label='Medication dose' placeholder='Dose' value={medicationForm.dose} onChange={(event) => setMedicationForm({ ...medicationForm, dose: event.target.value })} />
+                            <TapToEditField
+                              ariaLabel='Medication dose'
+                              emptyText='Tap to add a dose'
+                              value={medicationForm.dose}
+                              onCommit={(nextValue) => setMedicationForm({ ...medicationForm, dose: nextValue })}
+                              renderEditor={({ value, onChange }) => (
+                                <Input aria-label='Medication dose' placeholder='Dose' value={value} onChange={(event) => onChange(event.target.value)} />
+                              )}
+                            />
                           </div>
                           <div className='space-y-1'>
                             <Label>Route</Label>
-                            <Input aria-label='Medication route' placeholder='Route' value={medicationForm.route} onChange={(event) => setMedicationForm({ ...medicationForm, route: event.target.value })} />
+                            <TapToEditField
+                              ariaLabel='Medication route'
+                              emptyText='Tap to add a route'
+                              value={medicationForm.route}
+                              onCommit={(nextValue) => setMedicationForm({ ...medicationForm, route: nextValue })}
+                              renderEditor={({ value, onChange }) => (
+                                <Input aria-label='Medication route' placeholder='Route' value={value} onChange={(event) => onChange(event.target.value)} />
+                              )}
+                            />
                           </div>
                           <div className='space-y-1'>
                             <Label>Frequency</Label>
-                            <Input aria-label='Medication frequency' placeholder='Frequency' value={medicationForm.frequency} onChange={(event) => setMedicationForm({ ...medicationForm, frequency: event.target.value })} />
+                            <TapToEditField
+                              ariaLabel='Medication frequency'
+                              emptyText='Tap to add a frequency'
+                              value={medicationForm.frequency}
+                              onCommit={(nextValue) => setMedicationForm({ ...medicationForm, frequency: nextValue })}
+                              renderEditor={({ value, onChange }) => (
+                                <Input aria-label='Medication frequency' placeholder='Frequency' value={value} onChange={(event) => onChange(event.target.value)} />
+                              )}
+                            />
                           </div>
                           <div className='space-y-1 col-span-2'>
                             <Label>Note</Label>
@@ -5121,13 +5163,12 @@ function App() {
                               renderView={(text) => (
                                 <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                               )}
-                              renderEditor={({ value, onChange, autoFocus }) => (
+                              renderEditor={({ value, onChange }) => (
                                 <PhotoMentionField
                                   ariaLabel='Medication note'
                                   placeholder='Note'
                                   value={value}
                                   onChange={onChange}
-                                  autoFocus={autoFocus}
                                   autoExpand
                                   attachments={mentionableAttachments}
                                   attachmentByTitle={mentionableAttachmentByTitle}
@@ -5235,13 +5276,12 @@ function App() {
                         renderView={(text) => (
                           <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                         )}
-                        renderEditor={({ value, onChange, autoFocus }) => (
+                        renderEditor={({ value, onChange }) => (
                           <PhotoMentionField
                             ariaLabel='Labs'
                             placeholder='Labs'
                             value={value}
                             onChange={onChange}
-                            autoFocus={autoFocus}
                             autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
@@ -5298,11 +5338,19 @@ function App() {
                             <div className='space-y-2'>
                               <div className='space-y-1'>
                                 <Label>Label</Label>
-                                <Input
-                                  aria-label='Other lab label'
-                                  placeholder='Example: ABG, Troponin, Coagulation Profile'
+                                <TapToEditField
+                                  ariaLabel='Other lab label'
+                                  emptyText='Example: ABG, Troponin, Coagulation Profile'
                                   value={labTemplateValues[OTHERS_LABEL_KEY] ?? ''}
-                                  onChange={(event) => updateLabTemplateValue(OTHERS_LABEL_KEY, event.target.value)}
+                                  onCommit={(nextValue) => updateLabTemplateValue(OTHERS_LABEL_KEY, nextValue)}
+                                  renderEditor={({ value, onChange }) => (
+                                    <Input
+                                      aria-label='Other lab label'
+                                      placeholder='Example: ABG, Troponin, Coagulation Profile'
+                                      value={value}
+                                      onChange={(event) => onChange(event.target.value)}
+                                    />
+                                  )}
                                 />
                               </div>
                               <div className='space-y-1'>
@@ -5315,13 +5363,12 @@ function App() {
                                   renderView={(text) => (
                                     <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                                   )}
-                                  renderEditor={({ value, onChange, autoFocus }) => (
+                                  renderEditor={({ value, onChange }) => (
                                     <PhotoMentionField
                                       ariaLabel='Other lab result'
                                       placeholder='Enter full lab result as freeform text'
                                       value={value}
                                       onChange={onChange}
-                                      autoFocus={autoFocus}
                                       autoExpand
                                       attachments={mentionableAttachments}
                                       attachmentByTitle={mentionableAttachmentByTitle}
@@ -5365,28 +5412,61 @@ function App() {
                                         {test.unit ? ` (${test.unit})` : ''}
                                       </p>
                                       <div className='space-y-1'>
-                                        <Input
-                                          aria-label={`${selectedLabTemplate.name} ${test.key} value`}
-                                          placeholder={abgPlaceholder}
-                                          value={labTemplateValues[test.key] ?? ''}
-                                          readOnly={isCalculatedAbgField}
-                                          className={cn(isCalculatedAbgField && 'bg-warm-ivory text-clay')}
-                                          onChange={(event) => updateLabTemplateValue(test.key, event.target.value)}
-                                        />
-                                        {test.requiresUln ? (
+                                        {isCalculatedAbgField ? (
                                           <Input
-                                            aria-label={`${selectedLabTemplate.name} ${test.key} upper limit of normal`}
-                                            placeholder='ULN (upper limit of normal)'
+                                            aria-label={`${selectedLabTemplate.name} ${test.key} value`}
+                                            placeholder={abgPlaceholder}
+                                            value={labTemplateValues[test.key] ?? ''}
+                                            readOnly
+                                            className='bg-warm-ivory text-clay'
+                                            onChange={(event) => updateLabTemplateValue(test.key, event.target.value)}
+                                          />
+                                        ) : (
+                                          <TapToEditField
+                                            ariaLabel={`${selectedLabTemplate.name} ${test.key} value`}
+                                            emptyText={abgPlaceholder}
+                                            value={labTemplateValues[test.key] ?? ''}
+                                            onCommit={(nextValue) => updateLabTemplateValue(test.key, nextValue)}
+                                            renderEditor={({ value, onChange }) => (
+                                              <Input
+                                                aria-label={`${selectedLabTemplate.name} ${test.key} value`}
+                                                placeholder={abgPlaceholder}
+                                                value={value}
+                                                onChange={(event) => onChange(event.target.value)}
+                                              />
+                                            )}
+                                          />
+                                        )}
+                                        {test.requiresUln ? (
+                                          <TapToEditField
+                                            ariaLabel={`${selectedLabTemplate.name} ${test.key} upper limit of normal`}
+                                            emptyText='ULN (upper limit of normal)'
                                             value={labTemplateValues[getUlnFieldKey(test.key)] ?? ''}
-                                            onChange={(event) => updateLabTemplateValue(getUlnFieldKey(test.key), event.target.value)}
+                                            onCommit={(nextValue) => updateLabTemplateValue(getUlnFieldKey(test.key), nextValue)}
+                                            renderEditor={({ value, onChange }) => (
+                                              <Input
+                                                aria-label={`${selectedLabTemplate.name} ${test.key} upper limit of normal`}
+                                                placeholder='ULN (upper limit of normal)'
+                                                value={value}
+                                                onChange={(event) => onChange(event.target.value)}
+                                              />
+                                            )}
                                           />
                                         ) : null}
                                         {test.requiresNormalRange ? (
-                                          <Input
-                                            aria-label={`${selectedLabTemplate.name} ${test.key} normal range`}
-                                            placeholder='Normal range (e.g., 1.71-3.71)'
+                                          <TapToEditField
+                                            ariaLabel={`${selectedLabTemplate.name} ${test.key} normal range`}
+                                            emptyText='Normal range (e.g., 1.71-3.71)'
                                             value={labTemplateValues[getNormalRangeFieldKey(test.key)] ?? ''}
-                                            onChange={(event) => updateLabTemplateValue(getNormalRangeFieldKey(test.key), event.target.value)}
+                                            onCommit={(nextValue) => updateLabTemplateValue(getNormalRangeFieldKey(test.key), nextValue)}
+                                            renderEditor={({ value, onChange }) => (
+                                              <Input
+                                                aria-label={`${selectedLabTemplate.name} ${test.key} normal range`}
+                                                placeholder='Normal range (e.g., 1.71-3.71)'
+                                                value={value}
+                                                onChange={(event) => onChange(event.target.value)}
+                                              />
+                                            )}
                                           />
                                         ) : null}
                                       </div>
@@ -5424,13 +5504,12 @@ function App() {
                             renderView={(text) => (
                               <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                             )}
-                            renderEditor={({ value, onChange, autoFocus }) => (
+                            renderEditor={({ value, onChange }) => (
                               <PhotoMentionField
                                 ariaLabel='Lab note'
                                 placeholder='Optional note for this lab run'
                                 value={value}
                                 onChange={onChange}
-                                autoFocus={autoFocus}
                                 autoExpand
                                 attachments={mentionableAttachments}
                                 attachmentByTitle={mentionableAttachmentByTitle}
@@ -5505,7 +5584,13 @@ function App() {
                           </div>
                           <div className='space-y-1 col-span-2'>
                             <Label>Service</Label>
-                            <Input aria-label='Order service' placeholder='Service' value={orderForm.service} onChange={(event) => updateOrderField('service', event.target.value)} />
+                            <ServiceTagSelect
+                              ariaLabel='Order service'
+                              placeholder='Select a service…'
+                              value={orderForm.service}
+                              availableTags={serviceTags}
+                              onChange={(nextValue) => updateOrderField('service', nextValue)}
+                            />
                           </div>
                           <div className='space-y-1 col-span-2'>
                             <Label>Order</Label>
@@ -5517,13 +5602,12 @@ function App() {
                               renderView={(text) => (
                                 <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                               )}
-                              renderEditor={({ value, onChange, autoFocus }) => (
+                              renderEditor={({ value, onChange }) => (
                                 <PhotoMentionField
                                   ariaLabel='Order text'
                                   placeholder='Order'
                                   value={value}
                                   onChange={onChange}
-                                  autoFocus={autoFocus}
                                   autoExpand
                                   attachments={mentionableAttachments}
                                   attachmentByTitle={mentionableAttachmentByTitle}
@@ -5542,13 +5626,12 @@ function App() {
                               renderView={(text) => (
                                 <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
                               )}
-                              renderEditor={({ value, onChange, autoFocus }) => (
+                              renderEditor={({ value, onChange }) => (
                                 <PhotoMentionField
                                   ariaLabel='Order note'
                                   placeholder='Note'
                                   value={value}
                                   onChange={onChange}
-                                  autoFocus={autoFocus}
                                   attachments={mentionableAttachments}
                                   attachmentByTitle={mentionableAttachmentByTitle}
                                   onOpenPhotoById={openPhotoById}
@@ -5582,15 +5665,24 @@ function App() {
                         </div>
                         {selectedPatientOrders.length > 0 ? (
                           <ul className='space-y-1'>
-                            {selectedPatientOrders.map((entry) => (
+                            {selectedPatientOrders.map((entry) => {
+                              const orderServiceTag = findServiceTagByName(entry.service, serviceTags)
+                              return (
                               <li key={entry.id} className='flex items-center justify-between gap-2 text-sm py-1 border-b border-clay/30 last:border-0'>
                                 {editingOrderId === entry.id ? (
                                   <span className='text-clay italic'>(Editing above...)</span>
                                 ) : (
                                   <>
-                                    <span className='min-w-0 flex-1 whitespace-pre-wrap text-left'>
+                                    <span className='min-w-0 flex-1 flex items-center gap-1.5 whitespace-pre-wrap text-left'>
+                                      {entry.service.trim() ? (
+                                        orderServiceTag ? (
+                                          <TagChip tag={orderServiceTag} className='shrink-0' />
+                                        ) : (
+                                          <span className='shrink-0 rounded-full bg-blush-sand px-2 py-0.5 text-[11px] font-semibold text-espresso'>{entry.service}</span>
+                                        )
+                                      ) : null}
                                       <MentionText
-                                        text={formatOrderEntry(entry)}
+                                        text={formatOrderEntryWithoutService(entry)}
                                         attachmentByTitle={mentionableAttachmentByTitle}
                                         onOpenPhotoById={openPhotoById}
                                       />
@@ -5599,7 +5691,8 @@ function App() {
                                   </>
                                 )}
                               </li>
-                            ))}
+                              )
+                            })}
                           </ul>
                         ) : (
                           <div className='flex flex-col items-center justify-center py-8 text-center'>
