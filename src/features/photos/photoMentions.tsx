@@ -132,6 +132,7 @@ type PhotoMentionFieldProps = {
   attachmentByTitle: Map<string, MentionablePhoto>
   onOpenPhotoById: (attachmentId: number) => void
   multiline?: boolean
+  autoFocus?: boolean
 }
 
 export const PhotoMentionField = ({
@@ -144,6 +145,7 @@ export const PhotoMentionField = ({
   attachmentByTitle,
   onOpenPhotoById,
   multiline = true,
+  autoFocus,
 }: PhotoMentionFieldProps) => {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -280,6 +282,7 @@ export const PhotoMentionField = ({
               ref={textareaRef}
               aria-label={ariaLabel}
               placeholder={placeholder}
+              autoFocus={autoFocus}
               className={cn(
                 className,
                 'h-25 min-h-25 overflow-auto resize-none transition-[height] duration-200 ease-in-out',
@@ -297,6 +300,7 @@ export const PhotoMentionField = ({
             ref={inputRef}
             aria-label={ariaLabel}
             placeholder={placeholder}
+            autoFocus={autoFocus}
             className={className}
             value={value}
             onChange={(event) => applyValueChange(event.target.value, event.target)}

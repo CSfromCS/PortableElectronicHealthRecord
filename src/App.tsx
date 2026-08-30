@@ -36,6 +36,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { MasterChecklistQuickAdd } from '@/features/checklist/MasterChecklistQuickAdd'
 import { DragHandle } from '@/lib/dnd/DragHandle'
+import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
@@ -525,8 +526,6 @@ function App() {
   const [dailyUpdateForm, setDailyUpdateForm] = useState<DailyUpdateFormState>(initialDailyUpdateForm)
   const [dailyUpdateId, setDailyUpdateId] = useState<number | undefined>(undefined)
   const [dailyChecklistDraft, setDailyChecklistDraft] = useState('')
-  const [editingDailyChecklistItem, setEditingDailyChecklistItem] = useState<{ index: number; text: string } | null>(null)
-  const [editingMasterChecklistItem, setEditingMasterChecklistItem] = useState<{ patientId: number; index: number; text: string } | null>(null)
   const [draggingDailyChecklistItemIndex, setDraggingDailyChecklistItemIndex] = useState<number | null>(null)
   const [touchDailyChecklistTargetIndex, setTouchDailyChecklistTargetIndex] = useState<number | null>(null)
   const [draggingMasterChecklistItem, setDraggingMasterChecklistItem] = useState<{ patientId: number; index: number } | null>(null)
@@ -2000,7 +1999,6 @@ function App() {
 
   const updateDailyChecklistItemText = useCallback((index: number, text: string) => {
     const nextText = text.trim()
-    if (!nextText) return
 
     setDailyUpdateForm((previous) => ({
       ...previous,
@@ -2010,27 +2008,6 @@ function App() {
     }))
     setDailyDirty(true)
   }, [])
-
-  const requestEditDailyChecklistItem = useCallback((index: number) => {
-    const currentItem = dailyUpdateForm.checklist[index]
-    if (!currentItem) return
-
-    setEditingDailyChecklistItem({ index, text: currentItem.text })
-  }, [dailyUpdateForm.checklist])
-
-  const saveEditedDailyChecklistItem = useCallback(() => {
-    if (!editingDailyChecklistItem) return
-
-    updateDailyChecklistItemText(editingDailyChecklistItem.index, editingDailyChecklistItem.text)
-    setEditingDailyChecklistItem(null)
-  }, [editingDailyChecklistItem, updateDailyChecklistItemText])
-
-  const removeEditedDailyChecklistItem = useCallback(() => {
-    if (!editingDailyChecklistItem) return
-
-    removeDailyChecklistItem(editingDailyChecklistItem.index)
-    setEditingDailyChecklistItem(null)
-  }, [editingDailyChecklistItem, removeDailyChecklistItem])
 
   const reorderDailyChecklistItem = useCallback((sourceIndex: number, targetIndex: number) => {
     setDailyUpdateForm((previous) => {
@@ -2151,7 +2128,24 @@ function App() {
         onChange={(event) => updateDailyChecklistItemCompletion(index, event.target.checked)}
         aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
       />
-      <p className={`flex-1 whitespace-pre-wrap text-sm ${item.completed ? 'text-clay line-through' : 'text-espresso'}`}>{item.text}</p>
+      <TapToEditField
+        className='flex-1 px-1.5 py-0.5 text-sm'
+        ariaLabel='Checklist item text'
+        emptyText='Tap to edit'
+        value={item.text}
+        onCommit={(nextText) => updateDailyChecklistItemText(index, nextText)}
+        renderView={(text) => (
+          <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
+        )}
+        renderEditor={({ value, onChange, autoFocus }) => (
+          <Input
+            aria-label='Checklist item text'
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            autoFocus={autoFocus}
+          />
+        )}
+      />
       <Button
         type='button'
         variant='ghost'
@@ -2175,14 +2169,14 @@ function App() {
       <Button
         type='button'
         variant='ghost'
-        className='h-6 w-6 shrink-0 p-0 text-clay'
-        aria-label='Edit checklist item'
-        onClick={() => requestEditDailyChecklistItem(index)}
+        className='h-6 w-6 shrink-0 p-0 text-action-danger'
+        aria-label='Remove checklist item'
+        onClick={() => removeDailyChecklistItem(index)}
       >
-        <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+        <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
       </Button>
     </div>
-  ), [allowDailyChecklistDrop, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, moveDailyChecklistItemByDirection, requestEditDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistTouchTarget])
+  ), [allowDailyChecklistDrop, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, moveDailyChecklistItemByDirection, removeDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
 
   const addMasterChecklistItem = useCallback((patientId: number, text: string) => {
     const nextText = text.trim()
@@ -2201,7 +2195,6 @@ function App() {
 
   const updateMasterChecklistItemText = useCallback((patientId: number, index: number, text: string) => {
     const nextText = text.trim()
-    if (!nextText) return
 
     void updateMasterChecklist(patientId, (previous) => previous.map((item, itemIndex) => (
       itemIndex === index ? { ...item, text: nextText } : item
@@ -2322,28 +2315,6 @@ function App() {
     resetMasterChecklistDragState()
   }, [draggingMasterChecklistItem, reorderMasterChecklistItem, resetMasterChecklistDragState])
 
-  const requestEditMasterChecklistItem = useCallback((item: MasterChecklistItem) => {
-    setEditingMasterChecklistItem({ patientId: item.patientId, index: item.index, text: item.text })
-  }, [])
-
-  const saveEditedMasterChecklistItem = useCallback(() => {
-    if (!editingMasterChecklistItem) return
-
-    updateMasterChecklistItemText(
-      editingMasterChecklistItem.patientId,
-      editingMasterChecklistItem.index,
-      editingMasterChecklistItem.text,
-    )
-    setEditingMasterChecklistItem(null)
-  }, [editingMasterChecklistItem, updateMasterChecklistItemText])
-
-  const removeEditedMasterChecklistItem = useCallback(() => {
-    if (!editingMasterChecklistItem) return
-
-    removeMasterChecklistItem(editingMasterChecklistItem.patientId, editingMasterChecklistItem.index)
-    setEditingMasterChecklistItem(null)
-  }, [editingMasterChecklistItem, removeMasterChecklistItem])
-
   const renderMasterChecklistItem = useCallback((item: MasterChecklistItem, key: string) => (
     <div
       key={key}
@@ -2362,7 +2333,24 @@ function App() {
           aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
         />
         <div className='flex-1'>
-          <p className={`whitespace-pre-wrap text-sm ${item.completed ? 'text-clay line-through' : 'text-espresso'}`}>{item.text}</p>
+          <TapToEditField
+            className='px-1.5 py-0.5 text-sm'
+            ariaLabel='Checklist item text'
+            emptyText='Tap to edit'
+            value={item.text}
+            onCommit={(nextText) => updateMasterChecklistItemText(item.patientId, item.index, nextText)}
+            renderView={(text) => (
+              <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
+            )}
+            renderEditor={({ value, onChange, autoFocus }) => (
+              <Input
+                aria-label='Checklist item text'
+                value={value}
+                onChange={(event) => onChange(event.target.value)}
+                autoFocus={autoFocus}
+              />
+            )}
+          />
           <p className='text-[11px] text-clay'>
             {item.createdDate ? `Created: ${formatDateShortMonthDay(item.createdDate)}` : ''}
             {item.lastFoundDate ? ` • Latest: ${formatDateShortMonthDay(item.lastFoundDate)}` : ''}
@@ -2392,15 +2380,15 @@ function App() {
         <Button
           type='button'
           variant='ghost'
-          className='self-center h-6 w-6 shrink-0 p-0 text-clay'
-          aria-label='Edit checklist item'
-          onClick={() => requestEditMasterChecklistItem(item)}
+          className='self-center h-6 w-6 shrink-0 p-0 text-action-danger'
+          aria-label='Remove checklist item'
+          onClick={() => removeMasterChecklistItem(item.patientId, item.index)}
         >
-          <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+          <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
         </Button>
       </div>
     </div>
-    ), [allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, moveMasterChecklistItem, requestEditMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistTouchTarget])
+    ), [allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, moveMasterChecklistItem, removeMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
@@ -4743,15 +4731,27 @@ function App() {
                     </div>
                     <div className='space-y-1'>
                       <Label htmlFor='profile-clinicalsummary'>Clinical Summary</Label>
-                      <PhotoMentionField
+                      <TapToEditField
                         ariaLabel='Clinical Summary'
-                        placeholder='Clinical Summary'
-                        className='min-h-32'
+                        emptyText='Tap to add a clinical summary'
                         value={profileForm.clinicalSummary}
-                        onChange={(nextValue) => updateProfileField('clinicalSummary', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
+                        onCommit={(nextValue) => updateProfileField('clinicalSummary', nextValue)}
+                        renderView={(text) => (
+                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                        )}
+                        renderEditor={({ value, onChange, autoFocus }) => (
+                          <PhotoMentionField
+                            ariaLabel='Clinical Summary'
+                            placeholder='Clinical Summary'
+                            className='min-h-32'
+                            value={value}
+                            onChange={onChange}
+                            autoFocus={autoFocus}
+                            attachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        )}
                       />
                     </div>
                     <div className='flex gap-2 flex-wrap'>
@@ -4769,15 +4769,27 @@ function App() {
                   <div className='space-y-1'>
                     <Label htmlFor='profile-database'>Database</Label>
                     <p className='text-xs text-clay'>Unstructured scratch pad — chief complaint, history, exam findings, clerk notes, or anything else that doesn't need its own field.</p>
-                    <PhotoMentionField
+                    <TapToEditField
                       ariaLabel='Database'
-                      placeholder='Chief complaint, HPI, PMH, PE, clerk notes…'
-                      className='min-h-72'
+                      emptyText='Tap to add chief complaint, HPI, PMH, PE, clerk notes…'
                       value={profileForm.database}
-                      onChange={(nextValue) => updateProfileField('database', nextValue)}
-                      attachments={mentionableAttachments}
-                      attachmentByTitle={mentionableAttachmentByTitle}
-                      onOpenPhotoById={openPhotoById}
+                      onCommit={(nextValue) => updateProfileField('database', nextValue)}
+                      renderView={(text) => (
+                        <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                      )}
+                      renderEditor={({ value, onChange, autoFocus }) => (
+                        <PhotoMentionField
+                          ariaLabel='Database'
+                          placeholder='Chief complaint, HPI, PMH, PE, clerk notes…'
+                          className='min-h-72'
+                          value={value}
+                          onChange={onChange}
+                          autoFocus={autoFocus}
+                          attachments={mentionableAttachments}
+                          attachmentByTitle={mentionableAttachmentByTitle}
+                          onOpenPhotoById={openPhotoById}
+                        />
+                      )}
                     />
                   </div>
                 </TabsContent>
@@ -6409,48 +6421,6 @@ function App() {
             <div className='flex gap-2 flex-wrap justify-center'>
               <Button variant='destructive' onClick={() => void confirmDeleteDailyUpdate()}>Yes, delete entry</Button>
               <Button variant='secondary' onClick={closeDeleteDailyConfirm}>Cancel</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={editingDailyChecklistItem !== null} onOpenChange={(open) => { if (!open) setEditingDailyChecklistItem(null) }}>
-          <DialogContent className='max-w-md'>
-            <DialogHeader>
-              <DialogTitle>Edit checklist item</DialogTitle>
-            </DialogHeader>
-            <div className='space-y-3'>
-              <Input
-                value={editingDailyChecklistItem?.text ?? ''}
-                onChange={(event) => setEditingDailyChecklistItem((previous) => (previous ? { ...previous, text: event.target.value } : previous))}
-                aria-label='Edit checklist item text'
-                placeholder='Checklist item'
-              />
-              <div className='flex gap-2 justify-end'>
-                <Button variant='destructive' className='mr-auto' onClick={removeEditedDailyChecklistItem}>Remove</Button>
-                <Button variant='secondary' onClick={() => setEditingDailyChecklistItem(null)}>Cancel</Button>
-                <Button onClick={saveEditedDailyChecklistItem}>Save</Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={editingMasterChecklistItem !== null} onOpenChange={(open) => { if (!open) setEditingMasterChecklistItem(null) }}>
-          <DialogContent className='max-w-md'>
-            <DialogHeader>
-              <DialogTitle>Edit checklist item</DialogTitle>
-            </DialogHeader>
-            <div className='space-y-3'>
-              <Input
-                value={editingMasterChecklistItem?.text ?? ''}
-                onChange={(event) => setEditingMasterChecklistItem((previous) => (previous ? { ...previous, text: event.target.value } : previous))}
-                aria-label='Edit master checklist item text'
-                placeholder='Checklist item'
-              />
-              <div className='flex gap-2 justify-end'>
-                <Button variant='destructive' className='mr-auto' onClick={removeEditedMasterChecklistItem}>Remove</Button>
-                <Button variant='secondary' onClick={() => setEditingMasterChecklistItem(null)}>Cancel</Button>
-                <Button onClick={saveEditedMasterChecklistItem}>Save</Button>
-              </div>
             </div>
           </DialogContent>
         </Dialog>
