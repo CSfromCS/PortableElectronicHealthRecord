@@ -1,5 +1,5 @@
 import { db } from '@/db'
-import type { Patient, TagDefinition, TagGroupDefinition } from '@/types'
+import type { Patient, TagDefinition, TagEvent, TagGroupDefinition } from '@/types'
 import { AUTOMATION_ROLE_FAMILY, type AutomationRoleFamily, UNGROUPED_LABEL } from './tagConstants'
 
 export const sortTagGroups = (groups: TagGroupDefinition[]): TagGroupDefinition[] =>
@@ -156,6 +156,54 @@ export const removeTagFromPatient = async (patient: Patient, tag: TagDefinition)
       action: 'removed',
       at: now,
     })
+  })
+}
+
+/** Bulk-adds every tag in `tags` to every patient in `patients`, one update per patient. A tag already applied to a given patient is skipped silently for that patient (point 3, point 8). */
+export const applyTagsToPatients = async (patients: Patient[], tags: TagDefinition[]): Promise<void> => {
+  const now = new Date().toISOString()
+  const events: TagEvent[] = []
+
+  await db.transaction('rw', [db.patients, db.tagEvents], async () => {
+    for (const patient of patients) {
+      if (patient.id === undefined) continue
+      const existingTagIds = new Set(patient.tagIds ?? [])
+      const tagsToApply = tags.filter((tag) => tag.id !== undefined && !existingTagIds.has(tag.id))
+      if (tagsToApply.length === 0) continue
+
+      await db.patients.update(patient.id, {
+        tagIds: [...(patient.tagIds ?? []), ...tagsToApply.map((tag) => tag.id as number)],
+        lastModified: now,
+      })
+      tagsToApply.forEach((tag) => {
+        events.push({ patientId: patient.id as number, tagId: tag.id as number, tagName: tag.name, action: 'added', at: now })
+      })
+    }
+    if (events.length > 0) await db.tagEvents.bulkAdd(events)
+  })
+}
+
+/** Bulk-removes every tag in `tags` from every patient in `patients`, one update per patient. A tag not applied to a given patient is skipped silently for that patient (point 3, point 8). */
+export const removeTagsFromPatients = async (patients: Patient[], tags: TagDefinition[]): Promise<void> => {
+  const removedTagIds = new Set(tags.map((tag) => tag.id).filter((id): id is number => id !== undefined))
+  const now = new Date().toISOString()
+  const events: TagEvent[] = []
+
+  await db.transaction('rw', [db.patients, db.tagEvents], async () => {
+    for (const patient of patients) {
+      if (patient.id === undefined) continue
+      const tagsToRemove = tags.filter((tag) => tag.id !== undefined && (patient.tagIds ?? []).includes(tag.id))
+      if (tagsToRemove.length === 0) continue
+
+      await db.patients.update(patient.id, {
+        tagIds: (patient.tagIds ?? []).filter((id) => !removedTagIds.has(id)),
+        lastModified: now,
+      })
+      tagsToRemove.forEach((tag) => {
+        events.push({ patientId: patient.id as number, tagId: tag.id as number, tagName: tag.name, action: 'removed', at: now })
+      })
+    }
+    if (events.length > 0) await db.tagEvents.bulkAdd(events)
   })
 }
 
