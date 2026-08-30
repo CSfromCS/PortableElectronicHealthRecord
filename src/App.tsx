@@ -4718,15 +4718,28 @@ function App() {
                     </div>
                     <div className='space-y-1'>
                       <Label htmlFor='profile-diagnosis'>Diagnosis</Label>
-                      <PhotoMentionField
+                      <TapToEditField
                         ariaLabel='Diagnosis'
-                        placeholder='Diagnosis'
-                        className='min-h-24'
+                        emptyText='Tap to add a diagnosis'
                         value={profileForm.diagnosis}
-                        onChange={(nextValue) => updateProfileField('diagnosis', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
+                        onCommit={(nextValue) => updateProfileField('diagnosis', nextValue)}
+                        renderView={(text) => (
+                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                        )}
+                        renderEditor={({ value, onChange, autoFocus }) => (
+                          <PhotoMentionField
+                            ariaLabel='Diagnosis'
+                            placeholder='Diagnosis'
+                            className='min-h-24'
+                            value={value}
+                            onChange={onChange}
+                            autoFocus={autoFocus}
+                            autoExpand
+                            attachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        )}
                       />
                     </div>
                     <div className='space-y-1'>
@@ -4747,6 +4760,7 @@ function App() {
                             value={value}
                             onChange={onChange}
                             autoFocus={autoFocus}
+                            autoExpand
                             attachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
                             onOpenPhotoById={openPhotoById}
@@ -4785,6 +4799,7 @@ function App() {
                           value={value}
                           onChange={onChange}
                           autoFocus={autoFocus}
+                          autoExpand
                           attachments={mentionableAttachments}
                           attachmentByTitle={mentionableAttachmentByTitle}
                           onOpenPhotoById={openPhotoById}
@@ -4809,32 +4824,58 @@ function App() {
                     />
                     <div className='space-y-1'>
                       <Label>Assessment</Label>
-                      <PhotoMentionField
+                      <TapToEditField
                         ariaLabel='Assessment'
-                        placeholder='Assessment'
+                        emptyText='Tap to add an assessment'
                         value={dailyUpdateForm.assessment}
-                        onChange={(nextValue) => {
+                        onCommit={(nextValue) => {
                           setDailyUpdateForm({ ...dailyUpdateForm, assessment: nextValue })
                           setDailyDirty(true)
                         }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
+                        renderView={(text) => (
+                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                        )}
+                        renderEditor={({ value, onChange, autoFocus }) => (
+                          <PhotoMentionField
+                            ariaLabel='Assessment'
+                            placeholder='Assessment'
+                            value={value}
+                            onChange={onChange}
+                            autoFocus={autoFocus}
+                            autoExpand
+                            attachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        )}
                       />
                     </div>
                     <div className='space-y-1'>
                       <Label>Plan</Label>
-                      <PhotoMentionField
+                      <TapToEditField
                         ariaLabel='Daily plan'
-                        placeholder='Plan'
+                        emptyText='Tap to add a plan'
                         value={dailyUpdateForm.plans}
-                        onChange={(nextValue) => {
+                        onCommit={(nextValue) => {
                           setDailyUpdateForm({ ...dailyUpdateForm, plans: nextValue })
                           setDailyDirty(true)
                         }}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
+                        renderView={(text) => (
+                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                        )}
+                        renderEditor={({ value, onChange, autoFocus }) => (
+                          <PhotoMentionField
+                            ariaLabel='Daily plan'
+                            placeholder='Plan'
+                            value={value}
+                            onChange={onChange}
+                            autoFocus={autoFocus}
+                            autoExpand
+                            attachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        )}
                       />
                     </div>
                   </div>
@@ -4938,15 +4979,27 @@ function App() {
                           </div>
                           <div className='space-y-1 col-span-2'>
                             <Label>Note</Label>
-                            <PhotoMentionField
+                            <TapToEditField
                               ariaLabel='Vital note'
-                              placeholder='Note'
+                              emptyText='Tap to add a note'
                               value={vitalForm.note}
-                              onChange={(nextValue) => updateVitalField('note', nextValue)}
-                              attachments={mentionableAttachments}
-                              attachmentByTitle={mentionableAttachmentByTitle}
-                              onOpenPhotoById={openPhotoById}
-                              multiline={false}
+                              onCommit={(nextValue) => updateVitalField('note', nextValue)}
+                              renderView={(text) => (
+                                <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                              )}
+                              renderEditor={({ value, onChange, autoFocus }) => (
+                                <PhotoMentionField
+                                  ariaLabel='Vital note'
+                                  placeholder='Note'
+                                  value={value}
+                                  onChange={onChange}
+                                  autoFocus={autoFocus}
+                                  attachments={mentionableAttachments}
+                                  attachmentByTitle={mentionableAttachmentByTitle}
+                                  onOpenPhotoById={openPhotoById}
+                                  multiline={false}
+                                />
+                              )}
                             />
                           </div>
                         </div>
@@ -4999,14 +5052,27 @@ function App() {
                   <div className='space-y-3'>
                     <div className='space-y-1'>
                       <Label htmlFor='profile-medications'>Medications</Label>
-                      <PhotoMentionField
+                      <TapToEditField
                         ariaLabel='Medications'
-                        placeholder='Medications'
+                        emptyText='Tap to add medications'
                         value={profileForm.medications}
-                        onChange={(nextValue) => updateProfileField('medications', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
+                        onCommit={(nextValue) => updateProfileField('medications', nextValue)}
+                        renderView={(text) => (
+                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                        )}
+                        renderEditor={({ value, onChange, autoFocus }) => (
+                          <PhotoMentionField
+                            ariaLabel='Medications'
+                            placeholder='Medications'
+                            value={value}
+                            onChange={onChange}
+                            autoFocus={autoFocus}
+                            autoExpand
+                            attachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        )}
                       />
                     </div>
                     <Card className='border-0 bg-transparent shadow-none sm:bg-blush-sand sm:border-clay sm:shadow-md'>
@@ -5017,7 +5083,21 @@ function App() {
                         <div className='grid grid-cols-2 gap-2'>
                           <div className='space-y-1'>
                             <Label>Medication</Label>
-                            <Input aria-label='Medication name' placeholder='Medication' value={medicationForm.medication} onChange={(event) => setMedicationForm({ ...medicationForm, medication: event.target.value })} />
+                            <TapToEditField
+                              ariaLabel='Medication name'
+                              emptyText='Tap to add a medication'
+                              value={medicationForm.medication}
+                              onCommit={(nextValue) => setMedicationForm({ ...medicationForm, medication: nextValue })}
+                              renderEditor={({ value, onChange, autoFocus }) => (
+                                <Input
+                                  aria-label='Medication name'
+                                  placeholder='Medication'
+                                  value={value}
+                                  onChange={(event) => onChange(event.target.value)}
+                                  autoFocus={autoFocus}
+                                />
+                              )}
+                            />
                           </div>
                           <div className='space-y-1'>
                             <Label>Dose</Label>
@@ -5033,14 +5113,27 @@ function App() {
                           </div>
                           <div className='space-y-1 col-span-2'>
                             <Label>Note</Label>
-                            <PhotoMentionField
+                            <TapToEditField
                               ariaLabel='Medication note'
-                              placeholder='Note'
+                              emptyText='Tap to add a note'
                               value={medicationForm.note}
-                              onChange={(nextValue) => setMedicationForm({ ...medicationForm, note: nextValue })}
-                              attachments={mentionableAttachments}
-                              attachmentByTitle={mentionableAttachmentByTitle}
-                              onOpenPhotoById={openPhotoById}
+                              onCommit={(nextValue) => setMedicationForm({ ...medicationForm, note: nextValue })}
+                              renderView={(text) => (
+                                <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                              )}
+                              renderEditor={({ value, onChange, autoFocus }) => (
+                                <PhotoMentionField
+                                  ariaLabel='Medication note'
+                                  placeholder='Note'
+                                  value={value}
+                                  onChange={onChange}
+                                  autoFocus={autoFocus}
+                                  autoExpand
+                                  attachments={mentionableAttachments}
+                                  attachmentByTitle={mentionableAttachmentByTitle}
+                                  onOpenPhotoById={openPhotoById}
+                                />
+                              )}
                             />
                           </div>
                           <div className='space-y-1'>
@@ -5134,14 +5227,27 @@ function App() {
                   <div className='space-y-3'>
                     <div className='space-y-1'>
                       <Label htmlFor='profile-labs'>Labs</Label>
-                      <PhotoMentionField
+                      <TapToEditField
                         ariaLabel='Labs'
-                        placeholder='Labs'
+                        emptyText='Tap to add labs'
                         value={profileForm.labs}
-                        onChange={(nextValue) => updateProfileField('labs', nextValue)}
-                        attachments={mentionableAttachments}
-                        attachmentByTitle={mentionableAttachmentByTitle}
-                        onOpenPhotoById={openPhotoById}
+                        onCommit={(nextValue) => updateProfileField('labs', nextValue)}
+                        renderView={(text) => (
+                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                        )}
+                        renderEditor={({ value, onChange, autoFocus }) => (
+                          <PhotoMentionField
+                            ariaLabel='Labs'
+                            placeholder='Labs'
+                            value={value}
+                            onChange={onChange}
+                            autoFocus={autoFocus}
+                            autoExpand
+                            attachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        )}
                       />
                     </div>
                     <Card className='border-0 bg-transparent shadow-none sm:bg-blush-sand sm:border-clay sm:shadow-md'>
@@ -5201,14 +5307,27 @@ function App() {
                               </div>
                               <div className='space-y-1'>
                                 <Label>Lab Result</Label>
-                                <PhotoMentionField
+                                <TapToEditField
                                   ariaLabel='Other lab result'
-                                  placeholder='Enter full lab result as freeform text'
+                                  emptyText='Tap to enter the full lab result as freeform text'
                                   value={labTemplateValues[OTHERS_RESULT_KEY] ?? ''}
-                                  onChange={(nextValue) => updateLabTemplateValue(OTHERS_RESULT_KEY, nextValue)}
-                                  attachments={mentionableAttachments}
-                                  attachmentByTitle={mentionableAttachmentByTitle}
-                                  onOpenPhotoById={openPhotoById}
+                                  onCommit={(nextValue) => updateLabTemplateValue(OTHERS_RESULT_KEY, nextValue)}
+                                  renderView={(text) => (
+                                    <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                                  )}
+                                  renderEditor={({ value, onChange, autoFocus }) => (
+                                    <PhotoMentionField
+                                      ariaLabel='Other lab result'
+                                      placeholder='Enter full lab result as freeform text'
+                                      value={value}
+                                      onChange={onChange}
+                                      autoFocus={autoFocus}
+                                      autoExpand
+                                      attachments={mentionableAttachments}
+                                      attachmentByTitle={mentionableAttachmentByTitle}
+                                      onOpenPhotoById={openPhotoById}
+                                    />
+                                  )}
                                 />
                               </div>
                             </div>
@@ -5297,14 +5416,27 @@ function App() {
                         </div>
                         <div className='space-y-1'>
                           <Label>Note</Label>
-                          <PhotoMentionField
+                          <TapToEditField
                             ariaLabel='Lab note'
-                            placeholder='Optional note for this lab run'
+                            emptyText='Tap to add a note'
                             value={labTemplateNote}
-                            onChange={(nextValue) => setLabTemplateNote(nextValue)}
-                            attachments={mentionableAttachments}
-                            attachmentByTitle={mentionableAttachmentByTitle}
-                            onOpenPhotoById={openPhotoById}
+                            onCommit={(nextValue) => setLabTemplateNote(nextValue)}
+                            renderView={(text) => (
+                              <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                            )}
+                            renderEditor={({ value, onChange, autoFocus }) => (
+                              <PhotoMentionField
+                                ariaLabel='Lab note'
+                                placeholder='Optional note for this lab run'
+                                value={value}
+                                onChange={onChange}
+                                autoFocus={autoFocus}
+                                autoExpand
+                                attachments={mentionableAttachments}
+                                attachmentByTitle={mentionableAttachmentByTitle}
+                                onOpenPhotoById={openPhotoById}
+                              />
+                            )}
                           />
                         </div>
                         <div className='flex gap-2 flex-wrap'>
@@ -5377,27 +5509,52 @@ function App() {
                           </div>
                           <div className='space-y-1 col-span-2'>
                             <Label>Order</Label>
-                            <PhotoMentionField
+                            <TapToEditField
                               ariaLabel='Order text'
-                              placeholder='Order'
+                              emptyText='Tap to add the order'
                               value={orderForm.orderText}
-                              onChange={(nextValue) => updateOrderField('orderText', nextValue)}
-                              attachments={mentionableAttachments}
-                              attachmentByTitle={mentionableAttachmentByTitle}
-                              onOpenPhotoById={openPhotoById}
+                              onCommit={(nextValue) => updateOrderField('orderText', nextValue)}
+                              renderView={(text) => (
+                                <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                              )}
+                              renderEditor={({ value, onChange, autoFocus }) => (
+                                <PhotoMentionField
+                                  ariaLabel='Order text'
+                                  placeholder='Order'
+                                  value={value}
+                                  onChange={onChange}
+                                  autoFocus={autoFocus}
+                                  autoExpand
+                                  attachments={mentionableAttachments}
+                                  attachmentByTitle={mentionableAttachmentByTitle}
+                                  onOpenPhotoById={openPhotoById}
+                                />
+                              )}
                             />
                           </div>
                           <div className='space-y-1'>
                             <Label>Note</Label>
-                            <PhotoMentionField
+                            <TapToEditField
                               ariaLabel='Order note'
-                              placeholder='Note'
+                              emptyText='Tap to add a note'
                               value={orderForm.note}
-                              onChange={(nextValue) => updateOrderField('note', nextValue)}
-                              attachments={mentionableAttachments}
-                              attachmentByTitle={mentionableAttachmentByTitle}
-                              onOpenPhotoById={openPhotoById}
-                              multiline={false}
+                              onCommit={(nextValue) => updateOrderField('note', nextValue)}
+                              renderView={(text) => (
+                                <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                              )}
+                              renderEditor={({ value, onChange, autoFocus }) => (
+                                <PhotoMentionField
+                                  ariaLabel='Order note'
+                                  placeholder='Note'
+                                  value={value}
+                                  onChange={onChange}
+                                  autoFocus={autoFocus}
+                                  attachments={mentionableAttachments}
+                                  attachmentByTitle={mentionableAttachmentByTitle}
+                                  onOpenPhotoById={openPhotoById}
+                                  multiline={false}
+                                />
+                              )}
                             />
                           </div>
                           <div className='space-y-1'>

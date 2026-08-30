@@ -133,6 +133,8 @@ type PhotoMentionFieldProps = {
   onOpenPhotoById: (attachmentId: number) => void
   multiline?: boolean
   autoFocus?: boolean
+  /** Starts already sized to fit its content instead of collapsed to the default height — for contexts (like tap-to-edit) that already showed the full text before this field mounted. */
+  autoExpand?: boolean
 }
 
 export const PhotoMentionField = ({
@@ -146,11 +148,12 @@ export const PhotoMentionField = ({
   onOpenPhotoById,
   multiline = true,
   autoFocus,
+  autoExpand,
 }: PhotoMentionFieldProps) => {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [activeMention, setActiveMention] = useState<ActivePhotoMention | null>(null)
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(Boolean(autoExpand))
   const [showExpandToggle, setShowExpandToggle] = useState(false)
 
   const filteredSuggestions = useMemo(() => {

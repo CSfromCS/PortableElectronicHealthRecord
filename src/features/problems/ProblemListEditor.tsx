@@ -178,12 +178,24 @@ export function ProblemListEditor({
                       {problem.completed ? 'Resolved' : 'Mark resolved'}
                     </Button>
                   </div>
-                  <Input
-                    id={`problem-title-${problem.id}`}
+                  <TapToEditField
+                    ariaLabel={`Problem ${index + 1} title`}
+                    emptyText='Tap to name this problem'
                     value={problem.title}
-                    onChange={(event) => updateProblem(problem.id, 'title', event.target.value)}
-                    placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
-                    className={cn(problem.completed && 'line-through text-clay')}
+                    onCommit={(nextValue) => updateProblem(problem.id, 'title', nextValue)}
+                    renderView={(text) => (
+                      <span className={problem.completed ? 'line-through text-clay' : undefined}>{text}</span>
+                    )}
+                    renderEditor={({ value, onChange, autoFocus }) => (
+                      <Input
+                        id={`problem-title-${problem.id}`}
+                        value={value}
+                        onChange={(event) => onChange(event.target.value)}
+                        placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
+                        autoFocus={autoFocus}
+                        className={cn(problem.completed && 'line-through text-clay')}
+                      />
+                    )}
                   />
                 </div>
                 <div className='space-y-1'>
@@ -204,6 +216,7 @@ export function ProblemListEditor({
                         value={value}
                         onChange={onChange}
                         autoFocus={autoFocus}
+                        autoExpand
                         attachments={attachments}
                         attachmentByTitle={attachmentByTitle}
                         onOpenPhotoById={onOpenPhotoById}
