@@ -123,7 +123,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid } from 'lucide-react'
 import type { TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { TagPicker } from './features/tags/TagPicker'
@@ -552,7 +552,6 @@ function App() {
   const [deleteDailyConfirmOpen, setDeleteDailyConfirmOpen] = useState(false)
   const [pendingDeleteDailyUpdate, setPendingDeleteDailyUpdate] = useState<DailyUpdate | null>(null)
   const [selectedTab, setSelectedTab] = useState<PatientTabId>('profile')
-  const [isMobilePatientTabBarCollapsed, setIsMobilePatientTabBarCollapsed] = useState(false)
   const [patientTabSettings, setPatientTabSettings] = useState<PatientTabSetting[]>(() => loadPatientTabSettings())
   const updatePatientTabSettings = useCallback((next: PatientTabSetting[]) => {
     setPatientTabSettings(next)
@@ -1485,37 +1484,6 @@ function App() {
       window.removeEventListener('keydown', handleCarouselKeyDown)
     }
   }, [jumpToCarouselIndex, moveCarousel, selectedAttachmentCarousel, selectedAttachmentCarouselEntry])
-
-  useEffect(() => {
-    if (view !== 'patient' || !selectedPatient) {
-      setIsMobilePatientTabBarCollapsed(false)
-      return
-    }
-
-    let lastScrollY = window.scrollY
-    const HIDE_THRESHOLD_PX = 10
-
-    const handleScroll = () => {
-      const currentScrollY = window.scrollY
-      const delta = currentScrollY - lastScrollY
-
-      if (currentScrollY <= 4) {
-        setIsMobilePatientTabBarCollapsed(false)
-        lastScrollY = currentScrollY
-        return
-      }
-
-      if (Math.abs(delta) < HIDE_THRESHOLD_PX) return
-
-      setIsMobilePatientTabBarCollapsed(delta > 0)
-      lastScrollY = currentScrollY
-    }
-
-    window.addEventListener('scroll', handleScroll, { passive: true })
-    return () => {
-      window.removeEventListener('scroll', handleScroll)
-    }
-  }, [view, selectedPatient])
 
   useEffect(() => {
     if (!selectedAttachmentCarouselEntry) return
@@ -6346,49 +6314,33 @@ function App() {
         isStandaloneDisplayMode ? 'pb-[calc(0.375rem+env(safe-area-inset-bottom))]' : 'pb-1.5',
       )}>
         {view === 'patient' && selectedPatient ? (
-          /* Patient tab navigation — auto-hides on scroll-down and can be collapsed manually to reclaim vertical space */
-          <>
+          /* Patient tab navigation — horizontally scrollable so it works for any number of visible tabs */
+          <div className='flex items-stretch'>
             <button
-              type='button'
-              onClick={() => setIsMobilePatientTabBarCollapsed((previous) => !previous)}
-              aria-label={isMobilePatientTabBarCollapsed ? 'Show patient tabs' : 'Hide patient tabs'}
-              aria-expanded={!isMobilePatientTabBarCollapsed}
-              className='flex w-full items-center justify-center py-1 text-clay/50 hover:text-espresso active:text-espresso'
+              className='shrink-0 flex flex-col items-center justify-center gap-0.5 px-2.5 text-clay/70 hover:text-espresso hover:bg-clay/5 border-r border-clay/20 transition-colors'
+              onClick={() => setView('patients')}
+              aria-label='Back to patients list'
             >
-              {isMobilePatientTabBarCollapsed ? <ChevronUp className='h-3.5 w-3.5' /> : <ChevronDown className='h-3.5 w-3.5' />}
+              <ChevronLeft className='h-3.5 w-3.5' />
+              <span className='text-[9px] font-bold leading-none'>Back</span>
             </button>
-            <div
-              className={cn(
-                'flex items-stretch overflow-hidden transition-[max-height,opacity] duration-200 ease-out',
-                isMobilePatientTabBarCollapsed ? 'max-h-0 opacity-0 pointer-events-none' : 'max-h-16 opacity-100',
-              )}
-            >
-              <button
-                className='shrink-0 flex flex-col items-center justify-center gap-0.5 px-2.5 text-clay/70 hover:text-espresso hover:bg-clay/5 border-r border-clay/20 transition-colors'
-                onClick={() => setView('patients')}
-                aria-label='Back to patients list'
-              >
-                <ChevronLeft className='h-3.5 w-3.5' />
-                <span className='text-[9px] font-bold leading-none'>Back</span>
-              </button>
-              <div className='flex-1 flex items-stretch gap-0.5 overflow-x-auto p-1'>
-                {visiblePatientTabs.map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setSelectedTab(tab)}
-                    className={cn(
-                      'shrink-0 flex items-center justify-center px-3 py-1.5 text-[11px] font-semibold rounded-md transition-all duration-150',
-                      selectedTab === tab
-                        ? 'text-action-primary bg-action-primary/10'
-                        : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
-                    )}
-                  >
-                    {PATIENT_TAB_LABELS[tab]}
-                  </button>
-                ))}
-              </div>
+            <div className='flex-1 flex items-stretch gap-0.5 overflow-x-auto p-1'>
+              {visiblePatientTabs.map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setSelectedTab(tab)}
+                  className={cn(
+                    'shrink-0 flex items-center justify-center px-3 py-1.5 text-[11px] font-semibold rounded-md transition-all duration-150',
+                    selectedTab === tab
+                      ? 'text-action-primary bg-action-primary/10'
+                      : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
+                  )}
+                >
+                  {PATIENT_TAB_LABELS[tab]}
+                </button>
+              ))}
             </div>
-          </>
+          </div>
         ) : (
           /* Main navigation — Patients / [Patient] / Settings */
           <div className='mx-auto flex w-full max-w-xl justify-around gap-1 px-3 pt-1.5 pb-1'>
