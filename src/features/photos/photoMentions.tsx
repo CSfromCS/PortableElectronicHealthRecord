@@ -132,6 +132,9 @@ type PhotoMentionFieldProps = {
   attachmentByTitle: Map<string, MentionablePhoto>
   onOpenPhotoById: (attachmentId: number) => void
   multiline?: boolean
+  autoFocus?: boolean
+  /** Starts already sized to fit its content instead of collapsed to the default height — for contexts (like tap-to-edit) that already showed the full text before this field mounted. */
+  autoExpand?: boolean
 }
 
 export const PhotoMentionField = ({
@@ -144,11 +147,13 @@ export const PhotoMentionField = ({
   attachmentByTitle,
   onOpenPhotoById,
   multiline = true,
+  autoFocus,
+  autoExpand,
 }: PhotoMentionFieldProps) => {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [activeMention, setActiveMention] = useState<ActivePhotoMention | null>(null)
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(Boolean(autoExpand))
   const [showExpandToggle, setShowExpandToggle] = useState(false)
 
   const filteredSuggestions = useMemo(() => {
@@ -280,6 +285,7 @@ export const PhotoMentionField = ({
               ref={textareaRef}
               aria-label={ariaLabel}
               placeholder={placeholder}
+              autoFocus={autoFocus}
               className={cn(
                 className,
                 'h-25 min-h-25 overflow-auto resize-none transition-[height] duration-200 ease-in-out',
@@ -297,6 +303,7 @@ export const PhotoMentionField = ({
             ref={inputRef}
             aria-label={ariaLabel}
             placeholder={placeholder}
+            autoFocus={autoFocus}
             className={className}
             value={value}
             onChange={(event) => applyValueChange(event.target.value, event.target)}

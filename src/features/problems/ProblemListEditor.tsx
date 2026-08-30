@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { PhotoMentionField, type MentionablePhoto } from '@/features/photos/photoMentions'
+import { MentionText, PhotoMentionField, type MentionablePhoto } from '@/features/photos/photoMentions'
+import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { cn } from '@/lib/utils'
 import type { ProblemBlock } from '@/types'
 import { createProblemBlockId } from './problemUtils'
@@ -177,25 +178,48 @@ export function ProblemListEditor({
                       {problem.completed ? 'Resolved' : 'Mark resolved'}
                     </Button>
                   </div>
-                  <Input
-                    id={`problem-title-${problem.id}`}
+                  <TapToEditField
+                    ariaLabel={`Problem ${index + 1} title`}
+                    emptyText='Tap to name this problem'
                     value={problem.title}
-                    onChange={(event) => updateProblem(problem.id, 'title', event.target.value)}
-                    placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
-                    className={cn(problem.completed && 'line-through text-clay')}
+                    onCommit={(nextValue) => updateProblem(problem.id, 'title', nextValue)}
+                    renderView={(text) => (
+                      <span className={problem.completed ? 'line-through text-clay' : undefined}>{text}</span>
+                    )}
+                    renderEditor={({ value, onChange }) => (
+                      <Input
+                        id={`problem-title-${problem.id}`}
+                        value={value}
+                        onChange={(event) => onChange(event.target.value)}
+                        placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
+                        className={cn(problem.completed && 'line-through text-clay')}
+                      />
+                    )}
                   />
                 </div>
                 <div className='space-y-1'>
                   <Label>Notes</Label>
-                  <PhotoMentionField
+                  <TapToEditField
                     ariaLabel={`Notes for problem ${index + 1}`}
-                    placeholder='Plan, trend, pending workup, or other notes'
-                    className='min-h-28'
+                    emptyText='Tap to add notes'
                     value={problem.notes}
-                    onChange={(value) => updateProblem(problem.id, 'notes', value)}
-                    attachments={attachments}
-                    attachmentByTitle={attachmentByTitle}
-                    onOpenPhotoById={onOpenPhotoById}
+                    onCommit={(value) => updateProblem(problem.id, 'notes', value)}
+                    renderView={(text) => (
+                      <MentionText text={text} attachmentByTitle={attachmentByTitle} onOpenPhotoById={onOpenPhotoById} />
+                    )}
+                    renderEditor={({ value, onChange }) => (
+                      <PhotoMentionField
+                        ariaLabel={`Notes for problem ${index + 1}`}
+                        placeholder='Plan, trend, pending workup, or other notes'
+                        className='min-h-28'
+                        value={value}
+                        onChange={onChange}
+                        autoExpand
+                        attachments={attachments}
+                        attachmentByTitle={attachmentByTitle}
+                        onOpenPhotoById={onOpenPhotoById}
+                      />
+                    )}
                   />
                 </div>
               </div>
