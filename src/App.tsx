@@ -127,16 +127,19 @@ import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardLi
 import type { TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { TagPicker } from './features/tags/TagPicker'
+import { BulkTagPicker } from './features/tags/BulkTagPicker'
 import { TagChip, TagChipRow } from './features/tags/TagChip'
 import { AmbiguityBadge } from './features/tags/AmbiguityBadge'
 import {
   applyTagToPatient,
+  applyTagsToPatients,
   clearTerminalTagsFromPatient,
   findTagAmbiguities,
   getAppliedPatientTags,
   getVisiblePatientTags,
   isPatientActive,
   orderTagsCanonically,
+  removeTagsFromPatients,
   renderTagDisplayText,
   toggleTagOnPatient,
 } from './features/tags/tagUtils'
@@ -504,6 +507,8 @@ function App() {
   const galleryPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const outputPreviewTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const carouselThumbnailButtonRefs = useRef<Record<number, HTMLButtonElement>>({})
+  const patientLongPressTimerRef = useRef<number | null>(null)
+  const patientLongPressFiredRef = useRef(false)
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [pendingMainServiceTagIds, setPendingMainServiceTagIds] = useState<number[]>([])
   const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags' | 'tabSettings'>('patients')
@@ -577,6 +582,12 @@ function App() {
       setSelectedTab(visiblePatientTabs[0])
     }
   }, [selectedTab, visiblePatientTabs])
+  useEffect(() => {
+    if (view !== 'patients') {
+      setPatientTagSelectionMode(false)
+      setSelectedPatientIdsForTagging(new Set())
+    }
+  }, [view])
   const [notice, setNotice] = useState('')
   const [noticeIsDecaying, setNoticeIsDecaying] = useState(false)
   const [clipboardCopied, setClipboardCopied] = useState(false)
@@ -594,6 +605,14 @@ function App() {
   const [showPhotoReviewDialog, setShowPhotoReviewDialog] = useState(false)
   const [reassignTargetsByAttachmentId, setReassignTargetsByAttachmentId] = useState<Record<number, string>>({})
   const [selectedCensusPatientIds, setSelectedCensusPatientIds] = useState<number[]>([])
+  // Bulk tag management on the Patients list — entered via long-press (mobile) or the Select
+  // button (desktop); selection clears whenever the user navigates away from the Patients list.
+  const [patientTagSelectionMode, setPatientTagSelectionMode] = useState(false)
+  const [selectedPatientIdsForTagging, setSelectedPatientIdsForTagging] = useState<Set<number>>(new Set())
+  const [bulkTagDialogMode, setBulkTagDialogMode] = useState<'add' | 'remove' | null>(null)
+  const [bulkTagPickerSelectedIds, setBulkTagPickerSelectedIds] = useState<Set<number>>(new Set())
+  const [bulkTagConfirmOpen, setBulkTagConfirmOpen] = useState(false)
+  const [isBulkTagApplying, setIsBulkTagApplying] = useState(false)
   const [reportVitalsDateFrom, setReportVitalsDateFrom] = useState(() => toLocalISODate())
   const [reportVitalsDateTo, setReportVitalsDateTo] = useState(() => toLocalISODate())
   const [reportVitalsTimeFrom, setReportVitalsTimeFrom] = useState('00:00')
@@ -708,6 +727,83 @@ function App() {
       })()
     },
   })
+
+  const togglePatientTaggingSelection = (patientId: number | undefined) => {
+    if (patientId === undefined) return
+    setSelectedPatientIdsForTagging((previous) => {
+      const next = new Set(previous)
+      if (next.has(patientId)) next.delete(patientId)
+      else next.add(patientId)
+      return next
+    })
+  }
+  const exitPatientTaggingSelectionMode = () => {
+    setPatientTagSelectionMode(false)
+    setSelectedPatientIdsForTagging(new Set())
+  }
+  const cancelPatientCardLongPress = () => {
+    if (patientLongPressTimerRef.current !== null) {
+      window.clearTimeout(patientLongPressTimerRef.current)
+      patientLongPressTimerRef.current = null
+    }
+  }
+  const handlePatientCardTouchStart = (patientId: number | undefined) => {
+    if (patientId === undefined) return
+    patientLongPressFiredRef.current = false
+    patientLongPressTimerRef.current = window.setTimeout(() => {
+      patientLongPressFiredRef.current = true
+      setPatientTagSelectionMode(true)
+      togglePatientTaggingSelection(patientId)
+    }, 500)
+  }
+  const handlePatientCardTouchEnd = (event: TouchEvent<HTMLElement>) => {
+    cancelPatientCardLongPress()
+    if (patientLongPressFiredRef.current) {
+      event.preventDefault()
+    }
+    patientLongPressFiredRef.current = false
+  }
+  const openBulkTagDialog = (mode: 'add' | 'remove') => {
+    setBulkTagDialogMode(mode)
+    setBulkTagPickerSelectedIds(new Set())
+  }
+  const toggleBulkTagPickerTag = (tag: TagDefinition) => {
+    if (tag.id === undefined) return
+    const tagId = tag.id
+    setBulkTagPickerSelectedIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(tagId)) next.delete(tagId)
+      else next.add(tagId)
+      return next
+    })
+  }
+  const bulkTagPickerSelectedTags = useMemo(
+    () => nonServiceTagDefinitions.filter((tag) => tag.id !== undefined && bulkTagPickerSelectedIds.has(tag.id)),
+    [nonServiceTagDefinitions, bulkTagPickerSelectedIds],
+  )
+  const confirmBulkTagAction = async () => {
+    if (!bulkTagDialogMode) return
+    const targetPatients = (patients ?? []).filter(
+      (patient) => patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id),
+    )
+    if (bulkTagPickerSelectedTags.length === 0 || targetPatients.length === 0) return
+
+    setIsBulkTagApplying(true)
+    try {
+      if (bulkTagDialogMode === 'add') {
+        await applyTagsToPatients(targetPatients, bulkTagPickerSelectedTags)
+      } else {
+        await removeTagsFromPatients(targetPatients, bulkTagPickerSelectedTags)
+      }
+    } finally {
+      setIsBulkTagApplying(false)
+      setBulkTagConfirmOpen(false)
+      setBulkTagDialogMode(null)
+      setBulkTagPickerSelectedIds(new Set())
+      exitPatientTaggingSelectionMode()
+    }
+  }
+
   const refreshSyncInsight = useCallback(async (config: SyncConfig | null) => {
     if (!config) {
       setSyncInsight(null)
@@ -4156,9 +4252,52 @@ function App() {
               </CardContent>
             </Card>
 
-            <p className='px-1 mb-2 text-xs font-medium text-clay'>
-              {visiblePatients.length} patient{visiblePatients.length === 1 ? '' : 's'}
-            </p>
+            <div className='flex items-center justify-between px-1 mb-2 gap-2'>
+              <p className='text-xs font-medium text-clay'>
+                {visiblePatients.length} patient{visiblePatients.length === 1 ? '' : 's'}
+              </p>
+              {!patientTagSelectionMode ? (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  className='hidden sm:inline-flex h-7 text-xs'
+                  onClick={() => setPatientTagSelectionMode(true)}
+                >
+                  Select
+                </Button>
+              ) : null}
+            </div>
+
+            {patientTagSelectionMode ? (
+              <div className='mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
+                <p className='text-xs font-semibold text-espresso'>
+                  {selectedPatientIdsForTagging.size} patient{selectedPatientIdsForTagging.size === 1 ? '' : 's'} selected
+                </p>
+                <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 text-xs'
+                    disabled={selectedPatientIdsForTagging.size === 0}
+                    onClick={() => openBulkTagDialog('add')}
+                  >
+                    Add Tag
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 text-xs'
+                    disabled={selectedPatientIdsForTagging.size === 0}
+                    onClick={() => openBulkTagDialog('remove')}
+                  >
+                    Remove Tag
+                  </Button>
+                  <Button size='sm' variant='ghost' className='h-7 text-xs' onClick={exitPatientTaggingSelectionMode}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : null}
 
             <div className='flex flex-col gap-2'>
               {visiblePatients.map((patient) => {
@@ -4171,14 +4310,35 @@ function App() {
                 const visibleReferralServiceTags = cardReferralServiceTags.filter((tag) => tag.visibleOnPatientCard)
                 const hasAnyServiceTags = cardMainServiceTags.length > 0 || cardReferralServiceTags.length > 0
                 const hasVisibleServiceTags = visibleMainServiceTags.length > 0 || visibleReferralServiceTags.length > 0
+                const isPatientSelectedForTagging = patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id)
                 return (
                 <Card key={patient.id} className={cn(
                   'border-clay/20 hover:shadow-md hover:border-clay/35 transition-all duration-200 overflow-hidden bg-white/75',
                   patientActive
                     ? 'border-l-[3px] border-l-action-primary shadow-sm'
-                    : 'border-l-[3px] border-l-clay/25 opacity-70'
+                    : 'border-l-[3px] border-l-clay/25 opacity-70',
+                  isPatientSelectedForTagging && 'ring-2 ring-action-primary/50',
                 )}>
-                  <CardContent className='flex items-center gap-3 py-3 px-4'>
+                  <CardContent
+                    className='flex items-center gap-3 py-3 px-4'
+                    onTouchStart={() => handlePatientCardTouchStart(patient.id)}
+                    onTouchEnd={handlePatientCardTouchEnd}
+                    onTouchMove={cancelPatientCardLongPress}
+                    onTouchCancel={cancelPatientCardLongPress}
+                    onClick={() => {
+                      if (patientTagSelectionMode) togglePatientTaggingSelection(patient.id)
+                    }}
+                  >
+                    {patientTagSelectionMode ? (
+                      <input
+                        type='checkbox'
+                        className='h-4 w-4 shrink-0 accent-action-primary'
+                        checked={isPatientSelectedForTagging}
+                        onChange={() => togglePatientTaggingSelection(patient.id)}
+                        onClick={(event) => event.stopPropagation()}
+                        aria-label={`Select ${patient.lastName}, ${patient.firstName}`}
+                      />
+                    ) : null}
                     <div className='flex-1 min-w-0'>
                       <p className='flex items-baseline gap-1.5 text-sm leading-snug'>
                         <span className={cn(
@@ -4224,19 +4384,69 @@ function App() {
                         <AmbiguityBadge ambiguity={ambiguity} />
                         <TagChipRow tags={visibleTags} />
                       </div>
-                      <Button
-                        size='sm'
-                        variant={patientActive ? 'default' : 'secondary'}
-                        onClick={() => selectPatient(patient)}
-                      >
-                        Open
-                      </Button>
+                      {!patientTagSelectionMode ? (
+                        <Button
+                          size='sm'
+                          variant={patientActive ? 'default' : 'secondary'}
+                          onClick={() => selectPatient(patient)}
+                        >
+                          Open
+                        </Button>
+                      ) : null}
                     </div>
                   </CardContent>
                 </Card>
                 )
               })}
             </div>
+
+            <Dialog
+              open={bulkTagDialogMode !== null && !bulkTagConfirmOpen}
+              onOpenChange={(open) => { if (!open) setBulkTagDialogMode(null) }}
+            >
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    {bulkTagDialogMode === 'add' ? 'Add tags to' : 'Remove tags from'}{' '}
+                    {selectedPatientIdsForTagging.size} patient{selectedPatientIdsForTagging.size === 1 ? '' : 's'}
+                  </DialogTitle>
+                </DialogHeader>
+                <ScrollArea className='max-h-[60vh] pr-3'>
+                  <BulkTagPicker
+                    tags={nonServiceTagDefinitions}
+                    groups={tagGroups ?? []}
+                    selectedTagIds={bulkTagPickerSelectedIds}
+                    onToggle={toggleBulkTagPickerTag}
+                  />
+                </ScrollArea>
+                <div className='flex justify-end gap-2 pt-2'>
+                  <Button variant='ghost' onClick={() => setBulkTagDialogMode(null)}>Cancel</Button>
+                  <Button disabled={bulkTagPickerSelectedIds.size === 0} onClick={() => setBulkTagConfirmOpen(true)}>Next</Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={bulkTagConfirmOpen} onOpenChange={setBulkTagConfirmOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Confirm bulk {bulkTagDialogMode === 'add' ? 'tag addition' : 'tag removal'}</DialogTitle>
+                </DialogHeader>
+                <p className='text-sm text-espresso'>
+                  {bulkTagDialogMode === 'add' ? 'Add' : 'Remove'} the following tag
+                  {bulkTagPickerSelectedTags.length === 1 ? '' : 's'} {bulkTagDialogMode === 'add' ? 'to' : 'from'}{' '}
+                  {selectedPatientIdsForTagging.size} patient{selectedPatientIdsForTagging.size === 1 ? '' : 's'}:
+                </p>
+                <p className='text-sm font-semibold text-espresso'>
+                  {bulkTagPickerSelectedTags.map((tag) => tag.name).join(', ')}
+                </p>
+                <div className='flex justify-end gap-2 pt-2'>
+                  <Button variant='ghost' onClick={() => setBulkTagConfirmOpen(false)} disabled={isBulkTagApplying}>Back</Button>
+                  <Button onClick={() => void confirmBulkTagAction()} disabled={isBulkTagApplying}>
+                    {isBulkTagApplying ? 'Applying…' : 'Confirm'}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
               </>
             ) : null}
 
