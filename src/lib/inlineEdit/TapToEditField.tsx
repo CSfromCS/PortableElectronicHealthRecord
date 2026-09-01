@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FocusEvent, type MouseEvent, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
-const DEBOUNCE_MS = 1200
+const DEBOUNCE_MS = 400
 
 // Padding/font-size shared by the view text and the editor, so entering edit mode can't
 // shift the text's position or size — only the view side needs the rest (border/hover/etc).
