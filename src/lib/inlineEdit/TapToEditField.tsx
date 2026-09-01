@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FocusEvent, type MouseEvent, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
-const DEBOUNCE_MS = 1200
-const BLUR_CHECK_DELAY_MS = 120
+const DEBOUNCE_MS = 400
 
 // Padding/font-size shared by the view text and the editor, so entering edit mode can't
 // shift the text's position or size — only the view side needs the rest (border/hover/etc).
@@ -129,12 +128,15 @@ export const TapToEditField = ({
     setIsEditing(false)
   }
 
+  // Checked synchronously off event.relatedTarget (the element about to receive focus)
+  // rather than deferred via setTimeout: a deferred check runs after the discrete click
+  // handler of whatever the user clicked next (e.g. a "Save"/"Add" button), so that
+  // handler would read stale parent state from before this field's pending edit committed.
   const handleContainerBlur = (event: FocusEvent<HTMLDivElement>) => {
     const container = event.currentTarget
-    window.setTimeout(() => {
-      if (container.contains(document.activeElement)) return
-      exitEditMode()
-    }, BLUR_CHECK_DELAY_MS)
+    const nextFocusTarget = event.relatedTarget
+    if (nextFocusTarget instanceof Node && container.contains(nextFocusTarget)) return
+    exitEditMode()
   }
 
   // Stable across re-renders (typing triggers a re-render via setDraft) so React attaches

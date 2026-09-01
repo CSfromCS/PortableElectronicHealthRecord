@@ -487,6 +487,11 @@ const comparePhotoGroupsByNewest = (a: PhotoAttachmentGroup, b: PhotoAttachmentG
   return b.groupId.localeCompare(a.groupId)
 }
 
+// Fields feeding the dirty flags below already debounce their own typing pause
+// (TapToEditField); this just coalesces same-tick multi-field commits before the
+// IndexedDB write, so it stays short rather than adding a second perceptible delay.
+const AUTOSAVE_FLUSH_MS = 150
+
 // Device-local UI preference (not clinical data), same rationale as patientTabSettings.
 const ADD_PATIENT_COLLAPSED_STORAGE_KEY = 'puhrr.addPatientCollapsed'
 
@@ -1924,9 +1929,11 @@ function App() {
   useEffect(() => {
     if (selectedPatientId === null || !profileDirty || isSaving) return
 
+    // Fields feeding this flag already debounce their own typing pause (TapToEditField);
+    // this just coalesces same-tick multi-field commits before writing to IndexedDB.
     const timeoutId = window.setTimeout(() => {
       void saveProfile()
-    }, 800)
+    }, AUTOSAVE_FLUSH_MS)
 
     return () => window.clearTimeout(timeoutId)
   }, [isSaving, profileDirty, saveProfile, selectedPatientId])
@@ -2622,7 +2629,7 @@ function App() {
 
     const timeoutId = window.setTimeout(() => {
       void saveDailyUpdate()
-    }, 800)
+    }, AUTOSAVE_FLUSH_MS)
 
     return () => window.clearTimeout(timeoutId)
   }, [dailyDirty, saveDailyUpdate, selectedPatientId])
@@ -3063,7 +3070,7 @@ function App() {
 
     const timeoutId = window.setTimeout(() => {
       void saveVitalDraft()
-    }, 800)
+    }, AUTOSAVE_FLUSH_MS)
 
     return () => window.clearTimeout(timeoutId)
   }, [isSaving, saveVitalDraft, selectedPatientId, vitalDirty])
@@ -3073,7 +3080,7 @@ function App() {
 
     const timeoutId = window.setTimeout(() => {
       void saveOrderDraft()
-    }, 800)
+    }, AUTOSAVE_FLUSH_MS)
 
     return () => window.clearTimeout(timeoutId)
   }, [isSaving, orderDirty, orderForm.orderText, saveOrderDraft, selectedPatientId])
