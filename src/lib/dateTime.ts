@@ -9,6 +9,12 @@ export const toLocalTime = (date = new Date()) => {
   return `${hours}:${minutes}`
 }
 
+/** Admission Date is blank until the user overrides it, defaulting (display-only) to the profile's
+ * creation date — this resolves that same default for anything that needs an actual value to
+ * sort/report by, not just display. */
+export const getEffectiveAdmitDate = (admitDate: string, createdAt: string): string =>
+  admitDate || toLocalISODate(new Date(createdAt))
+
 export const parseNumericInput = (value: string | undefined): number | null => {
   const sanitized = (value ?? '').trim().replaceAll(',', '').replaceAll('%', '')
   if (!sanitized) return null

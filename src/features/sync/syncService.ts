@@ -283,6 +283,7 @@ const sanitizeImportedPatient = (patient: Patient): Patient => {
   return {
     ...patient,
     lastModified: patient.lastModified ?? patient.admitDate ?? toIsoNow(),
+    createdAt: patient.createdAt ?? patient.admitDate ?? patient.lastModified ?? toIsoNow(),
     tagIds: patient.tagIds ?? [],
   }
 }

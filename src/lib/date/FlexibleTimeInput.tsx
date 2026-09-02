@@ -18,6 +18,7 @@ export function FlexibleTimeInput({
   ariaLabel,
   placeholder = 'e.g. 3:30 pm',
   className,
+  defaultHhmm = null,
   emitEmptyOnClear = false,
 }: {
   id?: string
@@ -26,7 +27,9 @@ export function FlexibleTimeInput({
   ariaLabel: string
   placeholder?: string
   className?: string
-  /** When true, clearing the field calls onChange('') so the parent's stored value actually reverts to empty instead of silently keeping the last committed value. Off by default so required time fields can't be blanked by a stray clear. */
+  /** When `value` is empty, shows this time below the field labeled "(Default)" instead of showing nothing — for fields that fall back to a computed value (usually the current time) until the user explicitly types an override. */
+  defaultHhmm?: string | null
+  /** When true, clearing the field calls onChange('') so the parent's stored value actually reverts to empty (and therefore back to `defaultHhmm`) instead of silently keeping the last committed value. Off by default so required time fields can't be blanked by a stray clear. */
   emitEmptyOnClear?: boolean
 }) {
   const [draft, setDraft] = useState(() => (value ? formatClock(value) : ''))
@@ -117,6 +120,8 @@ export function FlexibleTimeInput({
         <p className='text-xs text-action-danger'>{error}</p>
       ) : resolvedHhmm ? (
         <p className='text-xs text-clay'>{formatClock(resolvedHhmm)}</p>
+      ) : defaultHhmm ? (
+        <p className='text-xs text-clay'>{formatClock(defaultHhmm)} (Default)</p>
       ) : null}
     </div>
   )

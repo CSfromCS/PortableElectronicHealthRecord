@@ -377,4 +377,30 @@ db.version(8).stores({
   }))
 })
 
+db.version(9).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+}).upgrade(async (tx) => {
+  // Patients now carry a `createdAt` timestamp, used as the computed default for Admission Date
+  // and Referral Date (mirroring Discharge Date's existing computed-default pattern). Existing
+  // records never captured a true creation time, so backfill with the best available proxy.
+  const patientTable = tx.table<Patient, number>('patients')
+  const patients = await patientTable.toArray()
+  await Promise.all(patients.map((patient) => {
+    if (patient.id === undefined) return Promise.resolve()
+    const createdAt = patient.admitDate ? new Date(patient.admitDate).toISOString() : (patient.lastModified ?? new Date().toISOString())
+    return patientTable.update(patient.id, { createdAt })
+  }))
+})
+
 export { db }

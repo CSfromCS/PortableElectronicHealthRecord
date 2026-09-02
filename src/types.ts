@@ -1,6 +1,8 @@
 export interface Patient {
   id?: number
   lastModified: string
+  /** Set once at creation; used as the computed default for Admission Date and Referral Date until the user types an override. */
+  createdAt: string
   roomNumber: string
   ward: string
   /** Set only when the legacy combined Room value couldn't be auto-split into Room Number + Ward; shown as a fallback until manually resolved. */
@@ -10,8 +12,9 @@ export interface Patient {
   middleName?: string
   age: number
   sex: 'M' | 'F' | 'O'
+  /** User-typed override only — unset (blank) by default. While unset, the UI displays (but does not persist) `createdAt`'s date. */
   admitDate: string
-  /** One-time copy of admitDate at creation; independently editable afterward. */
+  /** User-typed override only — unset (blank) by default. While unset, the UI displays (but does not persist) `createdAt`'s date. Only shown in the UI once a "Referral" tag is applied to the patient. */
   referralDate: string
   /** User-typed override only — unset by default. While unset, the UI displays (but does not persist) the date the patient's current Terminal-flagged tag was applied, computed from Tag Event history. Only shown in the UI while a terminal tag is currently attached. */
   dischargeDate?: string

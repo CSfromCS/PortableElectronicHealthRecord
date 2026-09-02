@@ -184,7 +184,7 @@ export const TapToEditField = ({
       {isEmpty ? (
         <span className='text-muted-foreground/60'>{emptyText}</span>
       ) : (
-        <div className='whitespace-pre-wrap'>{renderView ? renderView(value) : value}</div>
+        <div className='whitespace-pre-wrap break-words'>{renderView ? renderView(value) : value}</div>
       )}
     </div>
   )
