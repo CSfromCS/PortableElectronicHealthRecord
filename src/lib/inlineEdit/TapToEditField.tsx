@@ -5,7 +5,11 @@ const DEBOUNCE_MS = 400
 
 // Padding/font-size shared by the view text and the editor, so entering edit mode can't
 // shift the text's position or size — only the view side needs the rest (border/hover/etc).
-const BASE_FIELD_CLASSES = 'px-3 py-2 text-[15px]'
+// min-w-0 so a flex/grid-item ancestor can actually shrink this below its unbroken text's
+// natural width — otherwise a long unspaced string (which does wrap fine while editing, since
+// the autogrow textarea sets its own min-width: 0) reasserts its overflow the moment you exit
+// edit mode, because the view-mode box never got the same allowance.
+const BASE_FIELD_CLASSES = 'min-w-0 px-3 py-2 text-[15px]'
 
 // Strips the editor's own box chrome AND its own padding/height/font-size so it's the
 // wrapping div's (shared) BASE_FIELD_CLASSES that determines the visible box in both
@@ -184,7 +188,7 @@ export const TapToEditField = ({
       {isEmpty ? (
         <span className='text-muted-foreground/60'>{emptyText}</span>
       ) : (
-        <div className='whitespace-pre-wrap'>{renderView ? renderView(value) : value}</div>
+        <div className='whitespace-pre-wrap break-words'>{renderView ? renderView(value) : value}</div>
       )}
     </div>
   )

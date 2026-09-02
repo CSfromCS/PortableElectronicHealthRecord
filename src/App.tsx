@@ -47,6 +47,7 @@ import {
   formatDateMMDD,
   formatDateShortMonthDay,
   formatCalculatedNumber,
+  getEffectiveAdmitDate,
   parseNumericInput,
   toLocalISODate,
   toLocalTime,
@@ -384,8 +385,8 @@ const getNormalPfRatio = (age: number): number => {
 }
 
 const initialVitalForm = (): VitalFormState => ({
-  date: toLocalISODate(),
-  time: toLocalTime(),
+  date: '',
+  time: '',
   bp: '',
   hr: '',
   rr: '',
@@ -404,8 +405,8 @@ const initialMedicationForm = (): MedicationFormState => ({
 })
 
 const initialOrderForm = (): OrderFormState => ({
-  orderDate: toLocalISODate(),
-  orderTime: toLocalTime(),
+  orderDate: '',
+  orderTime: '',
   service: '',
   orderText: '',
   note: '',
@@ -497,9 +498,10 @@ const ADD_PATIENT_COLLAPSED_STORAGE_KEY = 'puhrr.addPatientCollapsed'
 
 const loadAddPatientCollapsed = (): boolean => {
   try {
-    return window.localStorage.getItem(ADD_PATIENT_COLLAPSED_STORAGE_KEY) === 'true'
+    const stored = window.localStorage.getItem(ADD_PATIENT_COLLAPSED_STORAGE_KEY)
+    return stored === null ? true : stored === 'true'
   } catch {
-    return false
+    return true
   }
 }
 
@@ -507,9 +509,10 @@ const ensurePatientLastModified = (patient: Patient): Patient => {
   return {
     ...patient,
     lastModified: patient.lastModified ?? patient.admitDate ?? new Date().toISOString(),
+    createdAt: patient.createdAt ?? patient.admitDate ?? patient.lastModified ?? new Date().toISOString(),
     tagIds: patient.tagIds ?? [],
     ward: patient.ward ?? '',
-    referralDate: patient.referralDate ?? patient.admitDate ?? toLocalISODate(),
+    referralDate: patient.referralDate ?? '',
     mainServiceTagIds: patient.mainServiceTagIds ?? [],
     referralServiceTagIds: patient.referralServiceTagIds ?? [],
   }
@@ -528,6 +531,11 @@ function App() {
   const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags' | 'tabSettings'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
+  // Snapshot, per patient, of whether tags were already applied the first time this patient's
+  // tags were viewed this session — seeded once and never revisited, so later tag adds/removes
+  // can't retroactively change the collapse default for a segment the user is already looking
+  // at. Resets naturally on a fresh app open (new component instance).
+  const tagsCollapseDefaultSeedRef = useRef<Map<number, boolean>>(new Map())
   const [searchQuery, setSearchQuery] = useState('')
   const [isAddPatientCollapsed, setIsAddPatientCollapsed] = useState(() => loadAddPatientCollapsed())
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
@@ -555,8 +563,8 @@ function App() {
   const [orderDraftId, setOrderDraftId] = useState<number | null>(null)
   const [orderDirty, setOrderDirty] = useState(false)
   const [selectedLabTemplateId, setSelectedLabTemplateId] = useState(DEFAULT_LAB_TEMPLATE_ID)
-  const [labTemplateDate, setLabTemplateDate] = useState(() => toLocalISODate())
-  const [labTemplateTime, setLabTemplateTime] = useState(() => toLocalTime())
+  const [labTemplateDate, setLabTemplateDate] = useState('')
+  const [labTemplateTime, setLabTemplateTime] = useState('')
   const [labTemplateValues, setLabTemplateValues] = useState<Record<string, string>>({})
   const [labTemplateNote, setLabTemplateNote] = useState('')
   const [editingLabId, setEditingLabId] = useState<number | null>(null)
@@ -568,6 +576,18 @@ function App() {
   const [pendingLatestDailyUpdate, setPendingLatestDailyUpdate] = useState<DailyUpdate | null>(null)
   const [deleteDailyConfirmOpen, setDeleteDailyConfirmOpen] = useState(false)
   const [pendingDeleteDailyUpdate, setPendingDeleteDailyUpdate] = useState<DailyUpdate | null>(null)
+  // Generic confirm-before-delete gate: any destructive action routes through this instead of
+  // firing immediately, so a single Dialog (rendered once, see below) covers every delete button.
+  const [pendingDeleteAction, setPendingDeleteAction] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void | Promise<void> } | null>(null)
+  const requestDeleteConfirmation = useCallback((action: { title: string; message: string; confirmLabel?: string; onConfirm: () => void | Promise<void> }) => {
+    setPendingDeleteAction({ confirmLabel: 'Delete', ...action })
+  }, [])
+  const closeDeleteConfirmation = useCallback(() => setPendingDeleteAction(null), [])
+  const confirmPendingDelete = useCallback(async () => {
+    if (!pendingDeleteAction) return
+    await pendingDeleteAction.onConfirm()
+    setPendingDeleteAction(null)
+  }, [pendingDeleteAction])
   const [selectedTab, setSelectedTab] = useState<PatientTabId>('profile')
   const [patientTabSettings, setPatientTabSettings] = useState<PatientTabSetting[]>(() => loadPatientTabSettings())
   const updatePatientTabSettings = useCallback((next: PatientTabSetting[]) => {
@@ -1021,21 +1041,49 @@ function App() {
   )
 
   // Discharge Date's default: the most recent "added" Tag Event for any Terminal-flagged tag the
-  // patient currently carries. Purely computed — never persisted unless the user types an override.
+  // patient currently carries, falling back to today when no such event was ever logged. Purely
+  // computed — never persisted unless the user types an override.
   const defaultDischargeDateIso = useMemo(() => {
     const terminalTagIds = new Set(appliedPatientTags.filter((tag) => tag.terminal).map((tag) => tag.id))
-    if (terminalTagIds.size === 0) return null
+    if (terminalTagIds.size === 0) return toLocalISODate()
 
     const addedEvents = (patientTagEvents ?? []).filter((event) => event.action === 'added' && terminalTagIds.has(event.tagId))
-    if (addedEvents.length === 0) return null
+    if (addedEvents.length === 0) return toLocalISODate()
 
     const latestEvent = addedEvents.reduce((latest, event) => (event.at > latest.at ? event : latest))
     return toLocalISODate(new Date(latestEvent.at))
   }, [appliedPatientTags, patientTagEvents])
 
-  // Sticky per patient: undefined (never toggled) defaults to expanded. Zero applied tags always forces expanded.
-  const isEditingTags = appliedPatientTags.length === 0
-    || (selectedPatient?.id !== undefined ? (tagsEditOverrideByPatientId.get(selectedPatient.id) ?? true) : true)
+  // Admission Date & Referral Date's default: the date the profile was created. Purely computed —
+  // never persisted unless the user types an override.
+  const defaultCreatedDateIso = useMemo(
+    () => (selectedPatient ? toLocalISODate(new Date(selectedPatient.createdAt)) : null),
+    [selectedPatient],
+  )
+
+  // Referral Date only appears once the user has applied a "Referral" tag to the patient.
+  const hasReferralTag = useMemo(() => appliedPatientTags.some((tag) => tag.name === 'Referral'), [appliedPatientTags])
+
+  // Sticky per patient: an explicit user toggle always wins. Absent one, falls back to a default
+  // snapshotted the first time this patient's tags were viewed this session (collapsed if tags
+  // were already applied then, expanded otherwise) — later tag adds/removes don't reconsider
+  // that snapshot, only another user toggle does. Zero applied tags right now always forces
+  // expanded, regardless of sticky state, since there's nothing to show in the collapsed view.
+  const isEditingTags = useMemo(() => {
+    if (selectedPatient?.id === undefined) return true
+    const patientId = selectedPatient.id
+
+    if (!tagsCollapseDefaultSeedRef.current.has(patientId)) {
+      tagsCollapseDefaultSeedRef.current.set(patientId, appliedPatientTags.length > 0)
+    }
+
+    if (appliedPatientTags.length === 0) return true
+
+    const override = tagsEditOverrideByPatientId.get(patientId)
+    if (override !== undefined) return override
+
+    return !tagsCollapseDefaultSeedRef.current.get(patientId)
+  }, [appliedPatientTags, selectedPatient, tagsEditOverrideByPatientId])
 
   const activePatients = useMemo(() => (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)), [patients, tagsById])
 
@@ -1635,7 +1683,7 @@ function App() {
           return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
         }
         if (sortBy === 'admitDate') {
-          return b.admitDate.localeCompare(a.admitDate)
+          return getEffectiveAdmitDate(b.admitDate, b.createdAt).localeCompare(getEffectiveAdmitDate(a.admitDate, a.createdAt))
         }
         return compareByRoom(a, b)
       })
@@ -1656,9 +1704,10 @@ function App() {
     const parsedAge = Number.parseInt(form.age, 10)
     const age = Number.isFinite(parsedAge) ? parsedAge : 0
 
-    const admissionDate = toLocalISODate()
+    const now = new Date().toISOString()
     const patientPayload: Omit<Patient, 'id'> = {
-      lastModified: new Date().toISOString(),
+      lastModified: now,
+      createdAt: now,
       roomNumber: form.roomNumber.trim(),
       ward: form.ward.trim(),
       firstName: form.firstName.trim(),
@@ -1666,8 +1715,8 @@ function App() {
       age,
       sex: form.sex,
       diagnosis: '',
-      admitDate: admissionDate,
-      referralDate: admissionDate,
+      admitDate: '',
+      referralDate: '',
       mainServiceTagIds: pendingMainServiceTagIds,
       referralServiceTagIds: [],
       attendingPhysician: '',
@@ -1901,8 +1950,8 @@ function App() {
     setOrderDraftId(null)
     setOrderDirty(false)
     setSelectedLabTemplateId(DEFAULT_LAB_TEMPLATE_ID)
-    setLabTemplateDate(toLocalISODate())
-    setLabTemplateTime(toLocalTime())
+    setLabTemplateDate('')
+    setLabTemplateTime('')
     setLabTemplateValues({})
     setLabTemplateNote('')
     setEditingLabId(null)
@@ -2144,7 +2193,7 @@ function App() {
         aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
       />
       <TapToEditField
-        className='flex-1 px-1.5 py-0.5 text-sm'
+        className='min-w-0 flex-1 px-1.5 py-0.5 text-sm'
         ariaLabel='Checklist item text'
         emptyText='Tap to edit'
         value={item.text}
@@ -2185,12 +2234,16 @@ function App() {
         variant='ghost'
         className='h-6 w-6 shrink-0 p-0 text-action-danger'
         aria-label='Remove checklist item'
-        onClick={() => removeDailyChecklistItem(index)}
+        onClick={() => requestDeleteConfirmation({
+          title: 'Delete checklist item?',
+          message: `Remove "${item.text || 'this item'}" from the checklist?`,
+          onConfirm: () => removeDailyChecklistItem(index),
+        })}
       >
         <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
       </Button>
     </div>
-  ), [allowDailyChecklistDrop, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, moveDailyChecklistItemByDirection, removeDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
+  ), [allowDailyChecklistDrop, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, moveDailyChecklistItemByDirection, removeDailyChecklistItem, requestDeleteConfirmation, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
 
   const addMasterChecklistItem = useCallback((patientId: number, text: string) => {
     const nextText = text.trim()
@@ -2346,7 +2399,7 @@ function App() {
           onChange={(event) => updateMasterChecklistItemCompletion(item.patientId, item.index, event.target.checked)}
           aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
         />
-        <div className='flex-1'>
+        <div className='min-w-0 flex-1'>
           <TapToEditField
             className='px-1.5 py-0.5 text-sm'
             ariaLabel='Checklist item text'
@@ -2364,11 +2417,6 @@ function App() {
               />
             )}
           />
-          <p className='text-[11px] text-clay'>
-            {item.createdDate ? `Created: ${formatDateShortMonthDay(item.createdDate)}` : ''}
-            {item.lastFoundDate ? ` • Latest: ${formatDateShortMonthDay(item.lastFoundDate)}` : ''}
-            {item.completedDate ? ` • Completed: ${formatDateShortMonthDay(item.completedDate)}` : ''}
-          </p>
         </div>
         <Button
           type='button'
@@ -2395,13 +2443,17 @@ function App() {
           variant='ghost'
           className='self-center h-6 w-6 shrink-0 p-0 text-action-danger'
           aria-label='Remove checklist item'
-          onClick={() => removeMasterChecklistItem(item.patientId, item.index)}
+          onClick={() => requestDeleteConfirmation({
+            title: 'Delete checklist item?',
+            message: `Remove "${item.text || 'this item'}" from ${item.patientIdentifier}'s checklist?`,
+            onConfirm: () => removeMasterChecklistItem(item.patientId, item.index),
+          })}
         >
           <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
         </Button>
       </div>
     </div>
-    ), [allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, moveMasterChecklistItem, removeMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
+    ), [allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, moveMasterChecklistItem, removeMasterChecklistItem, requestDeleteConfirmation, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
@@ -2782,7 +2834,7 @@ function App() {
   }, [isOutputPreviewExpanded, outputPreview])
 
   const addStructuredVital = async () => {
-    if (selectedPatientId === null || !vitalForm.date || !vitalForm.time) return
+    if (selectedPatientId === null) return
 
     const saved = await saveVitalDraft()
     if (!saved) return
@@ -2827,7 +2879,7 @@ function App() {
   }
 
   const saveEditingVital = async () => {
-    if (editingVitalId === null || !vitalForm.date || !vitalForm.time) return
+    if (editingVitalId === null) return
 
     const saved = await saveVitalDraft()
     if (!saved) return
@@ -2937,13 +2989,13 @@ function App() {
 
   const saveVitalDraft = useCallback(
     async () => {
-      if (selectedPatientId === null || !vitalForm.date || !vitalForm.time) return false
+      if (selectedPatientId === null) return false
 
       setIsSaving(true)
 
       const payload = {
-        date: vitalForm.date,
-        time: vitalForm.time,
+        date: vitalForm.date || toLocalISODate(),
+        time: vitalForm.time || toLocalTime(),
         bp: vitalForm.bp.trim(),
         hr: vitalForm.hr.trim(),
         rr: vitalForm.rr.trim(),
@@ -2995,8 +3047,8 @@ function App() {
       setIsSaving(true)
 
       const payload = {
-        orderDate: orderForm.orderDate,
-        orderTime: orderForm.orderTime,
+        orderDate: orderForm.orderDate || toLocalISODate(),
+        orderTime: orderForm.orderTime || toLocalTime(),
         service: orderForm.service.trim(),
         orderText: orderForm.orderText.trim(),
         note: orderForm.note.trim(),
@@ -3255,7 +3307,7 @@ function App() {
     await db.labs.add({
       patientId: selectedPatientId,
       date: entryDate,
-      time: labTemplateTime || '',
+      time: labTemplateTime || toLocalTime(),
       templateId: selectedLabTemplate.id,
       results: resultsPayload,
       note: labTemplateNote.trim(),
@@ -3265,7 +3317,7 @@ function App() {
 
     setLabTemplateValues({})
     setLabTemplateNote('')
-    setLabTemplateTime(toLocalTime())
+    setLabTemplateTime('')
     setNotice(`Lab added from ${selectedLabTemplate.name}.`)
   }
 
@@ -3276,8 +3328,8 @@ function App() {
     if (editingLabId === labId) {
       setEditingLabId(null)
       setSelectedLabTemplateId(DEFAULT_LAB_TEMPLATE_ID)
-      setLabTemplateDate(toLocalISODate())
-      setLabTemplateTime(toLocalTime())
+      setLabTemplateDate('')
+      setLabTemplateTime('')
       setLabTemplateValues({})
       setLabTemplateNote('')
     }
@@ -3312,7 +3364,7 @@ function App() {
 
     await db.labs.update(editingLabId, {
       date: labTemplateDate || toLocalISODate(),
-      time: labTemplateTime || '',
+      time: labTemplateTime || toLocalTime(),
       templateId: selectedLabTemplate.id,
       results: resultsPayload,
       note: labTemplateNote.trim(),
@@ -3321,8 +3373,8 @@ function App() {
 
     setEditingLabId(null)
     setSelectedLabTemplateId(DEFAULT_LAB_TEMPLATE_ID)
-    setLabTemplateDate(toLocalISODate())
-    setLabTemplateTime(toLocalTime())
+    setLabTemplateDate('')
+    setLabTemplateTime('')
     setLabTemplateValues({})
     setLabTemplateNote('')
     setNotice('Lab updated.')
@@ -3331,8 +3383,8 @@ function App() {
   const cancelEditingLab = () => {
     setEditingLabId(null)
     setSelectedLabTemplateId(DEFAULT_LAB_TEMPLATE_ID)
-    setLabTemplateDate(toLocalISODate())
-    setLabTemplateTime(toLocalTime())
+    setLabTemplateDate('')
+    setLabTemplateTime('')
     setLabTemplateValues({})
     setLabTemplateNote('')
   }
@@ -3353,8 +3405,8 @@ function App() {
     setOrderDraftId(null)
     setOrderDirty(false)
     setSelectedLabTemplateId(DEFAULT_LAB_TEMPLATE_ID)
-    setLabTemplateDate(toLocalISODate())
-    setLabTemplateTime(toLocalTime())
+    setLabTemplateDate('')
+    setLabTemplateTime('')
     setLabTemplateValues({})
     setLabTemplateNote('')
     setEditingLabId(null)
@@ -3673,6 +3725,7 @@ function App() {
     await db.transaction('rw', [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders], async () => {
       samplePatientId = await db.patients.add({
         lastModified: now,
+        createdAt: now,
         roomNumber: '512A',
         ward: '',
         lastName: 'DELA CRUZ',
@@ -4638,17 +4691,23 @@ function App() {
                           ariaLabel='Admission Date'
                           value={profileForm.admitDate}
                           onChange={(isoDate) => updateProfileField('admitDate', isoDate)}
+                          defaultIso={defaultCreatedDateIso}
+                          emitEmptyOnClear
                         />
                       </div>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-referraldate'>Referral Date</Label>
-                        <FlexibleDateInput
-                          id='profile-referraldate'
-                          ariaLabel='Referral Date'
-                          value={profileForm.referralDate}
-                          onChange={(isoDate) => updateProfileField('referralDate', isoDate)}
-                        />
-                      </div>
+                      {hasReferralTag ? (
+                        <div className='space-y-1'>
+                          <Label htmlFor='profile-referraldate'>Referral Date</Label>
+                          <FlexibleDateInput
+                            id='profile-referraldate'
+                            ariaLabel='Referral Date'
+                            value={profileForm.referralDate}
+                            onChange={(isoDate) => updateProfileField('referralDate', isoDate)}
+                            defaultIso={defaultCreatedDateIso}
+                            emitEmptyOnClear
+                          />
+                        </div>
+                      ) : null}
                     </div>
                     {!isPatientActive(selectedPatient, tagsById) ? (
                       <div className='space-y-1'>
@@ -4945,11 +5004,11 @@ function App() {
                         <div className='grid grid-cols-3 gap-2 sm:grid-cols-4'>
                           <div className='space-y-1'>
                             <Label>Date</Label>
-                            <FlexibleDateInput ariaLabel='Vital date' value={vitalForm.date} onChange={(isoDate) => updateVitalField('date', isoDate)} />
+                            <FlexibleDateInput ariaLabel='Vital date' value={vitalForm.date} onChange={(isoDate) => updateVitalField('date', isoDate)} defaultIso={toLocalISODate()} emitEmptyOnClear />
                           </div>
                           <div className='space-y-1'>
                             <Label>Time</Label>
-                            <FlexibleTimeInput ariaLabel='Vital time' value={vitalForm.time} onChange={(hhmm) => updateVitalField('time', hhmm)} />
+                            <FlexibleTimeInput ariaLabel='Vital time' value={vitalForm.time} onChange={(hhmm) => updateVitalField('time', hhmm)} defaultHhmm={toLocalTime()} emitEmptyOnClear />
                           </div>
                           <div className='space-y-1'>
                             <Label>BP</Label>
@@ -5041,7 +5100,11 @@ function App() {
                           ) : (
                             <>
                               <Button size='sm' onClick={() => void saveEditingVital()}>Save</Button>
-                              <Button size='sm' variant='destructive' onClick={() => void deleteStructuredVital(editingVitalId)}>Remove</Button>
+                              <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
+                                title: 'Delete vital?',
+                                message: 'Are you sure you want to remove this vital entry?',
+                                onConfirm: () => deleteStructuredVital(editingVitalId ?? undefined),
+                              })}>Remove</Button>
                               <Button size='sm' variant='secondary' onClick={cancelEditingVital}>Cancel</Button>
                             </>
                           )}
@@ -5206,7 +5269,11 @@ function App() {
                             <>
                               <Button size='sm' onClick={() => void saveEditingMedication()}>Save</Button>
                               <Button size='sm' variant='secondary' onClick={cancelEditingMedication}>Cancel</Button>
-                              <Button size='sm' variant='destructive' onClick={() => void deleteStructuredMedication(editingMedicationId)}>Remove</Button>
+                              <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
+                                title: 'Delete medication?',
+                                message: 'Are you sure you want to remove this medication entry?',
+                                onConfirm: () => deleteStructuredMedication(editingMedicationId ?? undefined),
+                              })}>Remove</Button>
                             </>
                           )}
                         </div>
@@ -5311,6 +5378,8 @@ function App() {
                               ariaLabel='Lab date'
                               value={labTemplateDate}
                               onChange={setLabTemplateDate}
+                              defaultIso={toLocalISODate()}
+                              emitEmptyOnClear
                             />
                           </div>
                           <div className='space-y-1'>
@@ -5319,6 +5388,8 @@ function App() {
                               ariaLabel='Lab time'
                               value={labTemplateTime}
                               onChange={setLabTemplateTime}
+                              defaultHhmm={toLocalTime()}
+                              emitEmptyOnClear
                             />
                           </div>
                           <div className='space-y-1'>
@@ -5531,7 +5602,11 @@ function App() {
                             <>
                               <Button size='sm' onClick={() => void saveEditingLab()}>Save</Button>
                               <Button size='sm' variant='secondary' onClick={cancelEditingLab}>Cancel</Button>
-                              <Button size='sm' variant='destructive' onClick={() => void deleteStructuredLab(editingLabId)}>Remove</Button>
+                              <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
+                                title: 'Delete lab?',
+                                message: 'Are you sure you want to remove this lab entry?',
+                                onConfirm: () => deleteStructuredLab(editingLabId ?? undefined),
+                              })}>Remove</Button>
                             </>
                           )}
                         </div>
@@ -5582,11 +5657,11 @@ function App() {
                         <div className='grid grid-cols-2 gap-2'>
                           <div className='space-y-1'>
                             <Label>Date</Label>
-                            <FlexibleDateInput ariaLabel='Order date' value={orderForm.orderDate} onChange={(isoDate) => updateOrderField('orderDate', isoDate)} />
+                            <FlexibleDateInput ariaLabel='Order date' value={orderForm.orderDate} onChange={(isoDate) => updateOrderField('orderDate', isoDate)} defaultIso={toLocalISODate()} emitEmptyOnClear />
                           </div>
                           <div className='space-y-1'>
                             <Label>Time</Label>
-                            <FlexibleTimeInput ariaLabel='Order time' value={orderForm.orderTime} onChange={(hhmm) => updateOrderField('orderTime', hhmm)} />
+                            <FlexibleTimeInput ariaLabel='Order time' value={orderForm.orderTime} onChange={(hhmm) => updateOrderField('orderTime', hhmm)} defaultHhmm={toLocalTime()} emitEmptyOnClear />
                           </div>
                           <div className='space-y-1 col-span-2'>
                             <Label>Service</Label>
@@ -5662,7 +5737,11 @@ function App() {
                           ) : (
                             <>
                               <Button size='sm' onClick={() => void saveEditingOrder()}>Save</Button>
-                              <Button size='sm' variant='destructive' onClick={() => void deleteOrder(editingOrderId)}>Remove</Button>
+                              <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
+                                title: 'Delete order?',
+                                message: 'Are you sure you want to remove this order?',
+                                onConfirm: () => deleteOrder(editingOrderId ?? undefined),
+                              })}>Remove</Button>
                               <Button size='sm' variant='secondary' onClick={cancelEditingOrder}>Cancel</Button>
                             </>
                           )}
@@ -5831,7 +5910,11 @@ function App() {
                                   </p>
                                   <div className='flex justify-between items-center gap-2'>
                                     <p className='text-[11px] text-clay'>{formatBytes(group.totalByteSize)}</p>
-                                    <Button size='sm' variant='destructive' onClick={() => void deletePhotoAttachmentGroup(group)}>
+                                    <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
+                                      title: 'Delete photo set?',
+                                      message: `Permanently remove ${group.entries.length === 1 ? 'this photo' : `these ${group.entries.length} photos`} from the app record?`,
+                                      onConfirm: () => deletePhotoAttachmentGroup(group),
+                                    })}>
                                       Remove set
                                     </Button>
                                   </div>
@@ -6154,7 +6237,12 @@ function App() {
                   </button>
                   <button
                     type='button'
-                    onClick={() => void clearDischargedPatients()}
+                    onClick={() => requestDeleteConfirmation({
+                      title: 'Clear inactive patients?',
+                      message: 'Permanently deletes every patient record with a Terminal tag applied, along with all of their daily updates, vitals, medications, labs, orders, and photos. This cannot be undone.',
+                      confirmLabel: 'Yes, delete permanently',
+                      onConfirm: () => clearDischargedPatients(),
+                    })}
                     className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-red-50 hover:bg-red-100 border border-action-danger/25 text-left transition-colors active:scale-[0.98]'
                   >
                     <div className='w-9 h-9 rounded-lg bg-action-danger/10 flex items-center justify-center shrink-0'>
@@ -6522,7 +6610,11 @@ function App() {
                   </div>
                 ) : null}
                 <div className='flex gap-2 flex-wrap'>
-                  <Button variant='destructive' onClick={() => void deletePhotoAttachment(selectedAttachmentCarouselEntry.id)}>
+                  <Button variant='destructive' onClick={() => requestDeleteConfirmation({
+                    title: 'Delete photo?',
+                    message: 'Permanently remove this photo from the app record?',
+                    onConfirm: () => deletePhotoAttachment(selectedAttachmentCarouselEntry.id),
+                  })}>
                     Remove from app
                   </Button>
                   <Button variant='secondary' onClick={() => setSelectedAttachmentId(null)}>
@@ -6618,7 +6710,11 @@ function App() {
                               <Button size='sm' variant='secondary' onClick={() => exportPhotoAttachment(attachment)}>
                                 Export
                               </Button>
-                              <Button size='sm' variant='destructive' onClick={() => void deletePhotoAttachment(attachment.id)}>
+                              <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
+                                title: 'Delete photo?',
+                                message: 'Permanently remove this photo from the app record?',
+                                onConfirm: () => deletePhotoAttachment(attachment.id),
+                              })}>
                                 Delete
                               </Button>
                             </div>
@@ -6675,6 +6771,19 @@ function App() {
             <div className='flex gap-2 flex-wrap justify-center'>
               <Button variant='destructive' onClick={() => void confirmDeleteDailyUpdate()}>Yes, delete entry</Button>
               <Button variant='secondary' onClick={closeDeleteDailyConfirm}>Cancel</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={pendingDeleteAction !== null} onOpenChange={(open) => { if (!open) closeDeleteConfirmation() }}>
+          <DialogContent className='max-w-md'>
+            <DialogHeader>
+              <DialogTitle>{pendingDeleteAction?.title ?? 'Confirm delete'}</DialogTitle>
+            </DialogHeader>
+            <p className='text-sm text-espresso text-center'>{pendingDeleteAction?.message}</p>
+            <div className='flex gap-2 flex-wrap justify-center'>
+              <Button variant='destructive' onClick={() => void confirmPendingDelete()}>{pendingDeleteAction?.confirmLabel ?? 'Delete'}</Button>
+              <Button variant='secondary' onClick={closeDeleteConfirmation}>Cancel</Button>
             </div>
           </DialogContent>
         </Dialog>
