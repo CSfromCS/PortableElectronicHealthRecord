@@ -413,31 +413,32 @@ const ConditionCard = ({
       </div>
 
       {isCollapsed ? null : (
-        <>
-          <div className='space-y-1'>
-            <Label className='text-xs'>Required tags</Label>
-            <p className='text-[11px] text-clay'>
-              Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service).
-            </p>
-            <RequiredTagsPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
-          </div>
-
-          <div className='space-y-1'>
-            <Label className='text-xs'>Checklist items</Label>
-            <ConditionChecklistItemsEditor
-              items={condition.checklistItems}
-              onChange={(items) => onChange({ ...condition, checklistItems: items })}
-            />
-          </div>
-
-          <TagEffectsEditor
-            tagEffects={condition.tagEffects}
-            tags={tags}
-            groups={groups}
-            onChange={(tagEffects) => onChange({ ...condition, tagEffects })}
-          />
-        </>
+        <div className='space-y-1'>
+          <Label className='text-xs'>Required tags</Label>
+          <p className='text-[11px] text-clay'>
+            Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service).
+          </p>
+          <RequiredTagsPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
+        </div>
       )}
+
+      {/* Checklist items and tag effects are this condition's "actions" — kept visible and editable even
+          while collapsed, since the point of collapsing is to hide the (usually-settled) required-tags
+          picker while still reviewing/editing what each condition actually does. */}
+      <div className='space-y-1'>
+        <Label className='text-xs'>Checklist items</Label>
+        <ConditionChecklistItemsEditor
+          items={condition.checklistItems}
+          onChange={(items) => onChange({ ...condition, checklistItems: items })}
+        />
+      </div>
+
+      <TagEffectsEditor
+        tagEffects={condition.tagEffects}
+        tags={tags}
+        groups={groups}
+        onChange={(tagEffects) => onChange({ ...condition, tagEffects })}
+      />
     </div>
   )
 }
