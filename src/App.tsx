@@ -1989,14 +1989,42 @@ function App() {
   }
 
   // Swipe left/right anywhere on the mobile patient view to move through active patients
-  // (same room-number order as the quick-switch picker), staying on the same tab. Ignored
-  // when the gesture starts on a drag handle, a form control, or an explicitly opted-out
-  // horizontally-scrollable area (see data-no-swipe), and rejected unless it's clearly more
-  // horizontal than vertical and fast enough to be a swipe rather than a scroll or a tap.
-  const patientSwipeStartRef = useRef<{ x: number; y: number; time: number } | null>(null)
-  const PATIENT_SWIPE_MIN_DISTANCE_PX = 70
-  const PATIENT_SWIPE_MAX_OFF_AXIS_PX = 60
-  const PATIENT_SWIPE_MAX_DURATION_MS = 600
+  // (same room-number order as the quick-switch picker), staying on the same tab. The card
+  // tracks the finger 1:1 (translateX) so the gesture is unmistakable before it's even
+  // completed, and a name badge with a directional arrow fades in as you drag past the
+  // deadzone. A confirmed swipe finishes sliding the old card off, then the new patient's
+  // card snaps to the opposite edge and slides in to rest. Ignored when the gesture starts
+  // on a drag handle, a form control, or an explicitly opted-out horizontally-scrollable
+  // area (see data-no-swipe). Only locks into a horizontal drag (and blocks page scroll)
+  // once movement is clearly more horizontal than vertical, so ordinary scrolling is
+  // untouched.
+  const patientSwipeStartRef = useRef<{ x: number; y: number; locked: boolean } | null>(null)
+  const patientSwipeExitTimeoutRef = useRef<number | null>(null)
+  const [patientSwipeOffsetX, setPatientSwipeOffsetX] = useState(0)
+  const [patientSwipeTransitionOn, setPatientSwipeTransitionOn] = useState(false)
+  const [patientSwipeDragging, setPatientSwipeDragging] = useState(false)
+
+  const PATIENT_SWIPE_LOCK_DEADZONE_PX = 10
+  const PATIENT_SWIPE_MIN_DISTANCE_PX = 80
+  const PATIENT_SWIPE_EXIT_DISTANCE_PX = 500
+  const PATIENT_SWIPE_ENTRY_DISTANCE_PX = 56
+  const PATIENT_SWIPE_EXIT_DURATION_MS = 180
+
+  const getAdjacentPatient = (direction: 'next' | 'prev'): Patient | undefined => {
+    if (!selectedPatient) return undefined
+    const orderedIds = quickSwitchPatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
+    const currentIndex = orderedIds.indexOf(selectedPatient.id ?? -1)
+    if (currentIndex === -1) return undefined
+    const targetId = orderedIds[direction === 'next' ? currentIndex + 1 : currentIndex - 1]
+    return quickSwitchPatients.find((patient) => patient.id === targetId)
+  }
+
+  const resetPatientSwipe = () => {
+    patientSwipeStartRef.current = null
+    setPatientSwipeDragging(false)
+    setPatientSwipeTransitionOn(false)
+    setPatientSwipeOffsetX(0)
+  }
 
   const handlePatientSwipeTouchStart = (event: TouchEvent<HTMLDivElement>) => {
     const target = event.target
@@ -2004,34 +2032,83 @@ function App() {
       patientSwipeStartRef.current = null
       return
     }
+    if (patientSwipeExitTimeoutRef.current !== null) {
+      window.clearTimeout(patientSwipeExitTimeoutRef.current)
+      patientSwipeExitTimeoutRef.current = null
+    }
     const touch = event.touches[0]
     if (!touch) return
-    patientSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() }
+    setPatientSwipeDragging(false)
+    setPatientSwipeTransitionOn(false)
+    setPatientSwipeOffsetX(0)
+    patientSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, locked: false }
+  }
+
+  const handlePatientSwipeTouchMove = (event: TouchEvent<HTMLDivElement>) => {
+    const start = patientSwipeStartRef.current
+    if (!start) return
+    const touch = event.touches[0]
+    if (!touch) return
+    const deltaX = touch.clientX - start.x
+    const deltaY = touch.clientY - start.y
+
+    if (!start.locked) {
+      if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > PATIENT_SWIPE_LOCK_DEADZONE_PX) {
+        patientSwipeStartRef.current = null
+        return
+      }
+      if (Math.abs(deltaX) < PATIENT_SWIPE_LOCK_DEADZONE_PX) return
+      start.locked = true
+      setPatientSwipeDragging(true)
+    }
+
+    event.preventDefault()
+    setPatientSwipeOffsetX(deltaX)
   }
 
   const handlePatientSwipeTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
     const start = patientSwipeStartRef.current
     patientSwipeStartRef.current = null
-    if (!start || !selectedPatient) return
+    if (!start?.locked) {
+      resetPatientSwipe()
+      return
+    }
 
     const touch = event.changedTouches[0]
-    if (!touch) return
-    const deltaX = touch.clientX - start.x
-    const deltaY = touch.clientY - start.y
-    if (Date.now() - start.time > PATIENT_SWIPE_MAX_DURATION_MS) return
-    if (Math.abs(deltaX) < PATIENT_SWIPE_MIN_DISTANCE_PX || Math.abs(deltaY) > PATIENT_SWIPE_MAX_OFF_AXIS_PX) return
+    const deltaX = touch ? touch.clientX - start.x : 0
+    const direction: 'next' | 'prev' = deltaX < 0 ? 'next' : 'prev'
+    const targetPatient = Math.abs(deltaX) >= PATIENT_SWIPE_MIN_DISTANCE_PX ? getAdjacentPatient(direction) : undefined
 
-    const orderedIds = quickSwitchPatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
-    const currentIndex = orderedIds.indexOf(selectedPatient.id ?? -1)
-    if (currentIndex === -1) return
-    const nextId = orderedIds[deltaX < 0 ? currentIndex + 1 : currentIndex - 1]
-    if (nextId === undefined) return
-    const nextPatient = quickSwitchPatients.find((patient) => patient.id === nextId)
-    if (!nextPatient) return
+    setPatientSwipeDragging(false)
+    if (!targetPatient) {
+      setPatientSwipeTransitionOn(true)
+      setPatientSwipeOffsetX(0)
+      return
+    }
 
-    void selectPatient(nextPatient, { preserveSelectedTab: true })
-    setNotice(`${nextPatient.roomNumber} - ${nextPatient.lastName}, ${nextPatient.firstName}`)
+    const exitOffset = direction === 'next' ? -PATIENT_SWIPE_EXIT_DISTANCE_PX : PATIENT_SWIPE_EXIT_DISTANCE_PX
+    setPatientSwipeTransitionOn(true)
+    setPatientSwipeOffsetX(exitOffset)
+    patientSwipeExitTimeoutRef.current = window.setTimeout(() => {
+      void selectPatient(targetPatient, { preserveSelectedTab: true })
+      setPatientSwipeTransitionOn(false)
+      setPatientSwipeOffsetX(direction === 'next' ? PATIENT_SWIPE_ENTRY_DISTANCE_PX : -PATIENT_SWIPE_ENTRY_DISTANCE_PX)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setPatientSwipeTransitionOn(true)
+          setPatientSwipeOffsetX(0)
+        })
+      })
+    }, PATIENT_SWIPE_EXIT_DURATION_MS)
   }
+
+  const patientSwipeDirection: 'next' | 'prev' | null =
+    patientSwipeOffsetX < -PATIENT_SWIPE_LOCK_DEADZONE_PX ? 'next'
+      : patientSwipeOffsetX > PATIENT_SWIPE_LOCK_DEADZONE_PX ? 'prev'
+        : null
+  const patientSwipePreviewPatient = patientSwipeDragging && patientSwipeDirection ? getAdjacentPatient(patientSwipeDirection) : undefined
+  const patientSwipeProgress = Math.min(Math.abs(patientSwipeOffsetX) / PATIENT_SWIPE_MIN_DISTANCE_PX, 1)
+  const patientSwipeCardOpacity = 1 - Math.min(Math.abs(patientSwipeOffsetX) / 250, 0.85)
 
   const toggleDischarge = async (patient: Patient) => {
     if (patient.id === undefined) return
@@ -4626,11 +4703,29 @@ function App() {
 
             {view === 'patient' ? (
               selectedPatient ? (
+              <>
+              {patientSwipePreviewPatient ? (
+                <div className='sm:hidden fixed inset-x-0 top-[calc(0.75rem+env(safe-area-inset-top))] z-50 flex justify-center pointer-events-none'>
+                  <div
+                    className='flex items-center gap-1.5 rounded-full bg-espresso text-warm-ivory px-3 py-1.5 text-sm font-semibold shadow-lg'
+                    style={{ opacity: patientSwipeProgress, transform: `scale(${0.85 + 0.15 * patientSwipeProgress})` }}
+                  >
+                    {patientSwipeDirection === 'prev' ? <ChevronLeft className='h-4 w-4 shrink-0' /> : null}
+                    <span className='whitespace-nowrap'>{patientSwipePreviewPatient.roomNumber} - {patientSwipePreviewPatient.lastName}, {patientSwipePreviewPatient.firstName}</span>
+                    {patientSwipeDirection === 'next' ? <ChevronRight className='h-4 w-4 shrink-0' /> : null}
+                  </div>
+                </div>
+              ) : null}
               <Card
-                className='border-0 bg-transparent shadow-none sm:bg-white/80 sm:border-clay/25 sm:shadow-md sm:ring-1 sm:ring-clay/10'
+                className={cn(
+                  'border-0 bg-transparent shadow-none sm:bg-white/80 sm:border-clay/25 sm:shadow-md sm:ring-1 sm:ring-clay/10',
+                  patientSwipeTransitionOn && 'transition-transform duration-200 ease-out',
+                )}
+                style={{ transform: `translateX(${patientSwipeOffsetX}px)`, opacity: patientSwipeCardOpacity }}
                 onTouchStart={handlePatientSwipeTouchStart}
+                onTouchMove={handlePatientSwipeTouchMove}
                 onTouchEnd={handlePatientSwipeTouchEnd}
-                onTouchCancel={() => { patientSwipeStartRef.current = null }}
+                onTouchCancel={resetPatientSwipe}
               >
                 <CardHeader className='sticky top-0 z-20 py-2 px-0 pb-2 bg-warm-ivory/97 backdrop-blur-sm border-b border-clay/15 mx-0 sm:static sm:py-3 sm:px-4 sm:pb-0 sm:bg-transparent sm:backdrop-blur-none sm:border-b-0'>
                   <Select
@@ -6211,6 +6306,7 @@ function App() {
               </Tabs>
                 </CardContent>
               </Card>
+              </>
               ) : (
                 <Card className='bg-white/80 border-clay/25 shadow-sm'>
                   <CardHeader className='py-3 px-4 pb-0'>
