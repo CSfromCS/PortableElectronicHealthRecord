@@ -140,8 +140,9 @@ import type { CustomAction, CustomActionCondition, TagDefinition, TagEvent, TagG
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
 import {
+  actionHasApplicableEffect,
   addTagsToPatientDirectly,
-  applyMatchedConditions,
+  applyCustomActionEffects,
   formatPatientLabelForNotice,
   getMissingTagsForCondition,
   hasCustomActionRunOnDate,
@@ -883,11 +884,11 @@ function App() {
         if (hasCustomActionRunOnDate(customActionRuns ?? [], actionId, patient.id, today)) continue
 
         const matched = resolveMatchingConditions(patient, action)
-        if (matched.length === 0) {
+        if (!actionHasApplicableEffect(action, matched)) {
           unaffectedPatients.push(patient)
           continue
         }
-        await applyMatchedConditions(patient, matched, tagsById, (items) => appendCustomActionChecklistItems(patient.id as number, today, items))
+        await applyCustomActionEffects(patient, action, matched, tagsById, (items) => appendCustomActionChecklistItems(patient.id as number, today, items))
         await recordCustomActionRun(actionId, patient.id, today)
         ranCount += 1
       }
@@ -2547,12 +2548,13 @@ function App() {
     const unaffectedMessages: string[] = []
     for (const action of matchingActions) {
       const matched = resolveMatchingConditions(patientAfterAdd, action)
-      if (matched.length === 0) {
+      if (!actionHasApplicableEffect(action, matched)) {
         unaffectedMessages.push(`"${action.name}" did not affect ${formatPatientLabelForNotice(patientAfterAdd)} — no condition was met.`)
         continue
       }
-      await applyMatchedConditions(
+      await applyCustomActionEffects(
         patientAfterAdd,
+        action,
         matched,
         tagsById,
         (items) => appendCustomActionChecklistItems(patientAfterAdd.id as number, today, items),
@@ -2572,12 +2574,12 @@ function App() {
     const actionId = action.id
 
     const matched = resolveMatchingConditions(selectedPatient, action)
-    if (matched.length === 0) {
+    if (!actionHasApplicableEffect(action, matched)) {
       setCustomActionResolveState({ action, patient: selectedPatient })
       return
     }
 
-    await applyMatchedConditions(selectedPatient, matched, tagsById, (items) => appendCustomActionChecklistItems(patientId, dailyDate, items))
+    await applyCustomActionEffects(selectedPatient, action, matched, tagsById, (items) => appendCustomActionChecklistItems(patientId, dailyDate, items))
     await recordCustomActionRun(actionId, patientId, dailyDate)
     setNotice(`Ran "${action.name}".`)
   }, [appendCustomActionChecklistItems, dailyDate, selectedPatient, tagsById])
@@ -2597,8 +2599,8 @@ function App() {
 
     const patientAfterAdd: Patient = { ...state.patient, tagIds: [...new Set([...(state.patient.tagIds ?? []), ...missingTagIds])] }
     const matched = resolveMatchingConditions(patientAfterAdd, state.action)
-    if (matched.length > 0) {
-      await applyMatchedConditions(patientAfterAdd, matched, tagsById, (items) => appendCustomActionChecklistItems(patientId, dailyDate, items))
+    if (actionHasApplicableEffect(state.action, matched)) {
+      await applyCustomActionEffects(patientAfterAdd, state.action, matched, tagsById, (items) => appendCustomActionChecklistItems(patientId, dailyDate, items))
       await recordCustomActionRun(actionId, patientId, dailyDate)
       setNotice(`Ran "${state.action.name}".`)
     }

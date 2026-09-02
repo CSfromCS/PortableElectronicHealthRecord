@@ -40,6 +40,9 @@ type CustomActionFormState = {
   name: string
   triggerType: CustomActionTriggerType
   triggerTagId: string
+  /** Applied to every triggered patient unconditionally — no condition needs to be defined for this to run. */
+  checklistItems: ChecklistItemDraft[]
+  tagEffects: CustomActionTagEffect[]
   conditions: ConditionFormState[]
 }
 
@@ -59,6 +62,8 @@ const blankCustomActionForm = (): CustomActionFormState => ({
   name: '',
   triggerType: 'manual',
   triggerTagId: '',
+  checklistItems: [],
+  tagEffects: [],
   conditions: [],
 })
 
@@ -73,14 +78,19 @@ const actionToForm = (action: CustomAction): CustomActionFormState => ({
   name: action.name,
   triggerType: action.triggerType,
   triggerTagId: action.triggerTagId !== undefined ? String(action.triggerTagId) : '',
+  checklistItems: action.checklistItems.map((text) => ({ id: createChecklistItemId(), text })),
+  tagEffects: action.tagEffects.map((effect) => ({ ...effect })),
   conditions: action.conditions.map(conditionToForm),
 })
+
+const formChecklistItemsToStrings = (items: ChecklistItemDraft[]): string[] =>
+  items.map((item) => item.text.trim()).filter((text) => text.length > 0)
 
 const formToConditions = (conditions: ConditionFormState[]): CustomActionCondition[] =>
   conditions.map((condition) => ({
     id: condition.id,
     requiredTagIds: condition.requiredTagIds,
-    checklistItems: condition.checklistItems.map((item) => item.text.trim()).filter((text) => text.length > 0),
+    checklistItems: formChecklistItemsToStrings(condition.checklistItems),
     tagEffects: condition.tagEffects,
   }))
 
@@ -257,6 +267,95 @@ const ConditionChecklistItemsEditor = ({
   )
 }
 
+/**
+ * Every selectable tag, grouped and checkbox-toggled — a plain scrollable div rather than the
+ * ScrollArea component, since nesting Radix ScrollAreas (this sits inside the dialog's own) ate
+ * wheel/touch scroll input and left most tags unreachable.
+ */
+const RequiredTagsPicker = ({
+  tags,
+  groups,
+  selectedTagIds,
+  onToggle,
+}: {
+  tags: TagDefinition[]
+  groups: TagGroupDefinition[]
+  selectedTagIds: Set<number>
+  onToggle: (tag: TagDefinition) => void
+}) => (
+  <div className='max-h-48 overflow-y-auto overscroll-contain rounded-lg border border-clay/15 bg-warm-ivory/60 p-1'>
+    <BulkTagPicker tags={tags} groups={groups} selectedTagIds={selectedTagIds} onToggle={onToggle} />
+  </div>
+)
+
+const TagEffectsEditor = ({
+  tagEffects,
+  tags,
+  groups,
+  onChange,
+}: {
+  tagEffects: CustomActionTagEffect[]
+  tags: TagDefinition[]
+  groups: TagGroupDefinition[]
+  onChange: (tagEffects: CustomActionTagEffect[]) => void
+}) => {
+  const tagsById = new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag]))
+  const tagBuckets = bucketTagsByGroup(tags, groups)
+
+  const addTagEffect = () => {
+    const firstTag = tags[0]
+    if (!firstTag || firstTag.id === undefined) return
+    onChange([...tagEffects, { tagId: firstTag.id, action: 'add' }])
+  }
+
+  const updateTagEffect = (effectIndex: number, next: Partial<CustomActionTagEffect>) => {
+    onChange(tagEffects.map((effect, i) => (i === effectIndex ? { ...effect, ...next } : effect)))
+  }
+
+  const removeTagEffect = (effectIndex: number) => {
+    onChange(tagEffects.filter((_, i) => i !== effectIndex))
+  }
+
+  return (
+    <div className='space-y-1'>
+      <div className='flex items-center justify-between'>
+        <Label className='text-xs'>Tag effects</Label>
+        <Button type='button' size='sm' variant='outline' className='h-6 text-[11px]' onClick={addTagEffect} disabled={tags.length === 0}>
+          <Plus className='h-3 w-3 mr-1' /> Add effect
+        </Button>
+      </div>
+      <div className='flex flex-col gap-1.5'>
+        {tagEffects.map((effect, effectIndex) => (
+          <div key={effectIndex} className='flex items-center gap-1.5'>
+            <Select value={effect.action} onValueChange={(value) => updateTagEffect(effectIndex, { action: value as 'add' | 'remove' })}>
+              <SelectTrigger className='h-8 w-28 text-xs'><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value='add'>Add tag</SelectItem>
+                <SelectItem value='remove'>Remove tag</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={String(effect.tagId)} onValueChange={(value) => updateTagEffect(effectIndex, { tagId: Number.parseInt(value, 10) })}>
+              <SelectTrigger className='h-8 flex-1 text-xs'><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {tagBuckets.map((bucket) => (
+                  bucket.tags.map((tag) => (
+                    <SelectItem key={tag.id} value={String(tag.id)}>{bucket.groupName} — {tag.name}</SelectItem>
+                  ))
+                ))}
+              </SelectContent>
+            </Select>
+            {tagsById.get(effect.tagId) ? <TagChip tag={tagsById.get(effect.tagId) as TagDefinition} /> : null}
+            <Button type='button' variant='ghost' size='sm' className='h-8 w-8 p-0 text-action-danger' aria-label='Remove tag effect' onClick={() => removeTagEffect(effectIndex)}>
+              <X className='h-3.5 w-3.5' />
+            </Button>
+          </div>
+        ))}
+        {tagEffects.length === 0 ? <p className='text-[11px] text-clay/70'>No tag effects configured.</p> : null}
+      </div>
+    </div>
+  )
+}
+
 const ConditionCard = ({
   condition,
   index,
@@ -274,8 +373,6 @@ const ConditionCard = ({
   onRequestRemove: () => void
   dragHandleProps: ReturnType<ReturnType<typeof useDragReorder<string>>['getHandleProps']>
 }) => {
-  const tagsById = new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag]))
-  const tagBuckets = bucketTagsByGroup(tags, groups)
   const requiredTagIdSet = new Set(condition.requiredTagIds)
 
   const toggleRequiredTag = (tag: TagDefinition) => {
@@ -285,23 +382,6 @@ const ConditionCard = ({
       ? condition.requiredTagIds.filter((id) => id !== tagId)
       : [...condition.requiredTagIds, tagId]
     onChange({ ...condition, requiredTagIds: next })
-  }
-
-  const addTagEffect = () => {
-    const firstTag = tags[0]
-    if (!firstTag || firstTag.id === undefined) return
-    onChange({ ...condition, tagEffects: [...condition.tagEffects, { tagId: firstTag.id, action: 'add' }] })
-  }
-
-  const updateTagEffect = (effectIndex: number, next: Partial<CustomActionTagEffect>) => {
-    onChange({
-      ...condition,
-      tagEffects: condition.tagEffects.map((effect, i) => (i === effectIndex ? { ...effect, ...next } : effect)),
-    })
-  }
-
-  const removeTagEffect = (effectIndex: number) => {
-    onChange({ ...condition, tagEffects: condition.tagEffects.filter((_, i) => i !== effectIndex) })
   }
 
   return (
@@ -317,11 +397,9 @@ const ConditionCard = ({
       <div className='space-y-1'>
         <Label className='text-xs'>Required tags</Label>
         <p className='text-[11px] text-clay'>
-          Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service). Select none to always match.
+          Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service).
         </p>
-        <ScrollArea className='max-h-48 rounded-lg border border-clay/15 bg-warm-ivory/60 p-1'>
-          <BulkTagPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
-        </ScrollArea>
+        <RequiredTagsPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
       </div>
 
       <div className='space-y-1'>
@@ -332,42 +410,12 @@ const ConditionCard = ({
         />
       </div>
 
-      <div className='space-y-1'>
-        <div className='flex items-center justify-between'>
-          <Label className='text-xs'>Tag effects</Label>
-          <Button type='button' size='sm' variant='outline' className='h-6 text-[11px]' onClick={addTagEffect} disabled={tags.length === 0}>
-            <Plus className='h-3 w-3 mr-1' /> Add effect
-          </Button>
-        </div>
-        <div className='flex flex-col gap-1.5'>
-          {condition.tagEffects.map((effect, effectIndex) => (
-            <div key={effectIndex} className='flex items-center gap-1.5'>
-              <Select value={effect.action} onValueChange={(value) => updateTagEffect(effectIndex, { action: value as 'add' | 'remove' })}>
-                <SelectTrigger className='h-8 w-28 text-xs'><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='add'>Add tag</SelectItem>
-                  <SelectItem value='remove'>Remove tag</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={String(effect.tagId)} onValueChange={(value) => updateTagEffect(effectIndex, { tagId: Number.parseInt(value, 10) })}>
-                <SelectTrigger className='h-8 flex-1 text-xs'><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {tagBuckets.map((bucket) => (
-                    bucket.tags.map((tag) => (
-                      <SelectItem key={tag.id} value={String(tag.id)}>{bucket.groupName} — {tag.name}</SelectItem>
-                    ))
-                  ))}
-                </SelectContent>
-              </Select>
-              {tagsById.get(effect.tagId) ? <TagChip tag={tagsById.get(effect.tagId) as TagDefinition} /> : null}
-              <Button type='button' variant='ghost' size='sm' className='h-8 w-8 p-0 text-action-danger' aria-label='Remove tag effect' onClick={() => removeTagEffect(effectIndex)}>
-                <X className='h-3.5 w-3.5' />
-              </Button>
-            </div>
-          ))}
-          {condition.tagEffects.length === 0 ? <p className='text-[11px] text-clay/70'>No tag effects configured.</p> : null}
-        </div>
-      </div>
+      <TagEffectsEditor
+        tagEffects={condition.tagEffects}
+        tags={tags}
+        groups={groups}
+        onChange={(tagEffects) => onChange({ ...condition, tagEffects })}
+      />
     </div>
   )
 }
@@ -431,6 +479,7 @@ export const ManageCustomActionsScreen = ({
     if (!name) return
     const triggerTagId = form.triggerTagId ? Number.parseInt(form.triggerTagId, 10) : undefined
     if (form.triggerType === 'automatic' && triggerTagId === undefined) return
+    const checklistItems = formChecklistItemsToStrings(form.checklistItems)
     const conditions = formToConditions(form.conditions)
 
     if (editingActionId !== null) {
@@ -438,6 +487,8 @@ export const ManageCustomActionsScreen = ({
         name,
         triggerType: form.triggerType,
         triggerTagId: form.triggerType === 'automatic' ? triggerTagId : undefined,
+        checklistItems,
+        tagEffects: form.tagEffects,
         conditions,
       })
     } else {
@@ -446,6 +497,8 @@ export const ManageCustomActionsScreen = ({
         name,
         triggerType: form.triggerType,
         triggerTagId: form.triggerType === 'automatic' ? triggerTagId : undefined,
+        checklistItems,
+        tagEffects: form.tagEffects,
         conditions,
         sortOrder: nextSortOrder,
         createdAt: new Date().toISOString(),
@@ -519,7 +572,9 @@ export const ManageCustomActionsScreen = ({
                 <p className='text-sm font-semibold text-espresso truncate'>{action.name}</p>
                 <p className='text-[11px] text-clay/80'>
                   {action.triggerType === 'manual' ? 'Manual button' : `Automatic on "${triggerTagName(action)}" added`}
-                  {' · '}{action.conditions.length} condition{action.conditions.length === 1 ? '' : 's'}
+                  {action.conditions.length > 0
+                    ? ` · ${action.conditions.length} condition${action.conditions.length === 1 ? '' : 's'}`
+                    : ' · applies uniformly (no conditions)'}
                 </p>
               </div>
               <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${action.name}`} onClick={() => openEdit(action)}>
@@ -592,16 +647,40 @@ export const ManageCustomActionsScreen = ({
                 </div>
               ) : null}
 
+              <div className='space-y-2 rounded-xl border border-clay/25 bg-warm-ivory/50 p-3'>
+                <div>
+                  <Label>Applies to every patient</Label>
+                  <p className='text-xs text-clay'>
+                    Runs unconditionally whenever this action is triggered — no condition needs to be defined below for this to run.
+                  </p>
+                </div>
+                <div className='space-y-1'>
+                  <Label className='text-xs'>Checklist items</Label>
+                  <ConditionChecklistItemsEditor
+                    items={form.checklistItems}
+                    onChange={(items) => setForm({ ...form, checklistItems: items })}
+                  />
+                </div>
+                <TagEffectsEditor
+                  tagEffects={form.tagEffects}
+                  tags={tags}
+                  groups={groups}
+                  onChange={(tagEffects) => setForm({ ...form, tagEffects })}
+                />
+              </div>
+
               <div className='space-y-2'>
                 <div className='flex items-center justify-between'>
-                  <Label>Conditions</Label>
+                  <Label>Conditions (optional)</Label>
                   <Button type='button' size='sm' variant='outline' onClick={addCondition}>
                     <Plus className='h-3.5 w-3.5 mr-1' /> Add condition
                   </Button>
                 </div>
                 <p className='text-xs text-clay'>
-                  Each condition matches independently — several can apply to the same patient at once, each running its own checklist
-                  items and tag effects. A patient matching none of these is left unaffected and flagged rather than guessed at.
+                  Adds extra checklist items and tag effects on top of the unconditional ones above, scoped to patients with a specific
+                  combination of tags applied. Each condition matches independently — several can apply to the same patient at once. A
+                  patient this action does nothing for (no unconditional items/effects and no condition met) is left unaffected and
+                  flagged rather than guessed at.
                 </p>
                 <div className='space-y-3'>
                   {form.conditions.map((condition, index) => (
@@ -624,7 +703,7 @@ export const ManageCustomActionsScreen = ({
                       />
                     </div>
                   ))}
-                  {form.conditions.length === 0 ? <p className='text-xs text-clay'>No conditions defined yet — add one to scope this action's effects.</p> : null}
+                  {form.conditions.length === 0 ? <p className='text-xs text-clay'>No conditions defined — this action only runs the unconditional items/effects above for every patient.</p> : null}
                 </div>
               </div>
             </div>

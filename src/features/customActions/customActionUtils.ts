@@ -75,21 +75,28 @@ export const addTagsToPatientDirectly = async (patient: Patient, tagIds: number[
   })
 }
 
+/** True if running `action` would do anything at all for a patient with these matched conditions — the unconditional items/effects always count, even with zero conditions defined. */
+export const actionHasApplicableEffect = (action: CustomAction, matchedConditions: CustomActionCondition[]): boolean =>
+  action.checklistItems.length > 0 || action.tagEffects.length > 0 || matchedConditions.length > 0
+
 /**
- * Applies every already-matched condition's checklist items and Tag Effects for one patient.
- * Checklist items append independently per condition (order doesn't matter), but all matched
- * conditions' Tag Effects are combined into a single atomic write so they can't clobber each other.
+ * Applies an action's unconditional checklist items/Tag Effects plus every already-matched
+ * condition's own checklist items and Tag Effects, for one patient. Checklist items append
+ * independently (order doesn't matter), but every Tag Effect involved — unconditional and
+ * per-condition alike — is combined into a single atomic write so they can't clobber each other.
  */
-export const applyMatchedConditions = async (
+export const applyCustomActionEffects = async (
   patient: Patient,
+  action: CustomAction,
   matchedConditions: CustomActionCondition[],
   tagsById: Map<number, TagDefinition>,
   appendChecklistItems: (items: string[]) => Promise<void> | void,
 ): Promise<void> => {
+  if (action.checklistItems.length > 0) await appendChecklistItems(action.checklistItems)
   for (const condition of matchedConditions) {
     if (condition.checklistItems.length > 0) await appendChecklistItems(condition.checklistItems)
   }
-  const combinedTagEffects = matchedConditions.flatMap((condition) => condition.tagEffects)
+  const combinedTagEffects = [...action.tagEffects, ...matchedConditions.flatMap((condition) => condition.tagEffects)]
   await applyTagEffectsToPatient(patient, combinedTagEffects, tagsById)
 }
 

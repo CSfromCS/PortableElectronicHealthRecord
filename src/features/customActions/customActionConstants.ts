@@ -7,13 +7,6 @@ export const createCustomActionConditionId = (): string => {
   return `condition-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-const alwaysMatchingCondition = (checklistItems: string[]): CustomActionCondition => ({
-  id: createCustomActionConditionId(),
-  requiredTagIds: [],
-  checklistItems,
-  tagEffects: [],
-})
-
 /**
  * Pre-populates the default Custom Actions described in issue #75, point 2. Fully editable
  * afterward — these are just a reasonable starting point, not fixed content. Runs both for
@@ -42,35 +35,41 @@ export const seedDefaultCustomActions = async (
     {
       name: 'Start Admission Papers',
       triggerType: 'manual',
-      conditions: [alwaysMatchingCondition([
+      checklistItems: [
         'Admission orders written',
         'Consent for admission signed',
         'Initial labs ordered',
         'Admission note dictated',
-      ])],
+      ],
+      tagEffects: [],
+      conditions: [],
       sortOrder: 0,
       createdAt: now,
     },
     {
       name: 'Start Discharge Papers (SPDP)',
       triggerType: 'manual',
-      conditions: [alwaysMatchingCondition([
+      checklistItems: [
         'Discharge summary drafted',
         'Discharge medications reconciled',
         'Discharge instructions given',
         'Follow-up appointment scheduled',
-      ])],
+      ],
+      tagEffects: [],
+      conditions: [],
       sortOrder: 1,
       createdAt: now,
     },
     {
       name: 'Start PM Papers',
       triggerType: 'manual',
-      conditions: [alwaysMatchingCondition([
+      checklistItems: [
         'PM notification submitted',
         'PM paperwork completed',
         'Family/next-of-kin notified',
-      ])],
+      ],
+      tagEffects: [],
+      conditions: [],
       sortOrder: 2,
       createdAt: now,
     },
@@ -78,6 +77,8 @@ export const seedDefaultCustomActions = async (
       name: 'MGH Auto-Checklist',
       triggerType: 'automatic',
       triggerTagId: mghTagId,
+      checklistItems: [],
+      tagEffects: [],
       conditions: [
         conditionRequiring([cdTagId, mainTagId], ['MGH (CD, Main): verify primary diagnosis workup', 'MGH (CD, Main): notify primary team']),
         conditionRequiring([cdTagId, referralTagId], ['MGH (CD, Referral): request referral records', 'MGH (CD, Referral): confirm accepting service']),

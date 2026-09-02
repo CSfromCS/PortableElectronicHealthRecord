@@ -101,6 +101,10 @@ export interface CustomAction {
   triggerType: CustomActionTriggerType
   /** Required (and only meaningful) when triggerType === 'automatic': the tag whose absent→present transition fires this action. */
   triggerTagId?: number
+  /** Applied to every triggered patient unconditionally, regardless of any condition below — lets an action apply uniformly with no condition defined at all. */
+  checklistItems: string[]
+  tagEffects: CustomActionTagEffect[]
+  /** Optional additional scoping on top of the unconditional items/effects above — each matching condition's own checklist items and tag effects also apply. */
   conditions: CustomActionCondition[]
   sortOrder: number
   createdAt: string
