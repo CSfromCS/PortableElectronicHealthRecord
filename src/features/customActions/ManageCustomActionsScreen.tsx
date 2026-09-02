@@ -1,5 +1,5 @@
 import { useState, type DragEvent, type TouchEvent } from 'react'
-import { ChevronLeft, GripVertical, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, GripVertical, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -361,6 +361,8 @@ const ConditionCard = ({
   index,
   tags,
   groups,
+  isCollapsed,
+  onToggleCollapsed,
   onChange,
   onRequestRemove,
   dragHandleProps,
@@ -369,10 +371,13 @@ const ConditionCard = ({
   index: number
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
+  isCollapsed: boolean
+  onToggleCollapsed: () => void
   onChange: (next: ConditionFormState) => void
   onRequestRemove: () => void
   dragHandleProps: ReturnType<ReturnType<typeof useDragReorder<string>>['getHandleProps']>
 }) => {
+  const tagsById = new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag]))
   const requiredTagIdSet = new Set(condition.requiredTagIds)
 
   const toggleRequiredTag = (tag: TagDefinition) => {
@@ -388,34 +393,51 @@ const ConditionCard = ({
     <div className='space-y-3 rounded-xl border border-clay/25 bg-blush-sand/20 p-3'>
       <div className='flex items-center gap-2'>
         <DragHandle label={`Drag to reorder condition ${index + 1}`} dragProps={dragHandleProps} />
-        <p className='flex-1 text-xs font-bold uppercase tracking-widest text-clay/60'>Condition {index + 1}</p>
+        <button
+          type='button'
+          className='flex flex-1 min-w-0 items-center gap-1.5 text-left'
+          aria-expanded={!isCollapsed}
+          onClick={onToggleCollapsed}
+        >
+          {isCollapsed ? (
+            <ChevronRight className='h-3.5 w-3.5 shrink-0 text-clay' aria-hidden='true' />
+          ) : (
+            <ChevronDown className='h-3.5 w-3.5 shrink-0 text-clay' aria-hidden='true' />
+          )}
+          <span className='shrink-0 text-xs font-bold uppercase tracking-widest text-clay/60'>Condition {index + 1}</span>
+          <span className='min-w-0 truncate text-xs text-espresso'>{describeRequiredTags(condition.requiredTagIds, tagsById)}</span>
+        </button>
         <Button type='button' variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Remove condition ${index + 1}`} onClick={onRequestRemove}>
           <Trash2 className='h-3.5 w-3.5' />
         </Button>
       </div>
 
-      <div className='space-y-1'>
-        <Label className='text-xs'>Required tags</Label>
-        <p className='text-[11px] text-clay'>
-          Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service).
-        </p>
-        <RequiredTagsPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
-      </div>
+      {isCollapsed ? null : (
+        <>
+          <div className='space-y-1'>
+            <Label className='text-xs'>Required tags</Label>
+            <p className='text-[11px] text-clay'>
+              Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service).
+            </p>
+            <RequiredTagsPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
+          </div>
 
-      <div className='space-y-1'>
-        <Label className='text-xs'>Checklist items</Label>
-        <ConditionChecklistItemsEditor
-          items={condition.checklistItems}
-          onChange={(items) => onChange({ ...condition, checklistItems: items })}
-        />
-      </div>
+          <div className='space-y-1'>
+            <Label className='text-xs'>Checklist items</Label>
+            <ConditionChecklistItemsEditor
+              items={condition.checklistItems}
+              onChange={(items) => onChange({ ...condition, checklistItems: items })}
+            />
+          </div>
 
-      <TagEffectsEditor
-        tagEffects={condition.tagEffects}
-        tags={tags}
-        groups={groups}
-        onChange={(tagEffects) => onChange({ ...condition, tagEffects })}
-      />
+          <TagEffectsEditor
+            tagEffects={condition.tagEffects}
+            tags={tags}
+            groups={groups}
+            onChange={(tagEffects) => onChange({ ...condition, tagEffects })}
+          />
+        </>
+      )}
     </div>
   )
 }
@@ -436,6 +458,10 @@ export const ManageCustomActionsScreen = ({
   const [editingActionId, setEditingActionId] = useState<number | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<CustomAction | null>(null)
   const [pendingConditionRemovalId, setPendingConditionRemovalId] = useState<string | null>(null)
+  // Collapsed by id so each condition's expand/collapse state survives edits to other conditions.
+  // A newly-added condition is never in this set, so it starts expanded; opening an existing
+  // action collapses every one of its conditions by default (see openEdit) for a quick overview.
+  const [collapsedConditionIds, setCollapsedConditionIds] = useState<Set<string>>(new Set())
 
   const orderedActions = sortActions(customActions)
   const tagsById = new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag]))
@@ -444,13 +470,24 @@ export const ManageCustomActionsScreen = ({
   const openCreate = () => {
     setEditingActionId(null)
     setForm(blankCustomActionForm())
+    setCollapsedConditionIds(new Set())
     setFormOpen(true)
   }
 
   const openEdit = (action: CustomAction) => {
     setEditingActionId(action.id ?? null)
     setForm(actionToForm(action))
+    setCollapsedConditionIds(new Set(action.conditions.map((condition) => condition.id)))
     setFormOpen(true)
+  }
+
+  const toggleConditionCollapsed = (conditionId: string) => {
+    setCollapsedConditionIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(conditionId)) next.delete(conditionId)
+      else next.add(conditionId)
+      return next
+    })
   }
 
   const updateCondition = (conditionId: string, next: ConditionFormState) => {
@@ -465,6 +502,12 @@ export const ManageCustomActionsScreen = ({
   }
 
   const removeCondition = (conditionId: string) => {
+    setCollapsedConditionIds((previous) => {
+      if (!previous.has(conditionId)) return previous
+      const next = new Set(previous)
+      next.delete(conditionId)
+      return next
+    })
     setForm((previous) => ({ ...previous, conditions: previous.conditions.filter((condition) => condition.id !== conditionId) }))
     setPendingConditionRemovalId(null)
   }
@@ -697,6 +740,8 @@ export const ManageCustomActionsScreen = ({
                         index={index}
                         tags={tags}
                         groups={groups}
+                        isCollapsed={collapsedConditionIds.has(condition.id)}
+                        onToggleCollapsed={() => toggleConditionCollapsed(condition.id)}
                         onChange={(next) => updateCondition(condition.id, next)}
                         onRequestRemove={() => setPendingConditionRemovalId(condition.id)}
                         dragHandleProps={conditionDrag.getHandleProps(condition.id)}
