@@ -685,6 +685,30 @@ function App() {
       navigatorWithStandalone.standalone === true
     )
   }, [])
+  // Hides the fixed bottom nav while a text field is focused: on-screen keyboards on mobile
+  // push/overlay the layout viewport unreliably (worst on iOS Safari), and a bar pinned to
+  // the viewport bottom ends up floating mid-screen on top of whatever the user is editing.
+  // Sliding it out of the way for the duration of the edit is more robust than trying to
+  // track the real keyboard height across browsers.
+  const [isTextInputFocused, setIsTextInputFocused] = useState(false)
+  useEffect(() => {
+    const isTextEntryElement = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false
+      if (target instanceof HTMLTextAreaElement) return true
+      if (target instanceof HTMLInputElement) {
+        return !['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file'].includes(target.type)
+      }
+      return target.isContentEditable
+    }
+    const handleFocusIn = (event: FocusEvent) => setIsTextInputFocused(isTextEntryElement(event.target))
+    const handleFocusOut = () => setIsTextInputFocused(false)
+    document.addEventListener('focusin', handleFocusIn)
+    document.addEventListener('focusout', handleFocusOut)
+    return () => {
+      document.removeEventListener('focusin', handleFocusIn)
+      document.removeEventListener('focusout', handleFocusOut)
+    }
+  }, [])
   const mobileInstallPlatform = useMemo<MobileInstallPlatform>(() => {
     if (typeof navigator === 'undefined') return 'other'
 
@@ -1962,6 +1986,51 @@ function App() {
     if (!options?.preserveSelectedTab) {
       setSelectedTab('profile')
     }
+  }
+
+  // Swipe left/right anywhere on the mobile patient view to move through active patients
+  // (same room-number order as the quick-switch picker), staying on the same tab. Ignored
+  // when the gesture starts on a drag handle, a form control, or an explicitly opted-out
+  // horizontally-scrollable area (see data-no-swipe), and rejected unless it's clearly more
+  // horizontal than vertical and fast enough to be a swipe rather than a scroll or a tap.
+  const patientSwipeStartRef = useRef<{ x: number; y: number; time: number } | null>(null)
+  const PATIENT_SWIPE_MIN_DISTANCE_PX = 70
+  const PATIENT_SWIPE_MAX_OFF_AXIS_PX = 60
+  const PATIENT_SWIPE_MAX_DURATION_MS = 600
+
+  const handlePatientSwipeTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    const target = event.target
+    if (target instanceof Element && target.closest('[draggable="true"], input, textarea, select, [data-no-swipe]')) {
+      patientSwipeStartRef.current = null
+      return
+    }
+    const touch = event.touches[0]
+    if (!touch) return
+    patientSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() }
+  }
+
+  const handlePatientSwipeTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const start = patientSwipeStartRef.current
+    patientSwipeStartRef.current = null
+    if (!start || !selectedPatient) return
+
+    const touch = event.changedTouches[0]
+    if (!touch) return
+    const deltaX = touch.clientX - start.x
+    const deltaY = touch.clientY - start.y
+    if (Date.now() - start.time > PATIENT_SWIPE_MAX_DURATION_MS) return
+    if (Math.abs(deltaX) < PATIENT_SWIPE_MIN_DISTANCE_PX || Math.abs(deltaY) > PATIENT_SWIPE_MAX_OFF_AXIS_PX) return
+
+    const orderedIds = quickSwitchPatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
+    const currentIndex = orderedIds.indexOf(selectedPatient.id ?? -1)
+    if (currentIndex === -1) return
+    const nextId = orderedIds[deltaX < 0 ? currentIndex + 1 : currentIndex - 1]
+    if (nextId === undefined) return
+    const nextPatient = quickSwitchPatients.find((patient) => patient.id === nextId)
+    if (!nextPatient) return
+
+    void selectPatient(nextPatient, { preserveSelectedTab: true })
+    setNotice(`${nextPatient.roomNumber} - ${nextPatient.lastName}, ${nextPatient.firstName}`)
   }
 
   const toggleDischarge = async (patient: Patient) => {
@@ -4557,7 +4626,12 @@ function App() {
 
             {view === 'patient' ? (
               selectedPatient ? (
-              <Card className='border-0 bg-transparent shadow-none sm:bg-white/80 sm:border-clay/25 sm:shadow-md sm:ring-1 sm:ring-clay/10'>
+              <Card
+                className='border-0 bg-transparent shadow-none sm:bg-white/80 sm:border-clay/25 sm:shadow-md sm:ring-1 sm:ring-clay/10'
+                onTouchStart={handlePatientSwipeTouchStart}
+                onTouchEnd={handlePatientSwipeTouchEnd}
+                onTouchCancel={() => { patientSwipeStartRef.current = null }}
+              >
                 <CardHeader className='sticky top-0 z-20 py-2 px-0 pb-2 bg-warm-ivory/97 backdrop-blur-sm border-b border-clay/15 mx-0 sm:static sm:py-3 sm:px-4 sm:pb-0 sm:bg-transparent sm:backdrop-blur-none sm:border-b-0'>
                   <Select
                     value={isPatientActive(selectedPatient, tagsById) ? (selectedPatient.id?.toString() ?? '') : ''}
@@ -6371,7 +6445,7 @@ function App() {
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
                     ['Navigate on mobile', 'The bottom bar shows your visible patient tabs in a scrollable row — swipe or tap to switch. Use ← Back to return to the patient list.'],
                     ['Customize your tabs', 'Go to Settings → Patient Tabs to hide tabs you don\'t use and drag the rest into your preferred order. Hiding a tab only hides it — the data underneath is never deleted.'],
-                    ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. Discharged patients are hidden from this quick-switch list, and you can scroll through the list when many active patients are present.'],
+                    ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. On mobile, swipe left or right anywhere on the patient view to move to the next or previous patient (by room number order) instead. Discharged patients are hidden from this quick-switch list, and you can scroll through the list when many active patients are present.'],
                     ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes. Drag blocks to set their priority. Unresolved problems carry forward to the next date automatically — mark one Resolved once it no longer needs tracking. Tap Copy latest entry to copy the previous problem blocks in order, assessment, and plan.'],
                     ['Track a daily checklist', 'Open Checklist, add short tasks for the date, and check them off as you go. Pending items carry forward automatically to the next date; completed items move to the bottom. Drag any item to override that order.'],
                     ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Completing an item moves it to the bottom; reopening it moves it before the first completed item. Drag any item to override that order.'],
@@ -6567,7 +6641,7 @@ function App() {
                         {'>'}
                       </Button>
                     </div>
-                    <div className='w-full overflow-x-auto overflow-y-hidden rounded border border-clay/25 bg-white touch-pan-x'>
+                    <div className='w-full overflow-x-auto overflow-y-hidden rounded border border-clay/25 bg-white touch-pan-x' data-no-swipe>
                       <div className='flex w-max min-w-full gap-1.5 p-1.5'>
                         {selectedAttachmentCarousel.entries.map((entry, index) => {
                           const previewUrl = attachmentPreviewUrls[entry.id]
@@ -6862,8 +6936,9 @@ function App() {
         </Dialog>
       </main>
       <nav className={cn(
-        'fixed inset-x-0 bottom-0 z-40 border-t border-clay/25 bg-warm-ivory/97 backdrop-blur-md sm:hidden',
+        'fixed inset-x-0 bottom-0 z-40 border-t border-clay/25 bg-warm-ivory/97 backdrop-blur-md sm:hidden transition-transform duration-150 ease-out',
         isStandaloneDisplayMode ? 'pb-[calc(0.375rem+env(safe-area-inset-bottom))]' : 'pb-1.5',
+        isTextInputFocused ? 'translate-y-full pointer-events-none' : 'translate-y-0',
       )}>
         {view === 'patient' && selectedPatient ? (
           /* Patient tab navigation — horizontally scrollable so it works for any number of visible tabs */
