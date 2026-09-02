@@ -4000,32 +4000,30 @@ function App() {
     }
   }
 
-  const clearDischargedPatients = async () => {
-    const allPatients = await db.patients.toArray()
-    const inactivePatients = allPatients.filter((patient) => !isPatientActive(patient, tagsById))
-    const dischargedIds = inactivePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
-
-    if (dischargedIds.length === 0) {
-      setNotice('No inactive patients to clear.')
-      return
-    }
+  // Shared by both "Clear inactive patients" (Settings) and the Patients-list selection-mode
+  // Delete button: removes the patient rows plus everything keyed to those patientIds across
+  // every other table, and resets the open Profile/Vitals/etc. workspace if the currently open
+  // patient was among those deleted.
+  const deletePatientsAndRelatedData = async (patientIds: number[]) => {
+    if (patientIds.length === 0) return
 
     await db.transaction(
       'rw',
-      [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments, db.tagEvents],
+      [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments, db.tagEvents, db.customActionRuns],
       async () => {
-      await db.patients.bulkDelete(dischargedIds)
-      await db.dailyUpdates.where('patientId').anyOf(dischargedIds).delete()
-      await db.vitals.where('patientId').anyOf(dischargedIds).delete()
-      await db.medications.where('patientId').anyOf(dischargedIds).delete()
-      await db.labs.where('patientId').anyOf(dischargedIds).delete()
-      await db.orders.where('patientId').anyOf(dischargedIds).delete()
-      await db.photoAttachments.where('patientId').anyOf(dischargedIds).delete()
-      await db.tagEvents.where('patientId').anyOf(dischargedIds).delete()
+      await db.patients.bulkDelete(patientIds)
+      await db.dailyUpdates.where('patientId').anyOf(patientIds).delete()
+      await db.vitals.where('patientId').anyOf(patientIds).delete()
+      await db.medications.where('patientId').anyOf(patientIds).delete()
+      await db.labs.where('patientId').anyOf(patientIds).delete()
+      await db.orders.where('patientId').anyOf(patientIds).delete()
+      await db.photoAttachments.where('patientId').anyOf(patientIds).delete()
+      await db.tagEvents.where('patientId').anyOf(patientIds).delete()
+      await db.customActionRuns.where('patientId').anyOf(patientIds).delete()
     },
     )
 
-    if (selectedPatientId !== null && dischargedIds.includes(selectedPatientId)) {
+    if (selectedPatientId !== null && patientIds.includes(selectedPatientId)) {
       setSelectedPatientId(null)
       setDailyUpdateForm(initialDailyUpdateForm)
       setVitalForm(initialVitalForm())
@@ -4052,8 +4050,31 @@ function App() {
       setDailyUpdateId(undefined)
       setLastSavedAt(null)
     }
+  }
 
+  const clearDischargedPatients = async () => {
+    const allPatients = await db.patients.toArray()
+    const inactivePatients = allPatients.filter((patient) => !isPatientActive(patient, tagsById))
+    const dischargedIds = inactivePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
+
+    if (dischargedIds.length === 0) {
+      setNotice('No inactive patients to clear.')
+      return
+    }
+
+    await deletePatientsAndRelatedData(dischargedIds)
     setNotice('Cleared inactive patients.')
+  }
+
+  // Delete via the Patients-list selection mode (single or multiple patients) — always routed
+  // through requestDeleteConfirmation by the caller, never fired directly from a selection change.
+  const deleteSelectedPatients = async () => {
+    const patientIds = [...selectedPatientIdsForTagging]
+    if (patientIds.length === 0) return
+
+    await deletePatientsAndRelatedData(patientIds)
+    setNotice(`Deleted ${patientIds.length} patient${patientIds.length === 1 ? '' : 's'}.`)
+    exitPatientTaggingSelectionMode()
   }
 
   const addSamplePatient = async () => {
@@ -4712,6 +4733,20 @@ function App() {
                       {action.name}
                     </Button>
                   ))}
+                  <Button
+                    size='sm'
+                    variant='destructive'
+                    className='h-7 text-xs'
+                    disabled={selectedPatientIdsForTagging.size === 0}
+                    onClick={() => requestDeleteConfirmation({
+                      title: 'Delete patients?',
+                      message: `Permanently delete ${selectedPatientIdsForTagging.size} patient${selectedPatientIdsForTagging.size === 1 ? '' : 's'} and all of their daily updates, vitals, medications, labs, orders, photos, tag events, and custom action run history? This cannot be undone.`,
+                      confirmLabel: 'Yes, delete permanently',
+                      onConfirm: () => deleteSelectedPatients(),
+                    })}
+                  >
+                    Delete
+                  </Button>
                   <Button size='sm' variant='ghost' className='h-7 text-xs' onClick={exitPatientTaggingSelectionMode}>
                     Cancel
                   </Button>
@@ -4740,13 +4775,14 @@ function App() {
                   isPatientSelectedForTagging && 'ring-2 ring-action-primary/50',
                 )}>
                   <CardContent
-                    className='flex items-center gap-3 py-3 px-4'
+                    className='flex items-center gap-3 py-3 px-4 cursor-pointer'
                     onTouchStart={() => handlePatientCardTouchStart(patient.id)}
                     onTouchEnd={handlePatientCardTouchEnd}
                     onTouchMove={cancelPatientCardLongPress}
                     onTouchCancel={cancelPatientCardLongPress}
                     onClick={() => {
                       if (patientTagSelectionMode) togglePatientTaggingSelection(patient.id)
+                      else selectPatient(patient)
                     }}
                   >
                     {patientTagSelectionMode ? (
@@ -4804,15 +4840,6 @@ function App() {
                         <AmbiguityBadge ambiguity={ambiguity} />
                         <TagChipRow tags={visibleTags} />
                       </div>
-                      {!patientTagSelectionMode ? (
-                        <Button
-                          size='sm'
-                          variant={patientActive ? 'default' : 'secondary'}
-                          onClick={() => selectPatient(patient)}
-                        >
-                          Open
-                        </Button>
-                      ) : null}
                     </div>
                   </CardContent>
                 </Card>
@@ -6708,9 +6735,9 @@ function App() {
                   </button>
                 </div>
               </div>
-              {/* Tags */}
+              {/* Customize */}
               <div className='space-y-2'>
-                <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tags</p>
+                <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Customize</p>
                 <div className='flex flex-col gap-2'>
                   <button
                     type='button'
@@ -6738,12 +6765,6 @@ function App() {
                       <p className='text-xs text-clay mt-0.5'>Configure checklist-generating, tag-effect buttons scoped by Category/Relationship</p>
                     </div>
                   </button>
-                </div>
-              </div>
-              {/* Tabs */}
-              <div className='space-y-2'>
-                <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tabs</p>
-                <div className='flex flex-col gap-2'>
                   <button
                     type='button'
                     onClick={() => setView('tabSettings')}
