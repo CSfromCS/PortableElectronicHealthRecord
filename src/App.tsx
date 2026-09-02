@@ -531,6 +531,11 @@ function App() {
   const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags' | 'tabSettings'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
+  // Snapshot, per patient, of whether tags were already applied the first time this patient's
+  // tags were viewed this session — seeded once and never revisited, so later tag adds/removes
+  // can't retroactively change the collapse default for a segment the user is already looking
+  // at. Resets naturally on a fresh app open (new component instance).
+  const tagsCollapseDefaultSeedRef = useRef<Map<number, boolean>>(new Map())
   const [searchQuery, setSearchQuery] = useState('')
   const [isAddPatientCollapsed, setIsAddPatientCollapsed] = useState(() => loadAddPatientCollapsed())
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
@@ -1059,10 +1064,26 @@ function App() {
   // Referral Date only appears once the user has applied a "Referral" tag to the patient.
   const hasReferralTag = useMemo(() => appliedPatientTags.some((tag) => tag.name === 'Referral'), [appliedPatientTags])
 
-  // Sticky per patient: undefined (never toggled) defaults to collapsed once tags are applied,
-  // expanded while none are. Zero applied tags always forces expanded (nothing to collapse to).
-  const isEditingTags = appliedPatientTags.length === 0
-    || (selectedPatient?.id !== undefined ? (tagsEditOverrideByPatientId.get(selectedPatient.id) ?? false) : true)
+  // Sticky per patient: an explicit user toggle always wins. Absent one, falls back to a default
+  // snapshotted the first time this patient's tags were viewed this session (collapsed if tags
+  // were already applied then, expanded otherwise) — later tag adds/removes don't reconsider
+  // that snapshot, only another user toggle does. Zero applied tags right now always forces
+  // expanded, regardless of sticky state, since there's nothing to show in the collapsed view.
+  const isEditingTags = useMemo(() => {
+    if (selectedPatient?.id === undefined) return true
+    const patientId = selectedPatient.id
+
+    if (!tagsCollapseDefaultSeedRef.current.has(patientId)) {
+      tagsCollapseDefaultSeedRef.current.set(patientId, appliedPatientTags.length > 0)
+    }
+
+    if (appliedPatientTags.length === 0) return true
+
+    const override = tagsEditOverrideByPatientId.get(patientId)
+    if (override !== undefined) return override
+
+    return !tagsCollapseDefaultSeedRef.current.get(patientId)
+  }, [appliedPatientTags, selectedPatient, tagsEditOverrideByPatientId])
 
   const activePatients = useMemo(() => (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)), [patients, tagsById])
 
@@ -2172,7 +2193,7 @@ function App() {
         aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
       />
       <TapToEditField
-        className='flex-1 px-1.5 py-0.5 text-sm'
+        className='min-w-0 flex-1 px-1.5 py-0.5 text-sm'
         ariaLabel='Checklist item text'
         emptyText='Tap to edit'
         value={item.text}
@@ -2378,7 +2399,7 @@ function App() {
           onChange={(event) => updateMasterChecklistItemCompletion(item.patientId, item.index, event.target.checked)}
           aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
         />
-        <div className='flex-1'>
+        <div className='min-w-0 flex-1'>
           <TapToEditField
             className='px-1.5 py-0.5 text-sm'
             ariaLabel='Checklist item text'
