@@ -2,8 +2,11 @@ import Dexie, { type EntityTable } from 'dexie'
 import { normalizeDailyUpdate } from './features/problems/problemUtils'
 import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
+import { seedDefaultCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
 import type {
+  CustomAction,
+  CustomActionRun,
   DailyUpdate,
   LabEntry,
   MedicationEntry,
@@ -30,6 +33,8 @@ const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
   tagGroups: EntityTable<TagGroupDefinition, 'id'>
   tagDefinitions: EntityTable<TagDefinition, 'id'>
   tagEvents: EntityTable<TagEvent, 'id'>
+  customActions: EntityTable<CustomAction, 'id'>
+  customActionRuns: EntityTable<CustomActionRun, 'id'>
 }
 
 db.version(1).stores({
@@ -147,14 +152,16 @@ const seedDefaultTagGroupsAndTags = async (
   return tagIdByName
 }
 
-// Seeds default tag groups/tags for brand-new installs. Dexie only runs version().upgrade()
-// callbacks when migrating an existing database — a fresh IndexedDB is created directly at the
-// latest schema version, so first-time installs need this separate 'populate' hook instead.
+// Seeds default tag groups/tags/custom actions for brand-new installs. Dexie only runs
+// version().upgrade() callbacks when migrating an existing database — a fresh IndexedDB is
+// created directly at the latest schema version, so first-time installs need this separate
+// 'populate' hook instead.
 db.on('populate', async () => {
-  await seedDefaultTagGroupsAndTags(
+  const tagIdByName = await seedDefaultTagGroupsAndTags(
     (group) => db.tagGroups.add(group) as Promise<number>,
     (tag) => db.tagDefinitions.add(tag) as Promise<number>,
   )
+  await seedDefaultCustomActions(tagIdByName, (action) => db.customActions.add(action) as Promise<number>)
 })
 
 db.version(5).stores({
@@ -401,6 +408,35 @@ db.version(9).stores({
     const createdAt = patient.admitDate ? new Date(patient.admitDate).toISOString() : (patient.lastModified ?? new Date().toISOString())
     return patientTable.update(patient.id, { createdAt })
   }))
+})
+
+db.version(10).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+}).upgrade(async (tx) => {
+  // Adds the general Custom Action system (issue #75): configurable named actions that append
+  // checklist items scoped by Category/Relationship tags and/or add/remove tags, fired manually
+  // or automatically when a chosen tag is newly applied. Pre-populate the same defaults a fresh
+  // install gets, using this existing database's own tag definitions.
+  const tagDefinitionTable = tx.table<TagDefinition, number>('tagDefinitions')
+  const customActionTable = tx.table<CustomAction, number>('customActions')
+  const existingTags = await tagDefinitionTable.toArray()
+  const tagIdByName = new Map<string, number>(
+    existingTags.filter((tag) => tag.id !== undefined).map((tag) => [tag.name, tag.id as number]),
+  )
+  await seedDefaultCustomActions(tagIdByName, (action) => customActionTable.add(action))
 })
 
 export { db }

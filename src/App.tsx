@@ -35,6 +35,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { MasterChecklistQuickAdd } from '@/features/checklist/MasterChecklistQuickAdd'
+import {
+  appendChecklistItemsForPatientDate,
+  insertNewChecklistItem,
+  normalizeChecklistItems,
+  selectLatestDailyUpdate,
+  toPendingChecklistItems,
+} from '@/features/checklist/checklistUtils'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
@@ -128,9 +135,15 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid } from 'lucide-react'
-import type { TagDefinition, TagEvent, TagGroupDefinition } from './types'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Zap } from 'lucide-react'
+import type { CustomAction, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
+import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
+import {
+  hasCustomActionRunOnDate,
+  recordCustomActionRun,
+  runCustomActionForPatient,
+} from './features/customActions/customActionUtils'
 import { TagPicker } from './features/tags/TagPicker'
 import { BulkTagPicker } from './features/tags/BulkTagPicker'
 import { TagChip, TagChipRow } from './features/tags/TagChip'
@@ -302,37 +315,11 @@ const initialDailyUpdateForm: DailyUpdateFormState = {
 // Once a field has a value, its label recedes so the value itself carries the visual weight.
 const fieldLabelClassName = (hasValue: boolean) => (hasValue ? 'text-xs font-normal text-clay/70 transition-colors' : undefined)
 
-const normalizeChecklistItems = (items: DailyChecklistItem[] | undefined) =>
-  (items ?? [])
-    .map((item) => ({
-      text: item.text.trim(),
-      completed: Boolean(item.completed),
-    }))
-    .filter((item) => item.text.length > 0)
-
-const toPendingChecklistItems = (items: DailyChecklistItem[] | undefined) =>
-  normalizeChecklistItems(items)
-    .filter((item) => !item.completed)
-    .map((item) => ({ ...item, completed: false }))
-
 const reorderChecklistItems = (items: DailyChecklistItem[], sourceIndex: number, targetIndex: number) => {
   if (sourceIndex === targetIndex || !items[sourceIndex] || !items[targetIndex]) return items
   const nextItems = [...items]
   const [movedItem] = nextItems.splice(sourceIndex, 1)
   nextItems.splice(targetIndex, 0, movedItem)
-  return nextItems
-}
-
-/**
- * New items go immediately after the last unchecked item (i.e. right before the first checked
- * item), or at the very top if every existing item is already checked — mirroring where a
- * reopened item lands via setChecklistItemCompletion below.
- */
-const insertNewChecklistItem = (items: DailyChecklistItem[], newItem: DailyChecklistItem) => {
-  const firstCompletedIndex = items.findIndex((item) => item.completed)
-  const insertIndex = firstCompletedIndex < 0 ? items.length : firstCompletedIndex
-  const nextItems = [...items]
-  nextItems.splice(insertIndex, 0, newItem)
   return nextItems
 }
 
@@ -351,27 +338,6 @@ const setChecklistItemCompletion = (items: DailyChecklistItem[], index: number, 
   const firstCompletedIndex = nextItems.findIndex((item) => item.completed)
   nextItems.splice(firstCompletedIndex < 0 ? nextItems.length : firstCompletedIndex, 0, updatedItem)
   return nextItems
-}
-
-const selectLatestDailyUpdate = (updates: DailyUpdate[]) => {
-  if (updates.length === 0) return null
-
-  return updates.reduce((latest, candidate) => {
-    if (candidate.date > latest.date) {
-      return candidate
-    }
-    if (candidate.date < latest.date) {
-      return latest
-    }
-
-    const latestTimestamp = Date.parse(latest.lastUpdated)
-    const candidateTimestamp = Date.parse(candidate.lastUpdated)
-    if (Number.isFinite(candidateTimestamp) && Number.isFinite(latestTimestamp)) {
-      return candidateTimestamp >= latestTimestamp ? candidate : latest
-    }
-
-    return candidate
-  })
 }
 
 const getNormalAaDo2 = (age: number): number => {
@@ -528,7 +494,7 @@ function App() {
   const patientLongPressFiredRef = useRef(false)
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [pendingMainServiceTagIds, setPendingMainServiceTagIds] = useState<number[]>([])
-  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags' | 'tabSettings'>('patients')
+  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags' | 'tabSettings' | 'manageCustomActions'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
   // Snapshot, per patient, of whether tags were already applied the first time this patient's
@@ -645,6 +611,8 @@ function App() {
   const [bulkTagPickerSelectedIds, setBulkTagPickerSelectedIds] = useState<Set<number>>(new Set())
   const [bulkTagConfirmOpen, setBulkTagConfirmOpen] = useState(false)
   const [isBulkTagApplying, setIsBulkTagApplying] = useState(false)
+  const [bulkCustomActionTarget, setBulkCustomActionTarget] = useState<CustomAction | null>(null)
+  const [isBulkCustomActionApplying, setIsBulkCustomActionApplying] = useState(false)
   const [reportVitalsDateFrom, setReportVitalsDateFrom] = useState(() => toLocalISODate())
   const [reportVitalsDateTo, setReportVitalsDateTo] = useState(() => toLocalISODate())
   const [reportVitalsTimeFrom, setReportVitalsTimeFrom] = useState('00:00')
@@ -730,6 +698,12 @@ function App() {
   const tagGroups = useLiveQuery(() => db.tagGroups.toArray(), [])
   const tagDefinitions = useLiveQuery(() => db.tagDefinitions.toArray(), [])
   const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
+  const customActions = useLiveQuery(() => db.customActions.toArray(), [])
+  const customActionRuns = useLiveQuery(() => db.customActionRuns.toArray(), [])
+  const manualCustomActions = useMemo(
+    () => (customActions ?? []).filter((action) => action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
+    [customActions],
+  )
   const dischargedTag = useMemo(() => (tagDefinitions ?? []).find((tag) => tag.name === 'Discharged'), [tagDefinitions])
   const serviceGroupId = useMemo(
     () => (tagGroups ?? []).find((group) => group.name === SERVICE_TAG_GROUP_NAME)?.id,
@@ -847,7 +821,26 @@ function App() {
     setIsBulkTagApplying(true)
     try {
       if (bulkTagDialogMode === 'add') {
+        // Snapshot which (patient, tag) pairs are actually transitioning absent→present *before*
+        // applying, since Automatic Custom Actions must only fire on that transition (point 4) —
+        // applyTagsToPatients itself skips tags a patient already has, but doesn't report which.
+        const newlyAddedTagsByPatientId = new Map<number, TagDefinition[]>()
+        targetPatients.forEach((patient) => {
+          if (patient.id === undefined) return
+          const existingTagIds = new Set(patient.tagIds ?? [])
+          const newlyAdded = bulkTagPickerSelectedTags.filter((tag) => tag.id !== undefined && !existingTagIds.has(tag.id))
+          if (newlyAdded.length > 0) newlyAddedTagsByPatientId.set(patient.id, newlyAdded)
+        })
+
         await applyTagsToPatients(targetPatients, bulkTagPickerSelectedTags)
+
+        for (const patient of targetPatients) {
+          if (patient.id === undefined) continue
+          const newlyAdded = newlyAddedTagsByPatientId.get(patient.id)
+          if (!newlyAdded || newlyAdded.length === 0) continue
+          const patientAfterAdd: Patient = { ...patient, tagIds: [...(patient.tagIds ?? []), ...newlyAdded.map((tag) => tag.id as number)] }
+          await runAutomaticCustomActionsForTagAddition(patientAfterAdd, newlyAdded.map((tag) => tag.id as number))
+        }
       } else {
         await removeTagsFromPatients(targetPatients, bulkTagPickerSelectedTags)
       }
@@ -856,6 +849,49 @@ function App() {
       setBulkTagConfirmOpen(false)
       setBulkTagDialogMode(null)
       setBulkTagPickerSelectedIds(new Set())
+      exitPatientTaggingSelectionMode()
+    }
+  }
+
+  // Bulk-triggers a Manual Custom Action for every selected patient independently (point 6):
+  // each patient resolves its own Task List Variant, hits its own ambiguity case if applicable,
+  // and the once-per-day duplicate-prevention rule (point 5) is applied per-patient by simply
+  // skipping patients who already ran this action today rather than blocking the whole batch.
+  const confirmBulkCustomAction = async () => {
+    const action = bulkCustomActionTarget
+    if (!action || action.id === undefined) return
+    const actionId = action.id
+    const targetPatients = (patients ?? []).filter(
+      (patient) => patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id),
+    )
+    if (targetPatients.length === 0) return
+
+    setIsBulkCustomActionApplying(true)
+    try {
+      const today = toLocalISODate()
+      const ambiguityMessages: string[] = []
+      for (const patient of targetPatients) {
+        if (patient.id === undefined) continue
+        if (hasCustomActionRunOnDate(customActionRuns ?? [], actionId, patient.id, today)) continue
+
+        const result = await runCustomActionForPatient(
+          patient,
+          action,
+          tagsById,
+          (items) => appendCustomActionChecklistItems(patient.id as number, today, items),
+        )
+        await recordCustomActionRun(actionId, patient.id, today)
+        if (result.ambiguityMessage) ambiguityMessages.push(result.ambiguityMessage)
+      }
+
+      setNotice(
+        ambiguityMessages.length > 0
+          ? `Skipped ${ambiguityMessages.length} patient${ambiguityMessages.length === 1 ? '' : 's'}: ${ambiguityMessages.join(' ')}`
+          : `Ran "${action.name}" for ${targetPatients.length} patient${targetPatients.length === 1 ? '' : 's'}.`,
+      )
+    } finally {
+      setIsBulkCustomActionApplying(false)
+      setBulkCustomActionTarget(null)
       exitPatientTaggingSelectionMode()
     }
   }
@@ -2466,6 +2502,68 @@ function App() {
       itemIndex === index ? { ...item, text: nextText } : item
     )))
   }, [updateMasterChecklist])
+
+  // Custom Actions (issue #75) append checklist items to a specific patient+date. When that's the
+  // patient/date already open in the Checklist tab, updating local form state (and letting the
+  // existing autosave persist it) avoids clobbering any other unsaved edits on the same daily
+  // entry; otherwise it writes straight to IndexedDB the same way updateMasterChecklist does.
+  const appendCustomActionChecklistItems = useCallback(async (patientId: number, date: string, items: string[]) => {
+    if (items.length === 0) return
+
+    if (selectedPatientId === patientId && dailyDate === date) {
+      setDailyUpdateForm((previous) => ({
+        ...previous,
+        checklist: items.reduce((checklist, text) => insertNewChecklistItem(checklist, { text, completed: false }), previous.checklist),
+      }))
+      setDailyDirty(true)
+      return
+    }
+
+    await appendChecklistItemsForPatientDate(patientId, date, items)
+    await touchPatientLastModified(patientId)
+  }, [dailyDate, selectedPatientId, touchPatientLastModified])
+
+  // Fires every "Automatic on tag added" Custom Action whose trigger tag is in `addedTagIds`,
+  // regardless of how the tag(s) got added (single Profile-tab toggle or bulk Add Tag) — point 4.
+  const runAutomaticCustomActionsForTagAddition = useCallback(async (patientAfterAdd: Patient, addedTagIds: number[]) => {
+    if (patientAfterAdd.id === undefined || addedTagIds.length === 0) return
+    const addedTagIdSet = new Set(addedTagIds)
+    const matchingActions = (customActions ?? []).filter(
+      (action) => action.triggerType === 'automatic' && action.triggerTagId !== undefined && addedTagIdSet.has(action.triggerTagId),
+    )
+    if (matchingActions.length === 0) return
+
+    const today = toLocalISODate()
+    const ambiguityMessages: string[] = []
+    for (const action of matchingActions) {
+      const result = await runCustomActionForPatient(
+        patientAfterAdd,
+        action,
+        tagsById,
+        (items) => appendCustomActionChecklistItems(patientAfterAdd.id as number, today, items),
+      )
+      if (result.ambiguityMessage) ambiguityMessages.push(result.ambiguityMessage)
+    }
+    if (ambiguityMessages.length > 0) setNotice(ambiguityMessages.join(' '))
+  }, [appendCustomActionChecklistItems, customActions, tagsById])
+
+  // Manual trigger button on a single patient's Checklist tab (point 5). Duplicate-prevention is
+  // handled by disabling the button once a run is recorded for this action+patient+date, so this
+  // itself doesn't need to guard against a second press beyond what the UI already prevents.
+  const triggerCustomActionForSelectedPatient = useCallback(async (action: CustomAction) => {
+    if (!selectedPatient || selectedPatient.id === undefined || action.id === undefined) return
+    const patientId = selectedPatient.id
+    const actionId = action.id
+
+    const result = await runCustomActionForPatient(
+      selectedPatient,
+      action,
+      tagsById,
+      (items) => appendCustomActionChecklistItems(patientId, dailyDate, items),
+    )
+    await recordCustomActionRun(actionId, patientId, dailyDate)
+    setNotice(result.ambiguityMessage ?? `Ran "${action.name}".`)
+  }, [appendCustomActionChecklistItems, dailyDate, selectedPatient, tagsById])
 
   const moveMasterChecklistItem = useCallback((patientId: number, index: number, direction: 'up' | 'down') => {
     void updateMasterChecklist(patientId, (previous) => {
@@ -4411,7 +4509,7 @@ function App() {
                 </Button>
               ) : null}
               <Button variant={view === 'checklist' ? 'default' : 'ghost'} size='sm' onClick={() => setView('checklist')}>Checklist</Button>
-              <Button variant={view === 'settings' || view === 'manageTags' || view === 'tabSettings' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
+              <Button variant={view === 'settings' || view === 'manageTags' || view === 'tabSettings' || view === 'manageCustomActions' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
             </div>
           </div>
         </div>
@@ -4431,6 +4529,13 @@ function App() {
           <TabSettingsScreen
             settings={patientTabSettings}
             onChange={updatePatientTabSettings}
+            onBack={() => setView('settings')}
+          />
+        ) : view === 'manageCustomActions' ? (
+          <ManageCustomActionsScreen
+            customActions={customActions ?? []}
+            tags={tagDefinitions ?? []}
+            groups={tagGroups ?? []}
             onBack={() => setView('settings')}
           />
         ) : view !== 'settings' ? (
@@ -4553,6 +4658,18 @@ function App() {
                   >
                     Remove Tag
                   </Button>
+                  {manualCustomActions.map((action) => (
+                    <Button
+                      key={action.id}
+                      size='sm'
+                      variant='outline'
+                      className='h-7 text-xs'
+                      disabled={selectedPatientIdsForTagging.size === 0}
+                      onClick={() => setBulkCustomActionTarget(action)}
+                    >
+                      {action.name}
+                    </Button>
+                  ))}
                   <Button size='sm' variant='ghost' className='h-7 text-xs' onClick={exitPatientTaggingSelectionMode}>
                     Cancel
                   </Button>
@@ -4704,6 +4821,24 @@ function App() {
                   <Button variant='ghost' onClick={() => setBulkTagConfirmOpen(false)} disabled={isBulkTagApplying}>Back</Button>
                   <Button onClick={() => void confirmBulkTagAction()} disabled={isBulkTagApplying}>
                     {isBulkTagApplying ? 'Applying…' : 'Confirm'}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={bulkCustomActionTarget !== null} onOpenChange={(open) => { if (!open) setBulkCustomActionTarget(null) }}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Run "{bulkCustomActionTarget?.name}"?</DialogTitle>
+                </DialogHeader>
+                <p className='text-sm text-espresso'>
+                  Run "{bulkCustomActionTarget?.name}" for {selectedPatientIdsForTagging.size} patient{selectedPatientIdsForTagging.size === 1 ? '' : 's'}?
+                  Each patient's checklist items and tag effects are resolved independently.
+                </p>
+                <div className='flex justify-end gap-2 pt-2'>
+                  <Button variant='ghost' onClick={() => setBulkCustomActionTarget(null)} disabled={isBulkCustomActionApplying}>Cancel</Button>
+                  <Button onClick={() => void confirmBulkCustomAction()} disabled={isBulkCustomActionApplying}>
+                    {isBulkCustomActionApplying ? 'Running…' : 'Confirm'}
                   </Button>
                 </div>
               </DialogContent>
@@ -4978,7 +5113,16 @@ function App() {
                           patient={selectedPatient}
                           tags={nonServiceTagDefinitions}
                           groups={tagGroups ?? []}
-                          onToggle={(tag) => void toggleTagOnPatient(selectedPatient, tag)}
+                          onToggle={(tag) => {
+                            const wasApplied = tag.id !== undefined && (selectedPatient.tagIds ?? []).includes(tag.id)
+                            void (async () => {
+                              await toggleTagOnPatient(selectedPatient, tag)
+                              if (!wasApplied && tag.id !== undefined) {
+                                const patientAfterAdd: Patient = { ...selectedPatient, tagIds: [...(selectedPatient.tagIds ?? []), tag.id] }
+                                await runAutomaticCustomActionsForTagAddition(patientAfterAdd, [tag.id])
+                              }
+                            })()
+                          }}
                         />
                       ) : (
                         <div className='flex items-center gap-1.5'>
@@ -5191,6 +5335,31 @@ function App() {
                 <TabsContent value='checklist'>
                   <div className='space-y-3'>
                     {renderDailyDateHeader('checklist')}
+                    {manualCustomActions.length > 0 && selectedPatient ? (
+                      <div className='space-y-1'>
+                        <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Custom Actions</p>
+                        <div className='flex flex-wrap gap-1.5'>
+                          {manualCustomActions.map((action) => {
+                            const alreadyRun = hasCustomActionRunOnDate(customActionRuns ?? [], action.id, selectedPatient.id, dailyDate)
+                            return (
+                              <Button
+                                key={action.id}
+                                type='button'
+                                size='sm'
+                                variant='outline'
+                                className='h-7 text-xs gap-1'
+                                disabled={alreadyRun}
+                                title={alreadyRun ? `Already run for ${dailyDate}` : undefined}
+                                onClick={() => void triggerCustomActionForSelectedPatient(action)}
+                              >
+                                <Zap className='h-3.5 w-3.5' aria-hidden='true' />
+                                {alreadyRun ? `${action.name} (done)` : action.name}
+                              </Button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
                     <div className='space-y-2'>
                       <p className='text-xs text-clay'>Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
                       <div className='flex flex-wrap gap-2'>
@@ -6514,6 +6683,19 @@ function App() {
                       <p className='text-xs text-clay mt-0.5'>Create, edit, and reorder tags and tag groups</p>
                     </div>
                   </button>
+                  <button
+                    type='button'
+                    onClick={() => setView('manageCustomActions')}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-primary/10 flex items-center justify-center shrink-0'>
+                      <Zap className='h-4 w-4 text-action-primary' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-espresso'>Manage Custom Actions</p>
+                      <p className='text-xs text-clay mt-0.5'>Configure checklist-generating, tag-effect buttons scoped by Category/Relationship</p>
+                    </div>
+                  </button>
                 </div>
               </div>
               {/* Tabs */}
@@ -7164,7 +7346,7 @@ function App() {
             <button
               className={cn(
                 'flex flex-1 flex-col items-center gap-0.5 px-2 py-1.5 text-xs font-semibold rounded-xl transition-all duration-200',
-                view === 'settings' || view === 'manageTags' || view === 'tabSettings'
+                view === 'settings' || view === 'manageTags' || view === 'tabSettings' || view === 'manageCustomActions'
                   ? 'text-action-primary bg-action-primary/10'
                   : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
               )}

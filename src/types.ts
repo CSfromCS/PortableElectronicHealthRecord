@@ -73,6 +73,39 @@ export interface TagEvent {
   at: string
 }
 
+export type CustomActionTriggerType = 'manual' | 'automatic'
+
+/** One Task List Variant per Category x Relationship Automation Role combination (point 1). */
+export type CustomActionVariantKey = 'cd-main' | 'cd-referral' | 'pd-main' | 'pd-referral'
+
+export type CustomActionVariants = Record<CustomActionVariantKey, string[]>
+
+export interface CustomActionTagEffect {
+  tagId: number
+  action: 'add' | 'remove'
+}
+
+export interface CustomAction {
+  id?: number
+  name: string
+  triggerType: CustomActionTriggerType
+  /** Required (and only meaningful) when triggerType === 'automatic': the tag whose absent→present transition fires this action. */
+  triggerTagId?: number
+  variants: CustomActionVariants
+  tagEffects: CustomActionTagEffect[]
+  sortOrder: number
+  createdAt: string
+}
+
+/** One row per (actionId, patientId, date) a Manual action was actually run — powers the once-per-day duplicate-prevention rule. */
+export interface CustomActionRun {
+  id?: number
+  actionId: number
+  patientId: number
+  date: string
+  at: string
+}
+
 export interface ProblemBlock {
   id: string
   title: string
