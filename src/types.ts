@@ -73,6 +73,52 @@ export interface TagEvent {
   at: string
 }
 
+export type CustomActionTriggerType = 'manual' | 'automatic'
+
+export interface CustomActionTagEffect {
+  tagId: number
+  action: 'add' | 'remove'
+}
+
+/**
+ * A user-defined rule scoping part of a Custom Action's behavior: the patient must have every tag
+ * in `requiredTagIds` applied (checked across tagIds, mainServiceTagIds, and referralServiceTagIds)
+ * for this condition to match — an empty list always matches. Conditions are independent and
+ * non-exclusive: a patient can match several at once, and each matching condition's checklist
+ * items and tag effects all apply. A patient matching none of an action's conditions is left
+ * unaffected and flagged rather than guessed at.
+ */
+export interface CustomActionCondition {
+  id: string
+  requiredTagIds: number[]
+  checklistItems: string[]
+  tagEffects: CustomActionTagEffect[]
+}
+
+export interface CustomAction {
+  id?: number
+  name: string
+  triggerType: CustomActionTriggerType
+  /** Required (and only meaningful) when triggerType === 'automatic': the tag whose absent→present transition fires this action. */
+  triggerTagId?: number
+  /** Applied to every triggered patient unconditionally, regardless of any condition below — lets an action apply uniformly with no condition defined at all. */
+  checklistItems: string[]
+  tagEffects: CustomActionTagEffect[]
+  /** Optional additional scoping on top of the unconditional items/effects above — each matching condition's own checklist items and tag effects also apply. */
+  conditions: CustomActionCondition[]
+  sortOrder: number
+  createdAt: string
+}
+
+/** One row per (actionId, patientId, date) a Manual action was actually run — powers the once-per-day duplicate-prevention rule. */
+export interface CustomActionRun {
+  id?: number
+  actionId: number
+  patientId: number
+  date: string
+  at: string
+}
+
 export interface ProblemBlock {
   id: string
   title: string
