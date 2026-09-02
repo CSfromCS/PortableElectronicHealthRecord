@@ -439,4 +439,39 @@ db.version(10).stores({
   await seedDefaultCustomActions(tagIdByName, (action) => customActionTable.add(action))
 })
 
+db.version(11).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+}).upgrade(async (tx) => {
+  // Replaces the fixed CD/PD x Main/Referral Task List Variants with free-form Conditions: each
+  // one names an arbitrary combination of required tags (general or Service) plus its own
+  // checklist items and Tag Effects, so several can match — or none match — a given patient. The
+  // v10 schema shipped only within this same unreleased feature, so rather than hand-translating
+  // its fixed-variant shape, just re-seed the same defaults in the new shape.
+  const tagDefinitionTable = tx.table<TagDefinition, number>('tagDefinitions')
+  const customActionTable = tx.table<CustomAction, number>('customActions')
+  const customActionRunTable = tx.table<CustomActionRun, number>('customActionRuns')
+
+  await customActionRunTable.clear()
+  await customActionTable.clear()
+
+  const existingTags = await tagDefinitionTable.toArray()
+  const tagIdByName = new Map<string, number>(
+    existingTags.filter((tag) => tag.id !== undefined).map((tag) => [tag.name, tag.id as number]),
+  )
+  await seedDefaultCustomActions(tagIdByName, (action) => customActionTable.add(action))
+})
+
 export { db }

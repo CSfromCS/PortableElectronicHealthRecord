@@ -68,6 +68,15 @@ export const getAppliedPatientTags = (
     .map((tagId) => tagsById.get(tagId))
     .filter((tag): tag is TagDefinition => tag !== undefined)
 
+/** True if `tagId` is applied to the patient anywhere — the general tagIds pool, or either service tag slot. */
+export const patientHasTagAnywhere = (
+  patient: Pick<Patient, 'tagIds' | 'mainServiceTagIds' | 'referralServiceTagIds'>,
+  tagId: number,
+): boolean =>
+  (patient.tagIds ?? []).includes(tagId)
+  || (patient.mainServiceTagIds ?? []).includes(tagId)
+  || (patient.referralServiceTagIds ?? []).includes(tagId)
+
 /** A patient is active iff they have zero Terminal-flagged tags applied (point 6). */
 export const isPatientActive = (
   patient: Pick<Patient, 'tagIds'>,

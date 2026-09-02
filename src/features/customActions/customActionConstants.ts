@@ -1,26 +1,17 @@
-import type { CustomAction, CustomActionVariantKey, CustomActionVariants } from '@/types'
+import type { CustomAction, CustomActionCondition } from '@/types'
 
-export const CUSTOM_ACTION_VARIANT_KEYS: CustomActionVariantKey[] = ['cd-main', 'cd-referral', 'pd-main', 'pd-referral']
-
-export const CUSTOM_ACTION_VARIANT_LABELS: Record<CustomActionVariantKey, string> = {
-  'cd-main': 'CD + Main',
-  'cd-referral': 'CD + Referral',
-  'pd-main': 'PD + Main',
-  'pd-referral': 'PD + Referral',
+export const createCustomActionConditionId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `condition-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-export const emptyCustomActionVariants = (): CustomActionVariants => ({
-  'cd-main': [],
-  'cd-referral': [],
-  'pd-main': [],
-  'pd-referral': [],
-})
-
-const sameVariantsForAll = (items: string[]): CustomActionVariants => ({
-  'cd-main': [...items],
-  'cd-referral': [...items],
-  'pd-main': [...items],
-  'pd-referral': [...items],
+const alwaysMatchingCondition = (checklistItems: string[]): CustomActionCondition => ({
+  id: createCustomActionConditionId(),
+  requiredTagIds: [],
+  checklistItems,
+  tagEffects: [],
 })
 
 /**
@@ -35,43 +26,51 @@ export const seedDefaultCustomActions = async (
 ): Promise<void> => {
   const now = new Date().toISOString()
   const mghTagId = tagIdByName.get('MGH')
+  const cdTagId = tagIdByName.get('CD')
+  const pdTagId = tagIdByName.get('PD')
+  const mainTagId = tagIdByName.get('Main')
+  const referralTagId = tagIdByName.get('Referral')
+
+  const conditionRequiring = (tagIds: (number | undefined)[], checklistItems: string[]): CustomActionCondition => ({
+    id: createCustomActionConditionId(),
+    requiredTagIds: tagIds.filter((tagId): tagId is number => tagId !== undefined),
+    checklistItems,
+    tagEffects: [],
+  })
 
   const defaults: CustomAction[] = [
     {
       name: 'Start Admission Papers',
       triggerType: 'manual',
-      variants: sameVariantsForAll([
+      conditions: [alwaysMatchingCondition([
         'Admission orders written',
         'Consent for admission signed',
         'Initial labs ordered',
         'Admission note dictated',
-      ]),
-      tagEffects: [],
+      ])],
       sortOrder: 0,
       createdAt: now,
     },
     {
       name: 'Start Discharge Papers (SPDP)',
       triggerType: 'manual',
-      variants: sameVariantsForAll([
+      conditions: [alwaysMatchingCondition([
         'Discharge summary drafted',
         'Discharge medications reconciled',
         'Discharge instructions given',
         'Follow-up appointment scheduled',
-      ]),
-      tagEffects: [],
+      ])],
       sortOrder: 1,
       createdAt: now,
     },
     {
       name: 'Start PM Papers',
       triggerType: 'manual',
-      variants: sameVariantsForAll([
+      conditions: [alwaysMatchingCondition([
         'PM notification submitted',
         'PM paperwork completed',
         'Family/next-of-kin notified',
-      ]),
-      tagEffects: [],
+      ])],
       sortOrder: 2,
       createdAt: now,
     },
@@ -79,13 +78,12 @@ export const seedDefaultCustomActions = async (
       name: 'MGH Auto-Checklist',
       triggerType: 'automatic',
       triggerTagId: mghTagId,
-      variants: {
-        'cd-main': ['MGH (CD, Main): verify primary diagnosis workup', 'MGH (CD, Main): notify primary team'],
-        'cd-referral': ['MGH (CD, Referral): request referral records', 'MGH (CD, Referral): confirm accepting service'],
-        'pd-main': ['MGH (PD, Main): verify primary diagnosis workup', 'MGH (PD, Main): notify primary team'],
-        'pd-referral': ['MGH (PD, Referral): request referral records', 'MGH (PD, Referral): confirm accepting service'],
-      },
-      tagEffects: [],
+      conditions: [
+        conditionRequiring([cdTagId, mainTagId], ['MGH (CD, Main): verify primary diagnosis workup', 'MGH (CD, Main): notify primary team']),
+        conditionRequiring([cdTagId, referralTagId], ['MGH (CD, Referral): request referral records', 'MGH (CD, Referral): confirm accepting service']),
+        conditionRequiring([pdTagId, mainTagId], ['MGH (PD, Main): verify primary diagnosis workup', 'MGH (PD, Main): notify primary team']),
+        conditionRequiring([pdTagId, referralTagId], ['MGH (PD, Referral): request referral records', 'MGH (PD, Referral): confirm accepting service']),
+      ],
       sortOrder: 3,
       createdAt: now,
     },

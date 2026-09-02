@@ -75,14 +75,24 @@ export interface TagEvent {
 
 export type CustomActionTriggerType = 'manual' | 'automatic'
 
-/** One Task List Variant per Category x Relationship Automation Role combination (point 1). */
-export type CustomActionVariantKey = 'cd-main' | 'cd-referral' | 'pd-main' | 'pd-referral'
-
-export type CustomActionVariants = Record<CustomActionVariantKey, string[]>
-
 export interface CustomActionTagEffect {
   tagId: number
   action: 'add' | 'remove'
+}
+
+/**
+ * A user-defined rule scoping part of a Custom Action's behavior: the patient must have every tag
+ * in `requiredTagIds` applied (checked across tagIds, mainServiceTagIds, and referralServiceTagIds)
+ * for this condition to match — an empty list always matches. Conditions are independent and
+ * non-exclusive: a patient can match several at once, and each matching condition's checklist
+ * items and tag effects all apply. A patient matching none of an action's conditions is left
+ * unaffected and flagged rather than guessed at.
+ */
+export interface CustomActionCondition {
+  id: string
+  requiredTagIds: number[]
+  checklistItems: string[]
+  tagEffects: CustomActionTagEffect[]
 }
 
 export interface CustomAction {
@@ -91,8 +101,7 @@ export interface CustomAction {
   triggerType: CustomActionTriggerType
   /** Required (and only meaningful) when triggerType === 'automatic': the tag whose absent→present transition fires this action. */
   triggerTagId?: number
-  variants: CustomActionVariants
-  tagEffects: CustomActionTagEffect[]
+  conditions: CustomActionCondition[]
   sortOrder: number
   createdAt: string
 }

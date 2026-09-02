@@ -136,13 +136,17 @@ import {
   type SyncVersion,
 } from './features/sync/syncService'
 import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Zap } from 'lucide-react'
-import type { CustomAction, TagDefinition, TagEvent, TagGroupDefinition } from './types'
+import type { CustomAction, CustomActionCondition, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
 import {
+  addTagsToPatientDirectly,
+  applyMatchedConditions,
+  formatPatientLabelForNotice,
+  getMissingTagsForCondition,
   hasCustomActionRunOnDate,
   recordCustomActionRun,
-  runCustomActionForPatient,
+  resolveMatchingConditions,
 } from './features/customActions/customActionUtils'
 import { TagPicker } from './features/tags/TagPicker'
 import { BulkTagPicker } from './features/tags/BulkTagPicker'
@@ -613,6 +617,7 @@ function App() {
   const [isBulkTagApplying, setIsBulkTagApplying] = useState(false)
   const [bulkCustomActionTarget, setBulkCustomActionTarget] = useState<CustomAction | null>(null)
   const [isBulkCustomActionApplying, setIsBulkCustomActionApplying] = useState(false)
+  const [customActionResolveState, setCustomActionResolveState] = useState<{ action: CustomAction; patient: Patient } | null>(null)
   const [reportVitalsDateFrom, setReportVitalsDateFrom] = useState(() => toLocalISODate())
   const [reportVitalsDateTo, setReportVitalsDateTo] = useState(() => toLocalISODate())
   const [reportVitalsTimeFrom, setReportVitalsTimeFrom] = useState('00:00')
@@ -853,10 +858,12 @@ function App() {
     }
   }
 
-  // Bulk-triggers a Manual Custom Action for every selected patient independently (point 6):
-  // each patient resolves its own Task List Variant, hits its own ambiguity case if applicable,
-  // and the once-per-day duplicate-prevention rule (point 5) is applied per-patient by simply
-  // skipping patients who already ran this action today rather than blocking the whole batch.
+  // Bulk-triggers a Manual Custom Action for every selected patient independently: each patient's
+  // conditions are resolved against its own tags, several can match at once, and a patient
+  // matching none of them is simply left unaffected and named in a single summary notice rather
+  // than pausing the batch with an interactive per-patient prompt. The once-per-day
+  // duplicate-prevention rule is applied per-patient by silently skipping anyone who already ran
+  // this action today rather than blocking the whole batch.
   const confirmBulkCustomAction = async () => {
     const action = bulkCustomActionTarget
     if (!action || action.id === undefined) return
@@ -869,25 +876,26 @@ function App() {
     setIsBulkCustomActionApplying(true)
     try {
       const today = toLocalISODate()
-      const ambiguityMessages: string[] = []
+      const unaffectedPatients: Patient[] = []
+      let ranCount = 0
       for (const patient of targetPatients) {
         if (patient.id === undefined) continue
         if (hasCustomActionRunOnDate(customActionRuns ?? [], actionId, patient.id, today)) continue
 
-        const result = await runCustomActionForPatient(
-          patient,
-          action,
-          tagsById,
-          (items) => appendCustomActionChecklistItems(patient.id as number, today, items),
-        )
+        const matched = resolveMatchingConditions(patient, action)
+        if (matched.length === 0) {
+          unaffectedPatients.push(patient)
+          continue
+        }
+        await applyMatchedConditions(patient, matched, tagsById, (items) => appendCustomActionChecklistItems(patient.id as number, today, items))
         await recordCustomActionRun(actionId, patient.id, today)
-        if (result.ambiguityMessage) ambiguityMessages.push(result.ambiguityMessage)
+        ranCount += 1
       }
 
       setNotice(
-        ambiguityMessages.length > 0
-          ? `Skipped ${ambiguityMessages.length} patient${ambiguityMessages.length === 1 ? '' : 's'}: ${ambiguityMessages.join(' ')}`
-          : `Ran "${action.name}" for ${targetPatients.length} patient${targetPatients.length === 1 ? '' : 's'}.`,
+        unaffectedPatients.length > 0
+          ? `Ran "${action.name}" for ${ranCount} patient${ranCount === 1 ? '' : 's'}. ${unaffectedPatients.length} not affected — no condition met: ${unaffectedPatients.map((patient) => formatPatientLabelForNotice(patient)).join(', ')}.`
+          : `Ran "${action.name}" for ${ranCount} patient${ranCount === 1 ? '' : 's'}.`,
       )
     } finally {
       setIsBulkCustomActionApplying(false)
@@ -2524,7 +2532,9 @@ function App() {
   }, [dailyDate, selectedPatientId, touchPatientLastModified])
 
   // Fires every "Automatic on tag added" Custom Action whose trigger tag is in `addedTagIds`,
-  // regardless of how the tag(s) got added (single Profile-tab toggle or bulk Add Tag) — point 4.
+  // regardless of how the tag(s) got added (single Profile-tab toggle or bulk Add Tag). Runs
+  // silently in the background with no per-patient prompt — a patient matching none of an
+  // action's conditions is simply left unaffected and named in a notice afterward.
   const runAutomaticCustomActionsForTagAddition = useCallback(async (patientAfterAdd: Patient, addedTagIds: number[]) => {
     if (patientAfterAdd.id === undefined || addedTagIds.length === 0) return
     const addedTagIdSet = new Set(addedTagIds)
@@ -2534,36 +2544,66 @@ function App() {
     if (matchingActions.length === 0) return
 
     const today = toLocalISODate()
-    const ambiguityMessages: string[] = []
+    const unaffectedMessages: string[] = []
     for (const action of matchingActions) {
-      const result = await runCustomActionForPatient(
+      const matched = resolveMatchingConditions(patientAfterAdd, action)
+      if (matched.length === 0) {
+        unaffectedMessages.push(`"${action.name}" did not affect ${formatPatientLabelForNotice(patientAfterAdd)} — no condition was met.`)
+        continue
+      }
+      await applyMatchedConditions(
         patientAfterAdd,
-        action,
+        matched,
         tagsById,
         (items) => appendCustomActionChecklistItems(patientAfterAdd.id as number, today, items),
       )
-      if (result.ambiguityMessage) ambiguityMessages.push(result.ambiguityMessage)
     }
-    if (ambiguityMessages.length > 0) setNotice(ambiguityMessages.join(' '))
+    if (unaffectedMessages.length > 0) setNotice(unaffectedMessages.join(' '))
   }, [appendCustomActionChecklistItems, customActions, tagsById])
 
-  // Manual trigger button on a single patient's Checklist tab (point 5). Duplicate-prevention is
-  // handled by disabling the button once a run is recorded for this action+patient+date, so this
-  // itself doesn't need to guard against a second press beyond what the UI already prevents.
+  // Manual trigger button on a single patient's Checklist tab. If at least one condition matches,
+  // every matched condition's checklist items and tag effects run and the daily run record is
+  // written (duplicate-prevention: the button then disables for the rest of this date). If zero
+  // conditions match, nothing runs yet — instead this opens the interactive resolve dialog so the
+  // user can skip this patient or add the missing tag(s) for a specific condition on the spot.
   const triggerCustomActionForSelectedPatient = useCallback(async (action: CustomAction) => {
     if (!selectedPatient || selectedPatient.id === undefined || action.id === undefined) return
     const patientId = selectedPatient.id
     const actionId = action.id
 
-    const result = await runCustomActionForPatient(
-      selectedPatient,
-      action,
-      tagsById,
-      (items) => appendCustomActionChecklistItems(patientId, dailyDate, items),
-    )
+    const matched = resolveMatchingConditions(selectedPatient, action)
+    if (matched.length === 0) {
+      setCustomActionResolveState({ action, patient: selectedPatient })
+      return
+    }
+
+    await applyMatchedConditions(selectedPatient, matched, tagsById, (items) => appendCustomActionChecklistItems(patientId, dailyDate, items))
     await recordCustomActionRun(actionId, patientId, dailyDate)
-    setNotice(result.ambiguityMessage ?? `Ran "${action.name}".`)
+    setNotice(`Ran "${action.name}".`)
   }, [appendCustomActionChecklistItems, dailyDate, selectedPatient, tagsById])
+
+  // Resolves the "zero conditions matched" dialog opened above: skip does nothing (the button
+  // stays enabled so the patient can be retried later that day), while picking a condition adds
+  // just its missing tags, then re-resolves and runs every condition that now matches (which may
+  // be more than just the one the user picked, if the added tag(s) also satisfy another).
+  const resolveCustomActionByAddingTags = useCallback(async (condition: CustomActionCondition) => {
+    const state = customActionResolveState
+    if (!state || state.patient.id === undefined || state.action.id === undefined) return
+    const patientId = state.patient.id
+    const actionId = state.action.id
+
+    const missingTagIds = getMissingTagsForCondition(state.patient, condition)
+    if (missingTagIds.length > 0) await addTagsToPatientDirectly(state.patient, missingTagIds, tagsById)
+
+    const patientAfterAdd: Patient = { ...state.patient, tagIds: [...new Set([...(state.patient.tagIds ?? []), ...missingTagIds])] }
+    const matched = resolveMatchingConditions(patientAfterAdd, state.action)
+    if (matched.length > 0) {
+      await applyMatchedConditions(patientAfterAdd, matched, tagsById, (items) => appendCustomActionChecklistItems(patientId, dailyDate, items))
+      await recordCustomActionRun(actionId, patientId, dailyDate)
+      setNotice(`Ran "${state.action.name}".`)
+    }
+    setCustomActionResolveState(null)
+  }, [appendCustomActionChecklistItems, customActionResolveState, dailyDate, tagsById])
 
   const moveMasterChecklistItem = useCallback((patientId: number, index: number, direction: 'up' | 'down') => {
     void updateMasterChecklist(patientId, (previous) => {
@@ -7192,6 +7232,44 @@ function App() {
             <div className='flex gap-2 flex-wrap justify-center'>
               <Button variant='destructive' onClick={() => void confirmPendingDelete()}>{pendingDeleteAction?.confirmLabel ?? 'Delete'}</Button>
               <Button variant='secondary' onClick={closeDeleteConfirmation}>Cancel</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={customActionResolveState !== null} onOpenChange={(open) => { if (!open) setCustomActionResolveState(null) }}>
+          <DialogContent className='max-w-md'>
+            <DialogHeader>
+              <DialogTitle>"{customActionResolveState?.action.name}" didn't match this patient</DialogTitle>
+            </DialogHeader>
+            <p className='text-sm text-espresso'>
+              {customActionResolveState ? formatPatientLabelForNotice(customActionResolveState.patient) : ''} doesn't currently satisfy any
+              condition for this action, so nothing was run. Add the missing tag(s) for one condition to run it now, or skip.
+            </p>
+            <div className='flex flex-col gap-1.5'>
+              {customActionResolveState ? (() => {
+                const state = customActionResolveState
+                if (state.action.conditions.length === 0) {
+                  return <p className='text-xs text-clay'>No conditions are defined for this action yet.</p>
+                }
+                return state.action.conditions.map((condition) => {
+                  const missingTagIds = getMissingTagsForCondition(state.patient, condition)
+                  if (missingTagIds.length === 0) return null
+                  const missingTagNames = missingTagIds.map((tagId) => tagsById.get(tagId)?.name ?? 'a deleted tag')
+                  return (
+                    <Button
+                      key={condition.id}
+                      variant='outline'
+                      className='h-auto justify-start whitespace-normal py-2 text-left text-sm'
+                      onClick={() => void resolveCustomActionByAddingTags(condition)}
+                    >
+                      Add {missingTagNames.join(' + ')} and run
+                    </Button>
+                  )
+                })
+              })() : null}
+            </div>
+            <div className='flex justify-end gap-2 pt-1'>
+              <Button variant='ghost' onClick={() => setCustomActionResolveState(null)}>Skip patient</Button>
             </div>
           </DialogContent>
         </Dialog>

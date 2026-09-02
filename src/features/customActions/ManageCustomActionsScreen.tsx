@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ChevronLeft, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { useState, type DragEvent, type TouchEvent } from 'react'
+import { ChevronLeft, GripVertical, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,115 +9,214 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
+import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
+import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import type {
   CustomAction,
+  CustomActionCondition,
   CustomActionTagEffect,
   CustomActionTriggerType,
-  CustomActionVariantKey,
-  CustomActionVariants,
   TagDefinition,
   TagGroupDefinition,
 } from '@/types'
-import { CUSTOM_ACTION_VARIANT_KEYS, CUSTOM_ACTION_VARIANT_LABELS, emptyCustomActionVariants } from './customActionConstants'
-import { bucketTagsByGroup } from '@/features/tags/tagUtils'
+import { createCustomActionConditionId } from './customActionConstants'
+import { BulkTagPicker } from '@/features/tags/BulkTagPicker'
 import { TagChip } from '@/features/tags/TagChip'
+import { bucketTagsByGroup } from '@/features/tags/tagUtils'
+
+type ChecklistItemDraft = { id: string; text: string }
+
+type ConditionFormState = {
+  id: string
+  requiredTagIds: number[]
+  checklistItems: ChecklistItemDraft[]
+  tagEffects: CustomActionTagEffect[]
+}
 
 type CustomActionFormState = {
   name: string
   triggerType: CustomActionTriggerType
   triggerTagId: string
-  variants: CustomActionVariants
-  tagEffects: CustomActionTagEffect[]
+  conditions: ConditionFormState[]
 }
+
+const createChecklistItemId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `item-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+const blankCondition = (): ConditionFormState => ({
+  id: createCustomActionConditionId(),
+  requiredTagIds: [],
+  checklistItems: [],
+  tagEffects: [],
+})
 
 const blankCustomActionForm = (): CustomActionFormState => ({
   name: '',
   triggerType: 'manual',
   triggerTagId: '',
-  variants: emptyCustomActionVariants(),
-  tagEffects: [],
+  conditions: [],
+})
+
+const conditionToForm = (condition: CustomActionCondition): ConditionFormState => ({
+  id: condition.id,
+  requiredTagIds: [...condition.requiredTagIds],
+  checklistItems: condition.checklistItems.map((text) => ({ id: createChecklistItemId(), text })),
+  tagEffects: condition.tagEffects.map((effect) => ({ ...effect })),
 })
 
 const actionToForm = (action: CustomAction): CustomActionFormState => ({
   name: action.name,
   triggerType: action.triggerType,
   triggerTagId: action.triggerTagId !== undefined ? String(action.triggerTagId) : '',
-  variants: {
-    'cd-main': [...action.variants['cd-main']],
-    'cd-referral': [...action.variants['cd-referral']],
-    'pd-main': [...action.variants['pd-main']],
-    'pd-referral': [...action.variants['pd-referral']],
-  },
-  tagEffects: action.tagEffects.map((effect) => ({ ...effect })),
+  conditions: action.conditions.map(conditionToForm),
 })
+
+const formToConditions = (conditions: ConditionFormState[]): CustomActionCondition[] =>
+  conditions.map((condition) => ({
+    id: condition.id,
+    requiredTagIds: condition.requiredTagIds,
+    checklistItems: condition.checklistItems.map((item) => item.text.trim()).filter((text) => text.length > 0),
+    tagEffects: condition.tagEffects,
+  }))
 
 const sortActions = (actions: CustomAction[]): CustomAction[] => [...actions].sort((a, b) => a.sortOrder - b.sortOrder)
 
-const VariantItemsEditor = ({
-  variantKey,
+const describeRequiredTags = (requiredTagIds: number[], tagsById: Map<number, TagDefinition>): string => {
+  if (requiredTagIds.length === 0) return 'Always (no tags required)'
+  return requiredTagIds.map((tagId) => tagsById.get(tagId)?.name ?? 'a deleted tag').join(' + ')
+}
+
+/** Checklist item list for one Condition — drag to reorder, tap to edit in place, delete with confirmation, mirroring the Checklist tab and Problems list elsewhere in the app. */
+const ConditionChecklistItemsEditor = ({
   items,
   onChange,
 }: {
-  variantKey: CustomActionVariantKey
-  items: string[]
-  onChange: (items: string[]) => void
+  items: ChecklistItemDraft[]
+  onChange: (items: ChecklistItemDraft[]) => void
 }) => {
   const [draft, setDraft] = useState('')
+  const [pendingRemovalId, setPendingRemovalId] = useState<string | null>(null)
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
+  const [touchTargetIndex, setTouchTargetIndex] = useState<number | null>(null)
 
   const addItem = () => {
     const text = draft.trim()
     if (!text) return
-    onChange([...items, text])
+    onChange([...items, { id: createChecklistItemId(), text }])
     setDraft('')
   }
 
-  const moveItem = (index: number, direction: 'up' | 'down') => {
-    const target = direction === 'up' ? index - 1 : index + 1
-    if (target < 0 || target >= items.length) return
+  const updateItemText = (id: string, text: string) => {
+    onChange(items.map((item) => (item.id === id ? { ...item, text } : item)))
+  }
+
+  const removeItem = (id: string) => {
+    onChange(items.filter((item) => item.id !== id))
+    setPendingRemovalId(null)
+  }
+
+  const moveItem = (sourceIndex: number, targetIndex: number) => {
+    if (sourceIndex === targetIndex || !items[sourceIndex] || !items[targetIndex]) return
     const next = [...items]
-    ;[next[index], next[target]] = [next[target], next[index]]
+    const [moved] = next.splice(sourceIndex, 1)
+    next.splice(targetIndex, 0, moved)
     onChange(next)
   }
 
+  const resetDragState = () => {
+    setDraggingIndex(null)
+    setTouchTargetIndex(null)
+  }
+
+  const pendingRemoval = items.find((item) => item.id === pendingRemovalId) ?? null
+
   return (
     <div className='space-y-1.5'>
-      <p className='text-xs font-semibold text-espresso'>{CUSTOM_ACTION_VARIANT_LABELS[variantKey]}</p>
       <div className='flex flex-col gap-1'>
-        {items.map((text, index) => (
-          <div key={index} className='flex items-center gap-1.5 rounded-md border border-clay/20 bg-warm-ivory px-2 py-1'>
-            <span className='flex-1 min-w-0 text-xs text-espresso truncate'>{text}</span>
+        {items.map((item, index) => (
+          <div
+            key={item.id}
+            data-checklist-item-index={index}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md border border-clay/20 bg-warm-ivory px-1.5 py-1 transition-shadow',
+              draggingIndex === index && 'opacity-50',
+              touchTargetIndex === index && draggingIndex !== null && draggingIndex !== index && 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent',
+            )}
+            onDragOver={(event: DragEvent<HTMLDivElement>) => {
+              if (draggingIndex === null || draggingIndex === index) return
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+            }}
+            onDrop={(event: DragEvent<HTMLDivElement>) => {
+              event.preventDefault()
+              if (draggingIndex !== null) moveItem(draggingIndex, index)
+              resetDragState()
+            }}
+          >
             <Button
               type='button'
               variant='ghost'
-              size='sm'
-              className='h-6 w-6 p-0 text-clay'
-              aria-label='Move item up'
-              disabled={index === 0}
-              onClick={() => moveItem(index, 'up')}
+              className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
+              aria-label={`Reorder item ${index + 1}`}
+              draggable
+              onDragStart={(event: DragEvent<HTMLButtonElement>) => {
+                event.dataTransfer.effectAllowed = 'move'
+                setDraggingIndex(index)
+              }}
+              onDragEnd={resetDragState}
+              onTouchStart={(event: TouchEvent<HTMLButtonElement>) => {
+                event.preventDefault()
+                setDraggingIndex(index)
+                setTouchTargetIndex(index)
+              }}
+              onTouchMove={(event: TouchEvent<HTMLButtonElement>) => {
+                if (draggingIndex === null) return
+                const touchPoint = event.touches[0]
+                if (!touchPoint) return
+                const target = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)?.closest('[data-checklist-item-index]')
+                if (!(target instanceof HTMLElement)) return
+                const targetIndex = Number.parseInt(target.dataset.checklistItemIndex ?? '', 10)
+                if (!Number.isInteger(targetIndex)) return
+                event.preventDefault()
+                setTouchTargetIndex(targetIndex)
+              }}
+              onTouchEnd={() => {
+                if (draggingIndex !== null && touchTargetIndex !== null) moveItem(draggingIndex, touchTargetIndex)
+                resetDragState()
+              }}
+              onTouchCancel={resetDragState}
+              onKeyDown={(event) => {
+                if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+                event.preventDefault()
+                const targetIndex = event.key === 'ArrowUp' ? index - 1 : index + 1
+                if (targetIndex >= 0 && targetIndex < items.length) moveItem(index, targetIndex)
+              }}
             >
-              ↑
+              <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
             </Button>
+            <TapToEditField
+              className='min-w-0 flex-1 px-1 py-0.5 text-xs'
+              ariaLabel={`Checklist item ${index + 1}`}
+              emptyText='Tap to edit'
+              value={item.text}
+              onCommit={(nextText) => updateItemText(item.id, nextText)}
+              renderView={(text) => <span className='text-espresso'>{text}</span>}
+              renderEditor={({ value, onChange: onEditorChange }) => (
+                <AutoGrowTextField aria-label={`Checklist item ${index + 1}`} value={value} onChange={onEditorChange} className='text-xs' />
+              )}
+            />
             <Button
               type='button'
               variant='ghost'
               size='sm'
-              className='h-6 w-6 p-0 text-clay'
-              aria-label='Move item down'
-              disabled={index === items.length - 1}
-              onClick={() => moveItem(index, 'down')}
-            >
-              ↓
-            </Button>
-            <Button
-              type='button'
-              variant='ghost'
-              size='sm'
-              className='h-6 w-6 p-0 text-action-danger'
+              className='h-6 w-6 shrink-0 p-0 text-action-danger'
               aria-label='Remove item'
-              onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}
+              onClick={() => setPendingRemovalId(item.id)}
             >
               <Trash2 className='h-3.5 w-3.5' />
             </Button>
@@ -136,10 +235,138 @@ const VariantItemsEditor = ({
             }
           }}
           placeholder='Add checklist item'
-          aria-label={`Add checklist item to ${CUSTOM_ACTION_VARIANT_LABELS[variantKey]}`}
+          aria-label='Add checklist item'
           className='h-8 text-xs'
         />
         <Button type='button' size='sm' variant='secondary' className='h-8' onClick={addItem}>Add</Button>
+      </div>
+
+      <Dialog open={pendingRemoval !== null} onOpenChange={(open) => { if (!open) setPendingRemovalId(null) }}>
+        <DialogContent className='max-w-md'>
+          <DialogHeader>
+            <DialogTitle>Remove checklist item?</DialogTitle>
+          </DialogHeader>
+          <p className='text-sm text-espresso'>Remove "{pendingRemoval?.text || 'this item'}" from this condition's checklist.</p>
+          <div className='flex justify-end gap-2'>
+            <Button variant='ghost' onClick={() => setPendingRemovalId(null)}>Cancel</Button>
+            <Button variant='destructive' onClick={() => pendingRemoval && removeItem(pendingRemoval.id)}>Remove</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+const ConditionCard = ({
+  condition,
+  index,
+  tags,
+  groups,
+  onChange,
+  onRequestRemove,
+  dragHandleProps,
+}: {
+  condition: ConditionFormState
+  index: number
+  tags: TagDefinition[]
+  groups: TagGroupDefinition[]
+  onChange: (next: ConditionFormState) => void
+  onRequestRemove: () => void
+  dragHandleProps: ReturnType<ReturnType<typeof useDragReorder<string>>['getHandleProps']>
+}) => {
+  const tagsById = new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag]))
+  const tagBuckets = bucketTagsByGroup(tags, groups)
+  const requiredTagIdSet = new Set(condition.requiredTagIds)
+
+  const toggleRequiredTag = (tag: TagDefinition) => {
+    if (tag.id === undefined) return
+    const tagId = tag.id
+    const next = requiredTagIdSet.has(tagId)
+      ? condition.requiredTagIds.filter((id) => id !== tagId)
+      : [...condition.requiredTagIds, tagId]
+    onChange({ ...condition, requiredTagIds: next })
+  }
+
+  const addTagEffect = () => {
+    const firstTag = tags[0]
+    if (!firstTag || firstTag.id === undefined) return
+    onChange({ ...condition, tagEffects: [...condition.tagEffects, { tagId: firstTag.id, action: 'add' }] })
+  }
+
+  const updateTagEffect = (effectIndex: number, next: Partial<CustomActionTagEffect>) => {
+    onChange({
+      ...condition,
+      tagEffects: condition.tagEffects.map((effect, i) => (i === effectIndex ? { ...effect, ...next } : effect)),
+    })
+  }
+
+  const removeTagEffect = (effectIndex: number) => {
+    onChange({ ...condition, tagEffects: condition.tagEffects.filter((_, i) => i !== effectIndex) })
+  }
+
+  return (
+    <div className='space-y-3 rounded-xl border border-clay/25 bg-blush-sand/20 p-3'>
+      <div className='flex items-center gap-2'>
+        <DragHandle label={`Drag to reorder condition ${index + 1}`} dragProps={dragHandleProps} />
+        <p className='flex-1 text-xs font-bold uppercase tracking-widest text-clay/60'>Condition {index + 1}</p>
+        <Button type='button' variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Remove condition ${index + 1}`} onClick={onRequestRemove}>
+          <Trash2 className='h-3.5 w-3.5' />
+        </Button>
+      </div>
+
+      <div className='space-y-1'>
+        <Label className='text-xs'>Required tags</Label>
+        <p className='text-[11px] text-clay'>
+          Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service). Select none to always match.
+        </p>
+        <ScrollArea className='max-h-48 rounded-lg border border-clay/15 bg-warm-ivory/60 p-1'>
+          <BulkTagPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
+        </ScrollArea>
+      </div>
+
+      <div className='space-y-1'>
+        <Label className='text-xs'>Checklist items</Label>
+        <ConditionChecklistItemsEditor
+          items={condition.checklistItems}
+          onChange={(items) => onChange({ ...condition, checklistItems: items })}
+        />
+      </div>
+
+      <div className='space-y-1'>
+        <div className='flex items-center justify-between'>
+          <Label className='text-xs'>Tag effects</Label>
+          <Button type='button' size='sm' variant='outline' className='h-6 text-[11px]' onClick={addTagEffect} disabled={tags.length === 0}>
+            <Plus className='h-3 w-3 mr-1' /> Add effect
+          </Button>
+        </div>
+        <div className='flex flex-col gap-1.5'>
+          {condition.tagEffects.map((effect, effectIndex) => (
+            <div key={effectIndex} className='flex items-center gap-1.5'>
+              <Select value={effect.action} onValueChange={(value) => updateTagEffect(effectIndex, { action: value as 'add' | 'remove' })}>
+                <SelectTrigger className='h-8 w-28 text-xs'><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='add'>Add tag</SelectItem>
+                  <SelectItem value='remove'>Remove tag</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={String(effect.tagId)} onValueChange={(value) => updateTagEffect(effectIndex, { tagId: Number.parseInt(value, 10) })}>
+                <SelectTrigger className='h-8 flex-1 text-xs'><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {tagBuckets.map((bucket) => (
+                    bucket.tags.map((tag) => (
+                      <SelectItem key={tag.id} value={String(tag.id)}>{bucket.groupName} — {tag.name}</SelectItem>
+                    ))
+                  ))}
+                </SelectContent>
+              </Select>
+              {tagsById.get(effect.tagId) ? <TagChip tag={tagsById.get(effect.tagId) as TagDefinition} /> : null}
+              <Button type='button' variant='ghost' size='sm' className='h-8 w-8 p-0 text-action-danger' aria-label='Remove tag effect' onClick={() => removeTagEffect(effectIndex)}>
+                <X className='h-3.5 w-3.5' />
+              </Button>
+            </div>
+          ))}
+          {condition.tagEffects.length === 0 ? <p className='text-[11px] text-clay/70'>No tag effects configured.</p> : null}
+        </div>
       </div>
     </div>
   )
@@ -160,10 +387,11 @@ export const ManageCustomActionsScreen = ({
   const [form, setForm] = useState<CustomActionFormState>(blankCustomActionForm())
   const [editingActionId, setEditingActionId] = useState<number | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<CustomAction | null>(null)
+  const [pendingConditionRemovalId, setPendingConditionRemovalId] = useState<string | null>(null)
 
   const orderedActions = sortActions(customActions)
-  const tagBuckets = bucketTagsByGroup(tags, groups)
   const tagsById = new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag]))
+  const tagBuckets = bucketTagsByGroup(tags, groups)
 
   const openCreate = () => {
     setEditingActionId(null)
@@ -177,40 +405,40 @@ export const ManageCustomActionsScreen = ({
     setFormOpen(true)
   }
 
-  const setVariantItems = (variantKey: CustomActionVariantKey, items: string[]) => {
-    setForm((previous) => ({ ...previous, variants: { ...previous.variants, [variantKey]: items } }))
-  }
-
-  const addTagEffect = () => {
-    const firstTag = tags[0]
-    if (!firstTag || firstTag.id === undefined) return
-    setForm((previous) => ({ ...previous, tagEffects: [...previous.tagEffects, { tagId: firstTag.id as number, action: 'add' }] }))
-  }
-
-  const updateTagEffect = (index: number, next: Partial<CustomActionTagEffect>) => {
+  const updateCondition = (conditionId: string, next: ConditionFormState) => {
     setForm((previous) => ({
       ...previous,
-      tagEffects: previous.tagEffects.map((effect, effectIndex) => (effectIndex === index ? { ...effect, ...next } : effect)),
+      conditions: previous.conditions.map((condition) => (condition.id === conditionId ? next : condition)),
     }))
   }
 
-  const removeTagEffect = (index: number) => {
-    setForm((previous) => ({ ...previous, tagEffects: previous.tagEffects.filter((_, effectIndex) => effectIndex !== index) }))
+  const addCondition = () => {
+    setForm((previous) => ({ ...previous, conditions: [...previous.conditions, blankCondition()] }))
   }
+
+  const removeCondition = (conditionId: string) => {
+    setForm((previous) => ({ ...previous, conditions: previous.conditions.filter((condition) => condition.id !== conditionId) }))
+    setPendingConditionRemovalId(null)
+  }
+
+  const reorderConditions = (sourceId: string, targetId: string) => {
+    setForm((previous) => ({ ...previous, conditions: moveItemByKey(previous.conditions, (condition) => condition.id, sourceId, targetId) }))
+  }
+  const conditionDrag = useDragReorder(form.conditions.map((condition) => condition.id), reorderConditions)
 
   const saveForm = async () => {
     const name = form.name.trim()
     if (!name) return
     const triggerTagId = form.triggerTagId ? Number.parseInt(form.triggerTagId, 10) : undefined
     if (form.triggerType === 'automatic' && triggerTagId === undefined) return
+    const conditions = formToConditions(form.conditions)
 
     if (editingActionId !== null) {
       await db.customActions.update(editingActionId, {
         name,
         triggerType: form.triggerType,
         triggerTagId: form.triggerType === 'automatic' ? triggerTagId : undefined,
-        variants: form.variants,
-        tagEffects: form.tagEffects,
+        conditions,
       })
     } else {
       const nextSortOrder = customActions.length > 0 ? Math.max(...customActions.map((action) => action.sortOrder)) + 1 : 0
@@ -218,8 +446,7 @@ export const ManageCustomActionsScreen = ({
         name,
         triggerType: form.triggerType,
         triggerTagId: form.triggerType === 'automatic' ? triggerTagId : undefined,
-        variants: form.variants,
-        tagEffects: form.tagEffects,
+        conditions,
         sortOrder: nextSortOrder,
         createdAt: new Date().toISOString(),
       })
@@ -239,7 +466,6 @@ export const ManageCustomActionsScreen = ({
 
   const reorderActions = async (sourceId: number, targetId: number) => {
     const reordered = moveItemByKey(orderedActions, (action) => action.id, sourceId, targetId)
-
     await db.transaction('rw', [db.customActions], async () => {
       await Promise.all(
         reordered.map((action, index) =>
@@ -254,6 +480,8 @@ export const ManageCustomActionsScreen = ({
     if (action.triggerTagId === undefined) return 'no tag configured'
     return tagsById.get(action.triggerTagId)?.name ?? 'a deleted tag'
   }
+
+  const pendingConditionRemoval = form.conditions.find((condition) => condition.id === pendingConditionRemovalId) ?? null
 
   return (
     <Card className='bg-white/80 border-clay/25 shadow-sm'>
@@ -291,7 +519,7 @@ export const ManageCustomActionsScreen = ({
                 <p className='text-sm font-semibold text-espresso truncate'>{action.name}</p>
                 <p className='text-[11px] text-clay/80'>
                   {action.triggerType === 'manual' ? 'Manual button' : `Automatic on "${triggerTagName(action)}" added`}
-                  {action.tagEffects.length > 0 ? ` · ${action.tagEffects.length} tag effect${action.tagEffects.length === 1 ? '' : 's'}` : ''}
+                  {' · '}{action.conditions.length} condition{action.conditions.length === 1 ? '' : 's'}
                 </p>
               </div>
               <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${action.name}`} onClick={() => openEdit(action)}>
@@ -365,58 +593,38 @@ export const ManageCustomActionsScreen = ({
               ) : null}
 
               <div className='space-y-2'>
-                <Label>Task List Variants</Label>
-                <p className='text-xs text-clay'>
-                  Each combination of Category and Relationship gets its own checklist. When triggered, only the variant matching the
-                  patient's current tags is appended.
-                </p>
-                <div className='grid grid-cols-1 sm:grid-cols-2 gap-3'>
-                  {CUSTOM_ACTION_VARIANT_KEYS.map((variantKey) => (
-                    <VariantItemsEditor
-                      key={variantKey}
-                      variantKey={variantKey}
-                      items={form.variants[variantKey]}
-                      onChange={(items) => setVariantItems(variantKey, items)}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className='space-y-2'>
                 <div className='flex items-center justify-between'>
-                  <Label>Tag Effects</Label>
-                  <Button type='button' size='sm' variant='outline' className='h-7 text-xs' onClick={addTagEffect} disabled={tags.length === 0}>
-                    <Plus className='h-3.5 w-3.5 mr-1' /> Add effect
+                  <Label>Conditions</Label>
+                  <Button type='button' size='sm' variant='outline' onClick={addCondition}>
+                    <Plus className='h-3.5 w-3.5 mr-1' /> Add condition
                   </Button>
                 </div>
-                <p className='text-xs text-clay'>Applied every time this action runs, independently of whether the checklist portion succeeded.</p>
-                <div className='flex flex-col gap-1.5'>
-                  {form.tagEffects.map((effect, index) => (
-                    <div key={index} className='flex items-center gap-1.5'>
-                      <Select value={effect.action} onValueChange={(value) => updateTagEffect(index, { action: value as 'add' | 'remove' })}>
-                        <SelectTrigger className='h-8 w-28 text-xs'><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value='add'>Add tag</SelectItem>
-                          <SelectItem value='remove'>Remove tag</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Select value={String(effect.tagId)} onValueChange={(value) => updateTagEffect(index, { tagId: Number.parseInt(value, 10) })}>
-                        <SelectTrigger className='h-8 flex-1 text-xs'><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {tagBuckets.map((bucket) => (
-                            bucket.tags.map((tag) => (
-                              <SelectItem key={tag.id} value={String(tag.id)}>{bucket.groupName} — {tag.name}</SelectItem>
-                            ))
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {tagsById.get(effect.tagId) ? <TagChip tag={tagsById.get(effect.tagId) as TagDefinition} /> : null}
-                      <Button type='button' variant='ghost' size='sm' className='h-8 w-8 p-0 text-action-danger' aria-label='Remove tag effect' onClick={() => removeTagEffect(index)}>
-                        <X className='h-3.5 w-3.5' />
-                      </Button>
+                <p className='text-xs text-clay'>
+                  Each condition matches independently — several can apply to the same patient at once, each running its own checklist
+                  items and tag effects. A patient matching none of these is left unaffected and flagged rather than guessed at.
+                </p>
+                <div className='space-y-3'>
+                  {form.conditions.map((condition, index) => (
+                    <div
+                      key={condition.id}
+                      className={cn(
+                        conditionDrag.isDragging(condition.id) && 'opacity-50',
+                        conditionDrag.isDropTarget(condition.id) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent rounded-xl',
+                      )}
+                      {...conditionDrag.getItemProps(condition.id)}
+                    >
+                      <ConditionCard
+                        condition={condition}
+                        index={index}
+                        tags={tags}
+                        groups={groups}
+                        onChange={(next) => updateCondition(condition.id, next)}
+                        onRequestRemove={() => setPendingConditionRemovalId(condition.id)}
+                        dragHandleProps={conditionDrag.getHandleProps(condition.id)}
+                      />
                     </div>
                   ))}
-                  {form.tagEffects.length === 0 ? <p className='text-[11px] text-clay/70'>No tag effects configured.</p> : null}
+                  {form.conditions.length === 0 ? <p className='text-xs text-clay'>No conditions defined yet — add one to scope this action's effects.</p> : null}
                 </div>
               </div>
             </div>
@@ -429,6 +637,21 @@ export const ManageCustomActionsScreen = ({
             >
               Save
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pendingConditionRemoval !== null} onOpenChange={(open) => { if (!open) setPendingConditionRemovalId(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove this condition?</DialogTitle>
+          </DialogHeader>
+          <p className='text-sm text-espresso'>
+            {pendingConditionRemoval ? `This removes the "${describeRequiredTags(pendingConditionRemoval.requiredTagIds, tagsById)}" condition, its checklist items, and its tag effects.` : ''}
+          </p>
+          <div className='flex justify-end gap-2 pt-1'>
+            <Button variant='ghost' onClick={() => setPendingConditionRemovalId(null)}>Cancel</Button>
+            <Button variant='destructive' onClick={() => pendingConditionRemoval && removeCondition(pendingConditionRemoval.id)}>Remove</Button>
           </div>
         </DialogContent>
       </Dialog>

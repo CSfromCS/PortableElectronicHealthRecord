@@ -13,7 +13,7 @@ import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import type { Patient, TagAutomationRole, TagDefinition, TagDisplayType, TagGroupDefinition } from '@/types'
 import { AUTOMATION_ROLE_LABELS, UNGROUPED_LABEL } from './tagConstants'
-import { bucketTagsByGroup, sortTagGroups, sortTagsInGroup } from './tagUtils'
+import { bucketTagsByGroup, patientHasTagAnywhere, sortTagGroups, sortTagsInGroup } from './tagUtils'
 import { TagChip } from './TagChip'
 
 type TagFormState = {
@@ -83,13 +83,8 @@ export const ManageTagsScreen = ({
   const buckets = bucketTagsByGroup(tags, groups)
   const bucketsById = new Map(buckets.map((bucket) => [bucket.groupId, bucket]))
 
-  const patientHasTag = (patient: Patient, tagId: number) =>
-    (patient.tagIds ?? []).includes(tagId)
-    || (patient.mainServiceTagIds ?? []).includes(tagId)
-    || (patient.referralServiceTagIds ?? []).includes(tagId)
-
   const patientCountForTag = (tagId: number | undefined) =>
-    tagId === undefined ? 0 : patients.filter((patient) => patientHasTag(patient, tagId)).length
+    tagId === undefined ? 0 : patients.filter((patient) => patientHasTagAnywhere(patient, tagId)).length
 
   const openCreateTag = (groupId?: number) => {
     setEditingTagId(null)
@@ -148,7 +143,7 @@ export const ManageTagsScreen = ({
     const tagId = deleteTagTarget.id
 
     await db.transaction('rw', [db.patients, db.tagDefinitions], async () => {
-      const affectedPatients = await db.patients.filter((patient) => patientHasTag(patient, tagId)).toArray()
+      const affectedPatients = await db.patients.filter((patient) => patientHasTagAnywhere(patient, tagId)).toArray()
       await Promise.all(
         affectedPatients.map((patient) =>
           patient.id === undefined
