@@ -37,10 +37,15 @@ import { cn } from '@/lib/utils'
 import { MasterChecklistQuickAdd } from '@/features/checklist/MasterChecklistQuickAdd'
 import {
   appendChecklistItemsForPatientDate,
+  insertBlankChecklistItemAfter,
   insertNewChecklistItem,
+  mergeChecklistItemIntoPrevious,
   normalizeChecklistItems,
+  normalizeChecklistItemsKeepingBlanks,
   selectLatestDailyUpdate,
+  splitChecklistItemAtCursor,
   toPendingChecklistItems,
+  withTrailingBlankChecklistItem,
 } from '@/features/checklist/checklistUtils'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
@@ -250,6 +255,7 @@ type MasterChecklistItem = {
   index: number
   text: string
   completed: boolean
+  notes: string
   createdDate: string | null
   completedDate: string | null
   lastFoundDate: string | null
@@ -540,11 +546,23 @@ function App() {
   const [masterChecklistDate, setMasterChecklistDate] = useState(() => toLocalISODate())
   const [dailyUpdateForm, setDailyUpdateForm] = useState<DailyUpdateFormState>(initialDailyUpdateForm)
   const [dailyUpdateId, setDailyUpdateId] = useState<number | undefined>(undefined)
-  const [dailyChecklistDraft, setDailyChecklistDraft] = useState('')
   const [draggingDailyChecklistItemIndex, setDraggingDailyChecklistItemIndex] = useState<number | null>(null)
   const [touchDailyChecklistTargetIndex, setTouchDailyChecklistTargetIndex] = useState<number | null>(null)
   const [draggingMasterChecklistItem, setDraggingMasterChecklistItem] = useState<{ patientId: number; index: number } | null>(null)
   const [touchMasterChecklistTarget, setTouchMasterChecklistTarget] = useState<{ patientId: number; index: number } | null>(null)
+  // Continuous-checklist editing (issue #78): which row currently has focus somewhere inside it
+  // (reveals its notes line even while empty), and a one-shot request to move the cursor into a
+  // specific row/offset right after a split or merge reshapes the list.
+  const [activeDailyChecklistIndex, setActiveDailyChecklistIndex] = useState<number | null>(null)
+  const [pendingDailyChecklistFocus, setPendingDailyChecklistFocus] = useState<{ index: number; caretOffset: number } | null>(null)
+  const [activeMasterChecklistRow, setActiveMasterChecklistRow] = useState<{ patientId: number; index: number } | null>(null)
+  // expectedText guards against the Master Checklist's async write/live-query race: the focus
+  // request is set the instant the edit is queued, but the row it targets won't show the new
+  // content until the IndexedDB write lands and the live query re-derives masterChecklistItems
+  // (not necessarily by the very next render) — so autoEnter only fires once the row's *actual*
+  // text matches what this edit was expected to produce there, not merely once some row exists
+  // at that index (which, until then, is still whatever was there before the edit).
+  const [pendingMasterChecklistFocus, setPendingMasterChecklistFocus] = useState<{ patientId: number; index: number; caretOffset: number; expectedText: string } | null>(null)
   const [vitalForm, setVitalForm] = useState<VitalFormState>(() => initialVitalForm())
   const [editingVitalId, setEditingVitalId] = useState<number | null>(null)
   const [vitalDraftId, setVitalDraftId] = useState<number | null>(null)
@@ -1509,8 +1527,12 @@ function App() {
       const sourceUpdate = dateMatchedUpdate ?? selectLatestDailyUpdate(priorOrCurrent)
       if (!sourceUpdate) return
 
+      // dateMatchedUpdate means this is the entry actively being viewed/edited "live" — keep
+      // blank items so a split's blank "after" item can actually render (see updateMasterChecklist).
+      // A checklist merely carried forward from a prior date is never live-edited directly, so it
+      // still drops blanks as stale abandoned edits.
       const scopedChecklist = dateMatchedUpdate
-        ? normalizeChecklistItems(sourceUpdate.checklist)
+        ? normalizeChecklistItemsKeepingBlanks(sourceUpdate.checklist)
         : toPendingChecklistItems(sourceUpdate.checklist)
       if (scopedChecklist.length === 0) return
 
@@ -1544,6 +1566,7 @@ function App() {
           index,
           text: item.text,
           completed: item.completed,
+          notes: item.notes ?? '',
           createdDate,
           completedDate,
           lastFoundDate,
@@ -2060,7 +2083,6 @@ function App() {
         problems: toPendingProblemBlocks(latestPriorUpdate?.problems),
         checklist: toPendingChecklistItems(latestPriorUpdate?.checklist),
       })
-      setDailyChecklistDraft('')
       setDailyDirty(false)
       return
     }
@@ -2073,7 +2095,6 @@ function App() {
       plans: normalizedUpdate.plans,
       checklist: normalizeChecklistItems(normalizedUpdate.checklist),
     })
-    setDailyChecklistDraft('')
     setDailyDirty(false)
   }, [])
 
@@ -2085,7 +2106,6 @@ function App() {
       plans: normalizedUpdate.plans,
       checklist: toPendingChecklistItems(normalizedUpdate.checklist),
     })
-    setDailyChecklistDraft('')
     setDailyDirty(true)
   }, [])
 
@@ -2509,8 +2529,12 @@ function App() {
       } satisfies Omit<DailyUpdate, 'id'>
     })()
 
-    const currentChecklist = normalizeChecklistItems(entryForDate.checklist)
-    const nextChecklist = normalizeChecklistItems(updater(currentChecklist))
+    // Keeps blank-text items rather than dropping them: unlike the per-patient tab, this view
+    // has no local draft layer, so a split's blank "after" item would otherwise be stripped
+    // before it could ever be rendered or typed into. Deliberate edits to empty text remove the
+    // item explicitly instead (see updateMasterChecklistItemText / the row's blur handler).
+    const currentChecklist = normalizeChecklistItemsKeepingBlanks(entryForDate.checklist)
+    const nextChecklist = normalizeChecklistItemsKeepingBlanks(updater(currentChecklist))
 
     const savedId = await db.dailyUpdates.put({
       ...entryForDate,
@@ -2523,17 +2547,55 @@ function App() {
     return typeof savedId === 'number' ? savedId : existingEntry?.id
   }, [dailyUpdatesByPatient, masterChecklistDate, touchPatientLastModified])
 
-  const addDailyChecklistItem = useCallback(() => {
-    const nextText = dailyChecklistDraft.trim()
-    if (!nextText) return
+  // Pressing Enter mid-item splits it at the cursor into two items in place (issue #78) — kept
+  // separate from insertNewChecklistItem's default-position logic, which other entry points
+  // (Master Checklist quick-add, Custom Actions) still use unchanged.
+  const splitDailyChecklistItem = useCallback((index: number, fieldValue: string, caretOffset: number) => {
+    setDailyUpdateForm((previous) => {
+      const result = splitChecklistItemAtCursor(previous.checklist, index, fieldValue, caretOffset)
+      if (result.focusIndex !== null) {
+        setPendingDailyChecklistFocus({ index: result.focusIndex, caretOffset: 0 })
+      }
+      return { ...previous, checklist: result.items }
+    })
+    setDailyDirty(true)
+  }, [])
+
+  // Backspacing at the start of an item (empty or not) merges it into the previous one — undoes
+  // an accidental split (issue #78).
+  const mergeDailyChecklistItemWithPrevious = useCallback((index: number) => {
+    setDailyUpdateForm((previous) => {
+      const result = mergeChecklistItemIntoPrevious(previous.checklist, index)
+      if (!result) return previous
+      setPendingDailyChecklistFocus({ index: result.focusIndex, caretOffset: result.caretOffset })
+      return { ...previous, checklist: result.items }
+    })
+    setDailyDirty(true)
+  }, [])
+
+  // Enter inside an item's notes always adds a new item below it, unsplit — see
+  // insertBlankChecklistItemAfter's doc comment.
+  const insertBlankDailyChecklistItemAfter = useCallback((index: number) => {
+    setDailyUpdateForm((previous) => {
+      const result = insertBlankChecklistItemAfter(previous.checklist, index)
+      if (!result) return previous
+      setPendingDailyChecklistFocus({ index: result.focusIndex, caretOffset: 0 })
+      return { ...previous, checklist: result.items }
+    })
+    setDailyDirty(true)
+  }, [])
+
+  const updateDailyChecklistItemNotes = useCallback((index: number, notes: string) => {
+    const nextNotes = notes.trim()
 
     setDailyUpdateForm((previous) => ({
       ...previous,
-      checklist: insertNewChecklistItem(previous.checklist, { text: nextText, completed: false }),
+      checklist: previous.checklist.map((item, itemIndex) => (
+        itemIndex === index ? { ...item, ...(nextNotes ? { notes: nextNotes } : { notes: undefined }) } : item
+      )),
     }))
-    setDailyChecklistDraft('')
     setDailyDirty(true)
-  }, [dailyChecklistDraft])
+  }, [])
 
   const updateDailyChecklistItemCompletion = useCallback((index: number, completed: boolean) => {
     setDailyUpdateForm((previous) => ({
@@ -2667,73 +2729,139 @@ function App() {
     reorderDailyChecklistItem(index, targetIndex)
   }, [dailyUpdateForm.checklist, reorderDailyChecklistItem])
 
-  const renderDailyChecklistItem = useCallback((item: DailyChecklistItem, index: number) => (
+  // The blank draft line at the end of the list (see withTrailingBlankChecklistItem) commits
+  // by appending — never sorted/inserted at a default position, since it's typed exactly where
+  // it visually sits.
+  const appendDailyChecklistItemAtEnd = useCallback((text: string) => {
+    const nextText = text.trim()
+    if (!nextText) return
+
+    setDailyUpdateForm((previous) => ({
+      ...previous,
+      checklist: [...previous.checklist, { text: nextText, completed: false }],
+    }))
+    setDailyDirty(true)
+  }, [])
+
+  const renderDailyChecklistItem = useCallback((item: DailyChecklistItem, index: number, isDraftRow: boolean) => (
     <div
       key={`checklist-${index}`}
       data-daily-checklist-index={index}
-      className={`flex items-start gap-2 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingDailyChecklistItemIndex === index ? 'opacity-60' : ''} ${touchDailyChecklistTargetIndex === index && draggingDailyChecklistItemIndex !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
+      className={`flex flex-col gap-0.5 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingDailyChecklistItemIndex === index ? 'opacity-60' : ''} ${touchDailyChecklistTargetIndex === index && draggingDailyChecklistItemIndex !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
       onDragOver={(event) => allowDailyChecklistDrop(event, index)}
       onDrop={(event) => dropDailyChecklistItem(event, index)}
+      onFocus={() => setActiveDailyChecklistIndex(index)}
+      onBlur={(event) => {
+        const nextFocusTarget = event.relatedTarget
+        if (nextFocusTarget instanceof Node && event.currentTarget.contains(nextFocusTarget)) return
+        setActiveDailyChecklistIndex((current) => (current === index ? null : current))
+      }}
     >
-      <input
-        type='checkbox'
-        className='mt-1 h-4 w-4 accent-action-primary'
-        checked={item.completed}
-        onChange={(event) => updateDailyChecklistItemCompletion(index, event.target.checked)}
-        aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
-      />
-      <TapToEditField
-        className='min-w-0 flex-1 px-1.5 py-0.5 text-sm'
-        ariaLabel='Checklist item text'
-        emptyText='Tap to edit'
-        value={item.text}
-        onCommit={(nextText) => updateDailyChecklistItemText(index, nextText)}
-        renderView={(text) => (
-          <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
-        )}
-        renderEditor={({ value, onChange }) => (
-          <AutoGrowTextField
-            aria-label='Checklist item text'
-            value={value}
-            onChange={onChange}
+      <div className='flex items-start gap-2'>
+        <input
+          type='checkbox'
+          className='mt-1 h-4 w-4 accent-action-primary disabled:opacity-40'
+          checked={item.completed}
+          disabled={isDraftRow}
+          onChange={(event) => updateDailyChecklistItemCompletion(index, event.target.checked)}
+          aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
+        />
+        <div className='min-w-0 flex-1'>
+          <TapToEditField
+            className='px-1.5 py-0.5 text-sm'
+            ariaLabel='Checklist item text'
+            emptyText={isDraftRow ? 'Add checklist item' : 'Tap to edit'}
+            value={item.text}
+            onCommit={(nextText) => (isDraftRow ? appendDailyChecklistItemAtEnd(nextText) : updateDailyChecklistItemText(index, nextText))}
+            onEditorKeyDown={(event, { fieldValue, caretOffset, forceExit }) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                forceExit()
+                splitDailyChecklistItem(index, fieldValue, caretOffset)
+              } else if (event.key === 'Backspace' && !isDraftRow && index > 0 && caretOffset === 0) {
+                event.preventDefault()
+                forceExit()
+                mergeDailyChecklistItemWithPrevious(index)
+              }
+            }}
+            autoEnter={pendingDailyChecklistFocus?.index === index ? { caretOffset: pendingDailyChecklistFocus.caretOffset } : null}
+            onAutoEnterHandled={() => setPendingDailyChecklistFocus(null)}
+            renderView={(text) => (
+              <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
+            )}
+            renderEditor={({ value, onChange }) => (
+              <AutoGrowTextField
+                aria-label='Checklist item text'
+                value={value}
+                onChange={onChange}
+              />
+            )}
           />
-        )}
-      />
-      <Button
-        type='button'
-        variant='ghost'
-        className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
-        aria-label='Drag checklist item to reorder'
-        draggable
-        onDragStart={(event) => startDailyChecklistDrag(event, index)}
-        onDragEnd={endDailyChecklistDrag}
-        onTouchStart={(event) => startDailyChecklistTouchDrag(event, index)}
-        onTouchMove={updateDailyChecklistTouchTarget}
-        onTouchEnd={endDailyChecklistTouchDrag}
-        onTouchCancel={cancelDailyChecklistTouchDrag}
-        onKeyDown={(event) => {
-          if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
-          event.preventDefault()
-          moveDailyChecklistItemByDirection(index, event.key === 'ArrowUp' ? 'up' : 'down')
-        }}
-      >
-        <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
-      </Button>
-      <Button
-        type='button'
-        variant='ghost'
-        className='h-6 w-6 shrink-0 p-0 text-action-danger'
-        aria-label='Remove checklist item'
-        onClick={() => requestDeleteConfirmation({
-          title: 'Delete checklist item?',
-          message: `Remove "${item.text || 'this item'}" from the checklist?`,
-          onConfirm: () => removeDailyChecklistItem(index),
-        })}
-      >
-        <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
-      </Button>
+          {!isDraftRow && ((item.notes ?? '').trim().length > 0 || activeDailyChecklistIndex === index) ? (
+            <TapToEditField
+              className='px-1.5 py-0 text-xs text-clay/80'
+              ariaLabel='Checklist item notes'
+              emptyText='Add note'
+              value={item.notes ?? ''}
+              onCommit={(nextNotes) => updateDailyChecklistItemNotes(index, nextNotes)}
+              onEditorKeyDown={(event, { fieldValue, forceExit }) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                updateDailyChecklistItemNotes(index, fieldValue)
+                forceExit()
+                insertBlankDailyChecklistItemAfter(index)
+              }}
+              renderView={(text) => <span>{text}</span>}
+              renderEditor={({ value, onChange }) => (
+                <AutoGrowTextField
+                  aria-label='Checklist item notes'
+                  value={value}
+                  onChange={onChange}
+                />
+              )}
+            />
+          ) : null}
+        </div>
+        {!isDraftRow ? (
+          <Button
+            type='button'
+            variant='ghost'
+            className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
+            aria-label='Drag checklist item to reorder'
+            draggable
+            onDragStart={(event) => startDailyChecklistDrag(event, index)}
+            onDragEnd={endDailyChecklistDrag}
+            onTouchStart={(event) => startDailyChecklistTouchDrag(event, index)}
+            onTouchMove={updateDailyChecklistTouchTarget}
+            onTouchEnd={endDailyChecklistTouchDrag}
+            onTouchCancel={cancelDailyChecklistTouchDrag}
+            onKeyDown={(event) => {
+              if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+              event.preventDefault()
+              moveDailyChecklistItemByDirection(index, event.key === 'ArrowUp' ? 'up' : 'down')
+            }}
+          >
+            <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
+          </Button>
+        ) : null}
+        {!isDraftRow ? (
+          <Button
+            type='button'
+            variant='ghost'
+            className='h-6 w-6 shrink-0 p-0 text-action-danger'
+            aria-label='Remove checklist item'
+            onClick={() => requestDeleteConfirmation({
+              title: 'Delete checklist item?',
+              message: `Remove "${item.text || 'this item'}" from the checklist?`,
+              onConfirm: () => removeDailyChecklistItem(index),
+            })}
+          >
+            <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
+          </Button>
+        ) : null}
+      </div>
     </div>
-  ), [allowDailyChecklistDrop, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, moveDailyChecklistItemByDirection, removeDailyChecklistItem, requestDeleteConfirmation, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
+  ), [activeDailyChecklistIndex, allowDailyChecklistDrop, appendDailyChecklistItemAtEnd, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, insertBlankDailyChecklistItemAfter, mergeDailyChecklistItemWithPrevious, moveDailyChecklistItemByDirection, pendingDailyChecklistFocus, removeDailyChecklistItem, requestDeleteConfirmation, splitDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemNotes, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
 
   const addMasterChecklistItem = useCallback((patientId: number, text: string) => {
     const nextText = text.trim()
@@ -2753,9 +2881,72 @@ function App() {
   const updateMasterChecklistItemText = useCallback((patientId: number, index: number, text: string) => {
     const nextText = text.trim()
 
+    // Committing an item's text as blank removes it outright — since updateMasterChecklist no
+    // longer strips blanks on write (that would also strip a split's not-yet-typed-into new
+    // item), a deliberate clear-to-empty has to delete the item explicitly instead.
+    void updateMasterChecklist(patientId, (previous) => (
+      nextText
+        ? previous.map((item, itemIndex) => (itemIndex === index ? { ...item, text: nextText } : item))
+        : previous.filter((_, itemIndex) => itemIndex !== index)
+    ))
+  }, [updateMasterChecklist])
+
+  const updateMasterChecklistItemNotes = useCallback((patientId: number, index: number, notes: string) => {
+    const nextNotes = notes.trim()
+
     void updateMasterChecklist(patientId, (previous) => previous.map((item, itemIndex) => (
-      itemIndex === index ? { ...item, text: nextText } : item
+      itemIndex === index ? { ...item, ...(nextNotes ? { notes: nextNotes } : { notes: undefined }) } : item
     )))
+  }, [updateMasterChecklist])
+
+  // Same split-at-cursor / merge-into-previous / notes-Enter behavior as the per-patient tab
+  // (issue #78). The focus request is set right away (inside the updater, using the post-edit
+  // items it already computed) rather than waiting on updateMasterChecklist's returned promise
+  // — that write lands in IndexedDB and the list only re-renders once the live query re-derives
+  // masterChecklistItems from it, which isn't guaranteed to have happened by the time the write
+  // "completes" from this function's point of view. pendingMasterChecklistFocus's expectedText
+  // is what actually makes this race-proof: autoEnter only fires once the target row's real text
+  // matches it, so it naturally waits out however many extra renders the live query needs.
+  const splitMasterChecklistItem = useCallback((patientId: number, index: number, fieldValue: string, caretOffset: number) => {
+    void updateMasterChecklist(patientId, (previous) => {
+      const result = splitChecklistItemAtCursor(previous, index, fieldValue, caretOffset)
+      if (result.focusIndex !== null) {
+        setPendingMasterChecklistFocus({ patientId, index: result.focusIndex, caretOffset: 0, expectedText: result.items[result.focusIndex]?.text ?? '' })
+      }
+      return result.items
+    })
+  }, [updateMasterChecklist])
+
+  const mergeMasterChecklistItemWithPrevious = useCallback((patientId: number, index: number) => {
+    void updateMasterChecklist(patientId, (previous) => {
+      const result = mergeChecklistItemIntoPrevious(previous, index)
+      if (!result) return previous
+      setPendingMasterChecklistFocus({
+        patientId,
+        index: result.focusIndex,
+        caretOffset: result.caretOffset,
+        expectedText: result.items[result.focusIndex]?.text ?? '',
+      })
+      return result.items
+    })
+  }, [updateMasterChecklist])
+
+  // Commits the notes text and inserts the new blank item in a single read-modify-write cycle.
+  // Calling updateMasterChecklistItemNotes and a separate insert as two independent
+  // updateMasterChecklist calls raced each other — both start from IndexedDB independently, so
+  // the second one's read could grab the pre-notes-update snapshot and overwrite the first
+  // write, silently discarding the just-typed notes.
+  const commitMasterChecklistItemNotesAndInsertBlankAfter = useCallback((patientId: number, index: number, notes: string) => {
+    const nextNotes = notes.trim()
+    void updateMasterChecklist(patientId, (previous) => {
+      const withNotes = previous.map((item, itemIndex) => (
+        itemIndex === index ? { ...item, ...(nextNotes ? { notes: nextNotes } : { notes: undefined }) } : item
+      ))
+      const result = insertBlankChecklistItemAfter(withNotes, index)
+      if (!result) return withNotes
+      setPendingMasterChecklistFocus({ patientId, index: result.focusIndex, caretOffset: 0, expectedText: '' })
+      return result.items
+    })
   }, [updateMasterChecklist])
 
   // Custom Actions (issue #75) append checklist items to a specific patient+date. When that's the
@@ -2975,6 +3166,25 @@ function App() {
       className={`space-y-1 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingMasterChecklistItem?.patientId === item.patientId && draggingMasterChecklistItem.index === item.index ? 'opacity-60' : ''} ${touchMasterChecklistTarget?.patientId === item.patientId && touchMasterChecklistTarget.index === item.index && draggingMasterChecklistItem !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
       onDragOver={(event) => allowMasterChecklistDrop(event, item.patientId, item.index)}
       onDrop={(event) => dropMasterChecklistItem(event, item.patientId, item.index)}
+      onFocus={() => setActiveMasterChecklistRow({ patientId: item.patientId, index: item.index })}
+      onBlur={(event) => {
+        const nextFocusTarget = event.relatedTarget
+        if (nextFocusTarget instanceof Node && event.currentTarget.contains(nextFocusTarget)) return
+        setActiveMasterChecklistRow((current) => (
+          current?.patientId === item.patientId && current.index === item.index ? null : current
+        ))
+        // Safety net for a split/inserted blank item that's never actually typed into: the text
+        // field's own commit is skipped in that case (its draft never changed from the initial
+        // empty value), so nothing else would otherwise clean it up. Reads the text field's live
+        // DOM value rather than `item.text` — if a real edit just committed on this same blur,
+        // React hasn't re-rendered yet, so `item.text` here could still be the stale pre-commit
+        // snapshot, which would otherwise risk deleting an item the user just typed into.
+        const liveTextField = event.currentTarget.querySelector('textarea[aria-label="Checklist item text"]')
+        const liveText = liveTextField instanceof HTMLTextAreaElement ? liveTextField.value : item.text
+        if (liveText.trim().length === 0) {
+          removeMasterChecklistItem(item.patientId, item.index)
+        }
+      }}
     >
       <div className='flex items-start gap-2'>
         <input
@@ -2991,6 +3201,25 @@ function App() {
             emptyText='Tap to edit'
             value={item.text}
             onCommit={(nextText) => updateMasterChecklistItemText(item.patientId, item.index, nextText)}
+            onEditorKeyDown={(event, { fieldValue, caretOffset, forceExit }) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                forceExit()
+                splitMasterChecklistItem(item.patientId, item.index, fieldValue, caretOffset)
+              } else if (event.key === 'Backspace' && item.index > 0 && caretOffset === 0) {
+                event.preventDefault()
+                forceExit()
+                mergeMasterChecklistItemWithPrevious(item.patientId, item.index)
+              }
+            }}
+            autoEnter={
+              pendingMasterChecklistFocus?.patientId === item.patientId
+              && pendingMasterChecklistFocus.index === item.index
+              && pendingMasterChecklistFocus.expectedText === item.text
+                ? { caretOffset: pendingMasterChecklistFocus.caretOffset }
+                : null
+            }
+            onAutoEnterHandled={() => setPendingMasterChecklistFocus(null)}
             renderView={(text) => (
               <span className={item.completed ? 'text-clay line-through' : 'text-espresso'}>{text}</span>
             )}
@@ -3002,6 +3231,29 @@ function App() {
               />
             )}
           />
+          {item.notes.trim().length > 0 || (activeMasterChecklistRow?.patientId === item.patientId && activeMasterChecklistRow.index === item.index) ? (
+            <TapToEditField
+              className='px-1.5 py-0 text-xs text-clay/80'
+              ariaLabel='Checklist item notes'
+              emptyText='Add note'
+              value={item.notes}
+              onCommit={(nextNotes) => updateMasterChecklistItemNotes(item.patientId, item.index, nextNotes)}
+              onEditorKeyDown={(event, { fieldValue, forceExit }) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                forceExit()
+                commitMasterChecklistItemNotesAndInsertBlankAfter(item.patientId, item.index, fieldValue)
+              }}
+              renderView={(text) => <span>{text}</span>}
+              renderEditor={({ value, onChange }) => (
+                <AutoGrowTextField
+                  aria-label='Checklist item notes'
+                  value={value}
+                  onChange={onChange}
+                />
+              )}
+            />
+          ) : null}
         </div>
         <Button
           type='button'
@@ -3038,7 +3290,7 @@ function App() {
         </Button>
       </div>
     </div>
-    ), [allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, moveMasterChecklistItem, removeMasterChecklistItem, requestDeleteConfirmation, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
+    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, commitMasterChecklistItemNotesAndInsertBlankAfter, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
@@ -5717,29 +5969,11 @@ function App() {
                       </div>
                     ) : null}
                     <div className='space-y-2'>
-                      <p className='text-xs text-clay'>Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
-                      <div className='flex flex-wrap gap-2'>
-                        <Input
-                          value={dailyChecklistDraft}
-                          onChange={(event) => setDailyChecklistDraft(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault()
-                              addDailyChecklistItem()
-                            }
-                          }}
-                          placeholder='Add checklist item'
-                          aria-label='Add checklist item'
-                        />
-                        <Button type='button' variant='secondary' onClick={addDailyChecklistItem}>
-                          Add item
-                        </Button>
-                      </div>
+                      <p className='text-xs text-clay'>Tap any line to edit it, or the blank line at the end to add a new one. Press Enter to split at the cursor into a new item; Backspace at the start of a line merges it back into the one above (undoes a split). Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
                       <div className='space-y-2'>
-                        {dailyUpdateForm.checklist.map((item, index) => renderDailyChecklistItem(item, index))}
-                        {dailyUpdateForm.checklist.length === 0 && (
-                          <p className='text-xs text-clay'>No checklist items yet.</p>
-                        )}
+                        {withTrailingBlankChecklistItem(dailyUpdateForm.checklist).map((item, index) => (
+                          renderDailyChecklistItem(item, index, index >= dailyUpdateForm.checklist.length)
+                        ))}
                       </div>
                     </div>
                   </div>

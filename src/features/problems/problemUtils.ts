@@ -75,7 +75,8 @@ export const normalizeDailyUpdate = (value: unknown): DailyUpdate => {
       if (!entry || typeof entry !== 'object') return []
       const checklistItem = entry as Record<string, unknown>
       const text = typeof checklistItem.text === 'string' ? checklistItem.text.trim() : ''
-      return text ? [{ text, completed: Boolean(checklistItem.completed) }] : []
+      const notes = typeof checklistItem.notes === 'string' ? checklistItem.notes.trim() : ''
+      return text ? [{ text, completed: Boolean(checklistItem.completed), ...(notes ? { notes } : {}) }] : []
     })
     : []
 

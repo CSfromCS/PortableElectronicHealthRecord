@@ -134,7 +134,7 @@ export interface DailyUpdate {
   problems: ProblemBlock[]
   assessment: string
   plans: string
-  checklist: { text: string; completed: boolean }[]
+  checklist: { text: string; completed: boolean; notes?: string }[]
   lastUpdated: string
 }
 
