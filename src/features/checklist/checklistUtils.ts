@@ -4,17 +4,33 @@ import type { DailyUpdate } from '@/types'
 
 export type ChecklistItem = { text: string; completed: boolean; notes?: string }
 
+/** Shared field cleanup (trim text/notes, coerce completed to boolean) without dropping
+ * blank-text items — see normalizeChecklistItemsKeepingBlanks for why that matters. */
+const cleanChecklistItemFields = (item: ChecklistItem): ChecklistItem => {
+  const trimmedNotes = (item.notes ?? '').trim()
+  return {
+    text: item.text.trim(),
+    completed: Boolean(item.completed),
+    ...(trimmedNotes ? { notes: trimmedNotes } : {}),
+  }
+}
+
 export const normalizeChecklistItems = (items: ChecklistItem[] | undefined): ChecklistItem[] =>
-  (items ?? [])
-    .map((item) => {
-      const trimmedNotes = (item.notes ?? '').trim()
-      return {
-        text: item.text.trim(),
-        completed: Boolean(item.completed),
-        ...(trimmedNotes ? { notes: trimmedNotes } : {}),
-      }
-    })
-    .filter((item) => item.text.length > 0)
+  (items ?? []).map(cleanChecklistItemFields).filter((item) => item.text.length > 0)
+
+/**
+ * Like normalizeChecklistItems, but keeps blank-text items instead of dropping them. The
+ * per-patient Checklist tab's local form state is the source of truth for what's on screen —
+ * normalizeChecklistItems only strips blanks at the point of actually persisting to IndexedDB,
+ * which doesn't affect what's still visibly on screen. The Master Checklist view has no such
+ * local layer: what's rendered is re-derived from IndexedDB on every edit, so if a split's blank
+ * "after" item (e.g. pressing Enter at the end of a line) were stripped on write/read the same
+ * way, it would vanish before it could ever be typed into. Used only for the checklist actively
+ * being edited "live" in Master Checklist; carrying items forward to a new date still uses the
+ * blank-dropping version, since a carried-forward blank is just a stale abandoned edit.
+ */
+export const normalizeChecklistItemsKeepingBlanks = (items: ChecklistItem[] | undefined): ChecklistItem[] =>
+  (items ?? []).map(cleanChecklistItemFields)
 
 export const toPendingChecklistItems = (items: ChecklistItem[] | undefined): ChecklistItem[] =>
   normalizeChecklistItems(items)

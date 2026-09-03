@@ -41,6 +41,7 @@ import {
   insertNewChecklistItem,
   mergeChecklistItemIntoPrevious,
   normalizeChecklistItems,
+  normalizeChecklistItemsKeepingBlanks,
   selectLatestDailyUpdate,
   splitChecklistItemAtCursor,
   toPendingChecklistItems,
@@ -1526,8 +1527,12 @@ function App() {
       const sourceUpdate = dateMatchedUpdate ?? selectLatestDailyUpdate(priorOrCurrent)
       if (!sourceUpdate) return
 
+      // dateMatchedUpdate means this is the entry actively being viewed/edited "live" — keep
+      // blank items so a split's blank "after" item can actually render (see updateMasterChecklist).
+      // A checklist merely carried forward from a prior date is never live-edited directly, so it
+      // still drops blanks as stale abandoned edits.
       const scopedChecklist = dateMatchedUpdate
-        ? normalizeChecklistItems(sourceUpdate.checklist)
+        ? normalizeChecklistItemsKeepingBlanks(sourceUpdate.checklist)
         : toPendingChecklistItems(sourceUpdate.checklist)
       if (scopedChecklist.length === 0) return
 
@@ -2524,8 +2529,12 @@ function App() {
       } satisfies Omit<DailyUpdate, 'id'>
     })()
 
-    const currentChecklist = normalizeChecklistItems(entryForDate.checklist)
-    const nextChecklist = normalizeChecklistItems(updater(currentChecklist))
+    // Keeps blank-text items rather than dropping them: unlike the per-patient tab, this view
+    // has no local draft layer, so a split's blank "after" item would otherwise be stripped
+    // before it could ever be rendered or typed into. Deliberate edits to empty text remove the
+    // item explicitly instead (see updateMasterChecklistItemText / the row's blur handler).
+    const currentChecklist = normalizeChecklistItemsKeepingBlanks(entryForDate.checklist)
+    const nextChecklist = normalizeChecklistItemsKeepingBlanks(updater(currentChecklist))
 
     const savedId = await db.dailyUpdates.put({
       ...entryForDate,
@@ -2872,9 +2881,14 @@ function App() {
   const updateMasterChecklistItemText = useCallback((patientId: number, index: number, text: string) => {
     const nextText = text.trim()
 
-    void updateMasterChecklist(patientId, (previous) => previous.map((item, itemIndex) => (
-      itemIndex === index ? { ...item, text: nextText } : item
-    )))
+    // Committing an item's text as blank removes it outright — since updateMasterChecklist no
+    // longer strips blanks on write (that would also strip a split's not-yet-typed-into new
+    // item), a deliberate clear-to-empty has to delete the item explicitly instead.
+    void updateMasterChecklist(patientId, (previous) => (
+      nextText
+        ? previous.map((item, itemIndex) => (itemIndex === index ? { ...item, text: nextText } : item))
+        : previous.filter((_, itemIndex) => itemIndex !== index)
+    ))
   }, [updateMasterChecklist])
 
   const updateMasterChecklistItemNotes = useCallback((patientId: number, index: number, notes: string) => {
@@ -3150,6 +3164,17 @@ function App() {
         setActiveMasterChecklistRow((current) => (
           current?.patientId === item.patientId && current.index === item.index ? null : current
         ))
+        // Safety net for a split/inserted blank item that's never actually typed into: the text
+        // field's own commit is skipped in that case (its draft never changed from the initial
+        // empty value), so nothing else would otherwise clean it up. Reads the text field's live
+        // DOM value rather than `item.text` — if a real edit just committed on this same blur,
+        // React hasn't re-rendered yet, so `item.text` here could still be the stale pre-commit
+        // snapshot, which would otherwise risk deleting an item the user just typed into.
+        const liveTextField = event.currentTarget.querySelector('textarea[aria-label="Checklist item text"]')
+        const liveText = liveTextField instanceof HTMLTextAreaElement ? liveTextField.value : item.text
+        if (liveText.trim().length === 0) {
+          removeMasterChecklistItem(item.patientId, item.index)
+        }
       }}
     >
       <div className='flex items-start gap-2'>
