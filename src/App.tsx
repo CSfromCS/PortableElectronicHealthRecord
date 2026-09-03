@@ -2797,11 +2797,21 @@ function App() {
       className={`flex flex-col gap-0.5 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingDailyChecklistItemIndex === index ? 'opacity-60' : ''} ${touchDailyChecklistTargetIndex === index && draggingDailyChecklistItemIndex !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
       onDragOver={(event) => allowDailyChecklistDrop(event, index)}
       onDrop={(event) => dropDailyChecklistItem(event, index)}
-      onFocus={() => setActiveDailyChecklistIndex(index)}
+      // Deferred to a macrotask: firing this synchronously (as focus/blur normally do) can land
+      // this row's re-render right between a DIFFERENT item's checkbox native click-toggle and its
+      // change event, causing React to reset that checkbox back to its stale value — the click
+      // gesture's mousedown/blur/focus/mouseup/click/change are all dispatched synchronously by the
+      // browser, so pushing the state update past them with setTimeout(0) keeps it out of that
+      // window entirely (issue #122).
+      onFocus={() => {
+        window.setTimeout(() => setActiveDailyChecklistIndex(index), 0)
+      }}
       onBlur={(event) => {
         const nextFocusTarget = event.relatedTarget
         if (nextFocusTarget instanceof Node && event.currentTarget.contains(nextFocusTarget)) return
-        setActiveDailyChecklistIndex((current) => (current === index ? null : current))
+        window.setTimeout(() => {
+          setActiveDailyChecklistIndex((current) => (current === index ? null : current))
+        }, 0)
       }}
     >
       <div className='flex items-start gap-2'>
@@ -2811,6 +2821,12 @@ function App() {
           checked={item.completed}
           disabled={isDraftRow}
           onChange={(event) => updateDailyChecklistItemCompletion(index, event.target.checked)}
+          // Stops the row's onFocus (which reveals its notes field) from firing when the
+          // checkbox itself is what's being focused — letting that focus-triggered re-render
+          // land between the browser's native toggle and React's own change detection was
+          // silently swallowing the very click that focused it, needing a second click to
+          // actually register (issue #122).
+          onFocus={(event) => event.stopPropagation()}
           aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
         />
         <div className='min-w-0 flex-1'>
@@ -3234,24 +3250,33 @@ function App() {
       className={`space-y-1 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingMasterChecklistItem?.patientId === item.patientId && draggingMasterChecklistItem.index === item.index ? 'opacity-60' : ''} ${touchMasterChecklistTarget?.patientId === item.patientId && touchMasterChecklistTarget.index === item.index && draggingMasterChecklistItem !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
       onDragOver={(event) => allowMasterChecklistDrop(event, item.patientId, item.index)}
       onDrop={(event) => dropMasterChecklistItem(event, item.patientId, item.index)}
-      onFocus={() => setActiveMasterChecklistRow({ patientId: item.patientId, index: item.index })}
+      // Deferred to a macrotask: see the matching comment on the per-patient row (issue #122) —
+      // firing this synchronously can re-render mid-click and cause a DIFFERENT item's checkbox
+      // to have its native toggle reverted by React before its change event lands.
+      onFocus={() => {
+        window.setTimeout(() => setActiveMasterChecklistRow({ patientId: item.patientId, index: item.index }), 0)
+      }}
       onBlur={(event) => {
         const nextFocusTarget = event.relatedTarget
         if (nextFocusTarget instanceof Node && event.currentTarget.contains(nextFocusTarget)) return
-        setActiveMasterChecklistRow((current) => (
-          current?.patientId === item.patientId && current.index === item.index ? null : current
-        ))
         // Safety net for a split/inserted blank item that's never actually typed into: the text
         // field's own commit is skipped in that case (its draft never changed from the initial
         // empty value), so nothing else would otherwise clean it up. Reads the text field's live
         // DOM value rather than `item.text` — if a real edit just committed on this same blur,
         // React hasn't re-rendered yet, so `item.text` here could still be the stale pre-commit
-        // snapshot, which would otherwise risk deleting an item the user just typed into.
+        // snapshot, which would otherwise risk deleting an item the user just typed into. Read
+        // synchronously (before the deferred setTimeout below) since `event.currentTarget` is only
+        // guaranteed valid while this handler is running.
         const liveTextField = event.currentTarget.querySelector('textarea[aria-label="Checklist item text"]')
         const liveText = liveTextField instanceof HTMLTextAreaElement ? liveTextField.value : item.text
-        if (liveText.trim().length === 0) {
-          removeMasterChecklistItem(item.patientId, item.index)
-        }
+        window.setTimeout(() => {
+          setActiveMasterChecklistRow((current) => (
+            current?.patientId === item.patientId && current.index === item.index ? null : current
+          ))
+          if (liveText.trim().length === 0) {
+            removeMasterChecklistItem(item.patientId, item.index)
+          }
+        }, 0)
       }}
     >
       <div className='flex items-start gap-2'>
@@ -3260,6 +3285,9 @@ function App() {
           className='self-center h-4 w-4 accent-action-primary'
           checked={item.completed}
           onChange={(event) => updateMasterChecklistItemCompletion(item.patientId, item.index, event.target.checked)}
+          // See the matching comment on the per-patient checkbox (issue #122) — stops the row's
+          // onFocus (notes reveal) from firing off the checkbox's own focus and racing its click.
+          onFocus={(event) => event.stopPropagation()}
           aria-label={item.completed ? 'Mark checklist item pending' : 'Mark checklist item complete'}
         />
         <div className='min-w-0 flex-1'>
