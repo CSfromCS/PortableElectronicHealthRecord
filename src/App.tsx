@@ -2931,10 +2931,19 @@ function App() {
     })
   }, [updateMasterChecklist])
 
-  const insertBlankMasterChecklistItemAfter = useCallback((patientId: number, index: number) => {
+  // Commits the notes text and inserts the new blank item in a single read-modify-write cycle.
+  // Calling updateMasterChecklistItemNotes and a separate insert as two independent
+  // updateMasterChecklist calls raced each other — both start from IndexedDB independently, so
+  // the second one's read could grab the pre-notes-update snapshot and overwrite the first
+  // write, silently discarding the just-typed notes.
+  const commitMasterChecklistItemNotesAndInsertBlankAfter = useCallback((patientId: number, index: number, notes: string) => {
+    const nextNotes = notes.trim()
     void updateMasterChecklist(patientId, (previous) => {
-      const result = insertBlankChecklistItemAfter(previous, index)
-      if (!result) return previous
+      const withNotes = previous.map((item, itemIndex) => (
+        itemIndex === index ? { ...item, ...(nextNotes ? { notes: nextNotes } : { notes: undefined }) } : item
+      ))
+      const result = insertBlankChecklistItemAfter(withNotes, index)
+      if (!result) return withNotes
       setPendingMasterChecklistFocus({ patientId, index: result.focusIndex, caretOffset: 0, expectedText: '' })
       return result.items
     })
@@ -3232,9 +3241,8 @@ function App() {
               onEditorKeyDown={(event, { fieldValue, forceExit }) => {
                 if (event.key !== 'Enter') return
                 event.preventDefault()
-                updateMasterChecklistItemNotes(item.patientId, item.index, fieldValue)
                 forceExit()
-                insertBlankMasterChecklistItemAfter(item.patientId, item.index)
+                commitMasterChecklistItemNotesAndInsertBlankAfter(item.patientId, item.index, fieldValue)
               }}
               renderView={(text) => <span>{text}</span>}
               renderEditor={({ value, onChange }) => (
@@ -3282,7 +3290,7 @@ function App() {
         </Button>
       </div>
     </div>
-    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, insertBlankMasterChecklistItemAfter, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
+    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, commitMasterChecklistItemNotesAndInsertBlankAfter, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
