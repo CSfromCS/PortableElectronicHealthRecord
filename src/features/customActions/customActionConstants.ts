@@ -34,6 +34,7 @@ export const seedDefaultCustomActions = async (
   const defaults: CustomAction[] = [
     {
       name: 'Start Admission Papers',
+      scope: 'patient',
       triggerType: 'manual',
       checklistItems: [
         'Admission orders written',
@@ -48,6 +49,7 @@ export const seedDefaultCustomActions = async (
     },
     {
       name: 'Start Discharge Papers (SPDP)',
+      scope: 'patient',
       triggerType: 'manual',
       checklistItems: [
         'Discharge summary drafted',
@@ -62,6 +64,7 @@ export const seedDefaultCustomActions = async (
     },
     {
       name: 'Start PM Papers',
+      scope: 'patient',
       triggerType: 'manual',
       checklistItems: [
         'PM notification submitted',
@@ -75,6 +78,7 @@ export const seedDefaultCustomActions = async (
     },
     {
       name: 'MGH Auto-Checklist',
+      scope: 'patient',
       triggerType: 'automatic',
       triggerTagId: mghTagId,
       checklistItems: [],

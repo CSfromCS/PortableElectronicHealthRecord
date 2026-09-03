@@ -534,4 +534,26 @@ db.version(13).stores({
   await photoAttachmentTable.toCollection().modify({ isDefaultTitle: false })
 })
 
+db.version(14).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+}).upgrade(async (tx) => {
+  // Adds `scope` (issue #120) — every pre-existing Custom Action was authored before General
+  // (non-patient) actions existed, so they're all "patient"-scoped by definition.
+  const customActionTable = tx.table<CustomAction, number>('customActions')
+  await customActionTable.toCollection().modify({ scope: 'patient' })
+})
+
 export { db }

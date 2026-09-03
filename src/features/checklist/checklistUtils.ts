@@ -170,12 +170,29 @@ export const selectLatestDailyUpdate = (updates: DailyUpdate[]): DailyUpdate | n
   })
 }
 
+/** Inserts each of `texts` that isn't already present (by exact, trimmed text match — regardless
+ * of that existing item's completed state or notes) into `checklist` at the default position,
+ * skipping the rest. Also dedupes within `texts` itself, so an action listing the same text twice
+ * (e.g. once unconditionally and once in a matched condition) only ever adds it once. */
+export const insertMissingChecklistItems = (checklist: ChecklistItem[], texts: string[]): ChecklistItem[] => {
+  const existingTexts = new Set(checklist.map((item) => item.text))
+  let next = checklist
+  texts.forEach((text) => {
+    if (existingTexts.has(text)) return
+    existingTexts.add(text)
+    next = insertNewChecklistItem(next, { text, completed: false })
+  })
+  return next
+}
+
 /**
  * Appends `itemTexts` to a patient's checklist for `date` directly in IndexedDB, using the same
  * default insertion position and carry-forward-from-prior-date behavior as the Checklist tab
- * itself. Used by Custom Actions (issue #75) when appending to a patient whose Checklist tab
- * isn't the currently open form — callers editing an already-open form should instead update
- * that form's local state so the existing autosave persists everything together.
+ * itself — skipping any text that's already listed there (see insertMissingChecklistItems), so a
+ * Custom Action (issue #75) can be re-run any number of times without duplicating items it already
+ * added (issue #121). Used when appending to a patient whose Checklist tab isn't the currently
+ * open form — callers editing an already-open form should instead update that form's local state
+ * so the existing autosave persists everything together.
  */
 export const appendChecklistItemsForPatientDate = async (
   patientId: number,
@@ -189,10 +206,7 @@ export const appendChecklistItemsForPatientDate = async (
   const existingEntry = await db.dailyUpdates.where('[patientId+date]').equals([patientId, date]).first()
 
   if (existingEntry) {
-    let checklist = normalizeChecklistItems(existingEntry.checklist)
-    cleanTexts.forEach((text) => {
-      checklist = insertNewChecklistItem(checklist, { text, completed: false })
-    })
+    const checklist = insertMissingChecklistItems(normalizeChecklistItems(existingEntry.checklist), cleanTexts)
     await db.dailyUpdates.update(existingEntry.id as number, { checklist, lastUpdated: now })
     return
   }
@@ -201,10 +215,7 @@ export const appendChecklistItemsForPatientDate = async (
     .filter((entry) => entry.date < date)
   const latestPriorUpdate = selectLatestDailyUpdate(priorUpdates)
 
-  let checklist = toPendingChecklistItems(latestPriorUpdate?.checklist)
-  cleanTexts.forEach((text) => {
-    checklist = insertNewChecklistItem(checklist, { text, completed: false })
-  })
+  const checklist = insertMissingChecklistItems(toPendingChecklistItems(latestPriorUpdate?.checklist), cleanTexts)
 
   await db.dailyUpdates.add({
     patientId,

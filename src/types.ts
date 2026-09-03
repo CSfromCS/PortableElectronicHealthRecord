@@ -75,6 +75,14 @@ export interface TagEvent {
 
 export type CustomActionTriggerType = 'manual' | 'automatic'
 
+/**
+ * "patient" (default, existing behavior) applies to a specific patient's checklist/tags when
+ * triggered. "general" (issue #120) applies instead to the General (non-patient) checklist —
+ * such an action can only use the manual trigger and never has tag effects or tag-based
+ * conditions, since there's no associated patient to check or change tags on.
+ */
+export type CustomActionScope = 'patient' | 'general'
+
 export interface CustomActionTagEffect {
   tagId: number
   action: 'add' | 'remove'
@@ -87,10 +95,19 @@ export interface CustomActionTagEffect {
  * non-exclusive: a patient can match several at once, and each matching condition's checklist
  * items and tag effects all apply. A patient matching none of an action's conditions is left
  * unaffected and flagged rather than guessed at.
+ *
+ * `daysOfWeek`/`daysOfMonth` (issue #120) add an optional date restriction on top of the tag
+ * requirement, checked against the date at trigger time: an empty/undefined list on either means
+ * no restriction on that axis, otherwise today's day-of-week (0=Sunday..6=Saturday) or
+ * day-of-month (1-31) must be in the list. Both the tag and date requirements must pass for the
+ * condition to match. A General-scope action's conditions never have tag requirements (there's no
+ * patient to check), so for those only the date restriction is meaningful.
  */
 export interface CustomActionCondition {
   id: string
   requiredTagIds: number[]
+  daysOfWeek?: number[]
+  daysOfMonth?: number[]
   checklistItems: string[]
   tagEffects: CustomActionTagEffect[]
 }
@@ -98,6 +115,7 @@ export interface CustomActionCondition {
 export interface CustomAction {
   id?: number
   name: string
+  scope: CustomActionScope
   triggerType: CustomActionTriggerType
   /** Required (and only meaningful) when triggerType === 'automatic': the tag whose absent→present transition fires this action. */
   triggerTagId?: number

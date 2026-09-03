@@ -17,6 +17,7 @@ import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import type {
   CustomAction,
   CustomActionCondition,
+  CustomActionScope,
   CustomActionTagEffect,
   CustomActionTriggerType,
   TagDefinition,
@@ -32,12 +33,15 @@ type ChecklistItemDraft = { id: string; text: string }
 type ConditionFormState = {
   id: string
   requiredTagIds: number[]
+  daysOfWeek: number[]
+  daysOfMonth: number[]
   checklistItems: ChecklistItemDraft[]
   tagEffects: CustomActionTagEffect[]
 }
 
 type CustomActionFormState = {
   name: string
+  scope: CustomActionScope
   triggerType: CustomActionTriggerType
   triggerTagId: string
   /** Applied to every triggered patient unconditionally — no condition needs to be defined for this to run. */
@@ -54,12 +58,15 @@ const createChecklistItemId = () => {
 const blankCondition = (): ConditionFormState => ({
   id: createCustomActionConditionId(),
   requiredTagIds: [],
+  daysOfWeek: [],
+  daysOfMonth: [],
   checklistItems: [],
   tagEffects: [],
 })
 
 const blankCustomActionForm = (): CustomActionFormState => ({
   name: '',
+  scope: 'patient',
   triggerType: 'manual',
   triggerTagId: '',
   checklistItems: [],
@@ -70,12 +77,15 @@ const blankCustomActionForm = (): CustomActionFormState => ({
 const conditionToForm = (condition: CustomActionCondition): ConditionFormState => ({
   id: condition.id,
   requiredTagIds: [...condition.requiredTagIds],
+  daysOfWeek: [...(condition.daysOfWeek ?? [])],
+  daysOfMonth: [...(condition.daysOfMonth ?? [])],
   checklistItems: condition.checklistItems.map((text) => ({ id: createChecklistItemId(), text })),
   tagEffects: condition.tagEffects.map((effect) => ({ ...effect })),
 })
 
 const actionToForm = (action: CustomAction): CustomActionFormState => ({
   name: action.name,
+  scope: action.scope ?? 'patient',
   triggerType: action.triggerType,
   triggerTagId: action.triggerTagId !== undefined ? String(action.triggerTagId) : '',
   checklistItems: action.checklistItems.map((text) => ({ id: createChecklistItemId(), text })),
@@ -90,15 +100,36 @@ const formToConditions = (conditions: ConditionFormState[]): CustomActionConditi
   conditions.map((condition) => ({
     id: condition.id,
     requiredTagIds: condition.requiredTagIds,
+    daysOfWeek: condition.daysOfWeek,
+    daysOfMonth: condition.daysOfMonth,
     checklistItems: formChecklistItemsToStrings(condition.checklistItems),
     tagEffects: condition.tagEffects,
   }))
 
 const sortActions = (actions: CustomAction[]): CustomAction[] => [...actions].sort((a, b) => a.sortOrder - b.sortOrder)
 
+const DAY_OF_WEEK_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
 const describeRequiredTags = (requiredTagIds: number[], tagsById: Map<number, TagDefinition>): string => {
   if (requiredTagIds.length === 0) return 'Always (no tags required)'
   return requiredTagIds.map((tagId) => tagsById.get(tagId)?.name ?? 'a deleted tag').join(' + ')
+}
+
+/** Summarizes a condition's requirements for its collapsed header and removal-confirmation
+ * text — tag requirements only shown for Per Patient actions, date restrictions for either. */
+const describeConditionSummary = (condition: ConditionFormState, tagsById: Map<number, TagDefinition>, scope: CustomActionScope): string => {
+  const parts: string[] = []
+  if (scope === 'patient') {
+    parts.push(describeRequiredTags(condition.requiredTagIds, tagsById))
+  }
+  if (condition.daysOfWeek.length > 0) {
+    parts.push(condition.daysOfWeek.map((day) => DAY_OF_WEEK_LABELS[day]).join('/'))
+  }
+  if (condition.daysOfMonth.length > 0) {
+    parts.push(`day ${condition.daysOfMonth.join(', ')}`)
+  }
+  if (parts.length === 0) parts.push('Always')
+  return parts.join(' · ')
 }
 
 /** Checklist item list for one Condition — drag to reorder, tap to edit in place, delete with confirmation, mirroring the Checklist tab and Problems list elsewhere in the app. */
@@ -288,6 +319,70 @@ const RequiredTagsPicker = ({
   </div>
 )
 
+/** Optional day-of-week / day-of-month restriction on a Condition (issue #120) — leaving a group
+ * entirely unselected means no restriction on that axis (matches every day). Available on
+ * Conditions for either scope, since it doesn't depend on a patient's tags. */
+const DateConditionPicker = ({
+  daysOfWeek,
+  daysOfMonth,
+  onChange,
+}: {
+  daysOfWeek: number[]
+  daysOfMonth: number[]
+  onChange: (next: { daysOfWeek: number[]; daysOfMonth: number[] }) => void
+}) => {
+  const toggleDayOfWeek = (day: number) => {
+    const next = daysOfWeek.includes(day) ? daysOfWeek.filter((d) => d !== day) : [...daysOfWeek, day].sort((a, b) => a - b)
+    onChange({ daysOfWeek: next, daysOfMonth })
+  }
+
+  const toggleDayOfMonth = (day: number) => {
+    const next = daysOfMonth.includes(day) ? daysOfMonth.filter((d) => d !== day) : [...daysOfMonth, day].sort((a, b) => a - b)
+    onChange({ daysOfWeek, daysOfMonth: next })
+  }
+
+  return (
+    <div className='space-y-2'>
+      <div className='space-y-1'>
+        <Label className='text-xs'>Days of week</Label>
+        <p className='text-[11px] text-clay'>Leave all unselected to match every day of the week.</p>
+        <div className='flex flex-wrap gap-1'>
+          {DAY_OF_WEEK_LABELS.map((label, day) => (
+            <Button
+              key={day}
+              type='button'
+              size='sm'
+              variant={daysOfWeek.includes(day) ? 'default' : 'outline'}
+              className='h-7 w-11 px-0 text-[11px]'
+              onClick={() => toggleDayOfWeek(day)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+      </div>
+      <div className='space-y-1'>
+        <Label className='text-xs'>Days of month</Label>
+        <p className='text-[11px] text-clay'>Leave all unselected to match every day of the month.</p>
+        <div className='grid grid-cols-7 gap-1 max-w-80'>
+          {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+            <Button
+              key={day}
+              type='button'
+              size='sm'
+              variant={daysOfMonth.includes(day) ? 'default' : 'outline'}
+              className='h-7 w-7 px-0 text-[11px]'
+              onClick={() => toggleDayOfMonth(day)}
+            >
+              {day}
+            </Button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const TagEffectsEditor = ({
   tagEffects,
   tags,
@@ -361,6 +456,7 @@ const ConditionCard = ({
   index,
   tags,
   groups,
+  scope,
   isCollapsed,
   onToggleCollapsed,
   onChange,
@@ -371,6 +467,7 @@ const ConditionCard = ({
   index: number
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
+  scope: CustomActionScope
   isCollapsed: boolean
   onToggleCollapsed: () => void
   onChange: (next: ConditionFormState) => void
@@ -405,7 +502,7 @@ const ConditionCard = ({
             <ChevronDown className='h-3.5 w-3.5 shrink-0 text-clay' aria-hidden='true' />
           )}
           <span className='shrink-0 text-xs font-bold uppercase tracking-widest text-clay/60'>Condition {index + 1}</span>
-          <span className='min-w-0 truncate text-xs text-espresso'>{describeRequiredTags(condition.requiredTagIds, tagsById)}</span>
+          <span className='min-w-0 truncate text-xs text-espresso'>{describeConditionSummary(condition, tagsById, scope)}</span>
         </button>
         <Button type='button' variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Remove condition ${index + 1}`} onClick={onRequestRemove}>
           <Trash2 className='h-3.5 w-3.5' />
@@ -413,18 +510,28 @@ const ConditionCard = ({
       </div>
 
       {isCollapsed ? null : (
-        <div className='space-y-1'>
-          <Label className='text-xs'>Required tags</Label>
-          <p className='text-[11px] text-clay'>
-            Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service).
-          </p>
-          <RequiredTagsPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
+        <div className='space-y-3'>
+          {scope === 'patient' ? (
+            <div className='space-y-1'>
+              <Label className='text-xs'>Required tags</Label>
+              <p className='text-[11px] text-clay'>
+                Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service).
+              </p>
+              <RequiredTagsPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
+            </div>
+          ) : null}
+          <DateConditionPicker
+            daysOfWeek={condition.daysOfWeek}
+            daysOfMonth={condition.daysOfMonth}
+            onChange={({ daysOfWeek, daysOfMonth }) => onChange({ ...condition, daysOfWeek, daysOfMonth })}
+          />
         </div>
       )}
 
-      {/* Checklist items and tag effects are this condition's "actions" — kept visible and editable even
-          while collapsed, since the point of collapsing is to hide the (usually-settled) required-tags
-          picker while still reviewing/editing what each condition actually does. */}
+      {/* Checklist items (and, for Per Patient actions, tag effects) are this condition's
+          "actions" — kept visible and editable even while collapsed, since the point of
+          collapsing is to hide the (usually-settled) requirements above while still reviewing/
+          editing what each condition actually does. */}
       <div className='space-y-1'>
         <Label className='text-xs'>Checklist items</Label>
         <ConditionChecklistItemsEditor
@@ -433,12 +540,14 @@ const ConditionCard = ({
         />
       </div>
 
-      <TagEffectsEditor
-        tagEffects={condition.tagEffects}
-        tags={tags}
-        groups={groups}
-        onChange={(tagEffects) => onChange({ ...condition, tagEffects })}
-      />
+      {scope === 'patient' ? (
+        <TagEffectsEditor
+          tagEffects={condition.tagEffects}
+          tags={tags}
+          groups={groups}
+          onChange={(tagEffects) => onChange({ ...condition, tagEffects })}
+        />
+      ) : null}
     </div>
   )
 }
@@ -498,6 +607,25 @@ export const ManageCustomActionsScreen = ({
     }))
   }
 
+  // Switching to General clears every tag-related field the UI is about to hide, rather than
+  // just hiding them while stale values linger unseen in the form — a General action never has
+  // tag effects or tag-based conditions (issue #120), and forces the manual trigger since there's
+  // no patient/tag to trigger automatically off of.
+  const setScope = (scope: CustomActionScope) => {
+    setForm((previous) => (
+      scope === 'general'
+        ? {
+          ...previous,
+          scope,
+          triggerType: 'manual',
+          triggerTagId: '',
+          tagEffects: [],
+          conditions: previous.conditions.map((condition) => ({ ...condition, requiredTagIds: [], tagEffects: [] })),
+        }
+        : { ...previous, scope }
+    ))
+  }
+
   const addCondition = () => {
     setForm((previous) => ({ ...previous, conditions: [...previous.conditions, blankCondition()] }))
   }
@@ -521,28 +649,37 @@ export const ManageCustomActionsScreen = ({
   const saveForm = async () => {
     const name = form.name.trim()
     if (!name) return
-    const triggerTagId = form.triggerTagId ? Number.parseInt(form.triggerTagId, 10) : undefined
-    if (form.triggerType === 'automatic' && triggerTagId === undefined) return
+    // A General action is always manual with no trigger tag, regardless of what's left over in
+    // form state — belt-and-suspenders alongside setScope already clearing these on switch.
+    const isGeneral = form.scope === 'general'
+    const triggerType = isGeneral ? 'manual' : form.triggerType
+    const triggerTagId = !isGeneral && form.triggerTagId ? Number.parseInt(form.triggerTagId, 10) : undefined
+    if (triggerType === 'automatic' && triggerTagId === undefined) return
     const checklistItems = formChecklistItemsToStrings(form.checklistItems)
-    const conditions = formToConditions(form.conditions)
+    const tagEffects = isGeneral ? [] : form.tagEffects
+    const conditions = formToConditions(form.conditions).map((condition) => (
+      isGeneral ? { ...condition, requiredTagIds: [], tagEffects: [] } : condition
+    ))
 
     if (editingActionId !== null) {
       await db.customActions.update(editingActionId, {
         name,
-        triggerType: form.triggerType,
-        triggerTagId: form.triggerType === 'automatic' ? triggerTagId : undefined,
+        scope: form.scope,
+        triggerType,
+        triggerTagId: triggerType === 'automatic' ? triggerTagId : undefined,
         checklistItems,
-        tagEffects: form.tagEffects,
+        tagEffects,
         conditions,
       })
     } else {
       const nextSortOrder = customActions.length > 0 ? Math.max(...customActions.map((action) => action.sortOrder)) + 1 : 0
       await db.customActions.add({
         name,
-        triggerType: form.triggerType,
-        triggerTagId: form.triggerType === 'automatic' ? triggerTagId : undefined,
+        scope: form.scope,
+        triggerType,
+        triggerTagId: triggerType === 'automatic' ? triggerTagId : undefined,
         checklistItems,
-        tagEffects: form.tagEffects,
+        tagEffects,
         conditions,
         sortOrder: nextSortOrder,
         createdAt: new Date().toISOString(),
@@ -615,6 +752,7 @@ export const ManageCustomActionsScreen = ({
               <div className='flex-1 min-w-0'>
                 <p className='text-sm font-semibold text-espresso truncate'>{action.name}</p>
                 <p className='text-[11px] text-clay/80'>
+                  {action.scope === 'general' ? 'General · ' : ''}
                   {action.triggerType === 'manual' ? 'Manual button' : `Automatic on "${triggerTagName(action)}" added`}
                   {action.conditions.length > 0
                     ? ` · ${action.conditions.length} condition${action.conditions.length === 1 ? '' : 's'}`
@@ -651,6 +789,35 @@ export const ManageCustomActionsScreen = ({
               </div>
 
               <div className='space-y-1'>
+                <Label>Scope</Label>
+                <div className='flex gap-3 text-sm'>
+                  <label className='flex items-center gap-1.5'>
+                    <input
+                      type='radio'
+                      name='customActionScope'
+                      checked={form.scope === 'patient'}
+                      onChange={() => setScope('patient')}
+                    />
+                    Per Patient
+                  </label>
+                  <label className='flex items-center gap-1.5'>
+                    <input
+                      type='radio'
+                      name='customActionScope'
+                      checked={form.scope === 'general'}
+                      onChange={() => setScope('general')}
+                    />
+                    General (no patient)
+                  </label>
+                </div>
+                <p className='text-xs text-clay'>
+                  {form.scope === 'general'
+                    ? 'Appends to the General checklist instead of a specific patient’s. Manual trigger only, and no tag effects or tag-based conditions, since no patient is involved.'
+                    : 'Appends to a specific patient’s checklist and/or tags when triggered.'}
+                </p>
+              </div>
+
+              <div className='space-y-1'>
                 <Label>Trigger</Label>
                 <div className='flex gap-3 text-sm'>
                   <label className='flex items-center gap-1.5'>
@@ -662,19 +829,21 @@ export const ManageCustomActionsScreen = ({
                     />
                     Manual (button press)
                   </label>
-                  <label className='flex items-center gap-1.5'>
-                    <input
-                      type='radio'
-                      name='customActionTrigger'
-                      checked={form.triggerType === 'automatic'}
-                      onChange={() => setForm({ ...form, triggerType: 'automatic' })}
-                    />
-                    Automatic (on tag added)
-                  </label>
+                  {form.scope === 'patient' ? (
+                    <label className='flex items-center gap-1.5'>
+                      <input
+                        type='radio'
+                        name='customActionTrigger'
+                        checked={form.triggerType === 'automatic'}
+                        onChange={() => setForm({ ...form, triggerType: 'automatic' })}
+                      />
+                      Automatic (on tag added)
+                    </label>
+                  ) : null}
                 </div>
               </div>
 
-              {form.triggerType === 'automatic' ? (
+              {form.scope === 'patient' && form.triggerType === 'automatic' ? (
                 <div className='space-y-1'>
                   <Label>Trigger tag</Label>
                   <Select value={form.triggerTagId} onValueChange={(value) => setForm({ ...form, triggerTagId: value })}>
@@ -693,7 +862,7 @@ export const ManageCustomActionsScreen = ({
 
               <div className='space-y-2 rounded-xl border border-clay/25 bg-warm-ivory/50 p-3'>
                 <div>
-                  <Label>Applies to every patient</Label>
+                  <Label>{form.scope === 'general' ? 'Runs every time' : 'Applies to every patient'}</Label>
                   <p className='text-xs text-clay'>
                     Runs unconditionally whenever this action is triggered — no condition needs to be defined below for this to run.
                   </p>
@@ -705,12 +874,14 @@ export const ManageCustomActionsScreen = ({
                     onChange={(items) => setForm({ ...form, checklistItems: items })}
                   />
                 </div>
-                <TagEffectsEditor
-                  tagEffects={form.tagEffects}
-                  tags={tags}
-                  groups={groups}
-                  onChange={(tagEffects) => setForm({ ...form, tagEffects })}
-                />
+                {form.scope === 'patient' ? (
+                  <TagEffectsEditor
+                    tagEffects={form.tagEffects}
+                    tags={tags}
+                    groups={groups}
+                    onChange={(tagEffects) => setForm({ ...form, tagEffects })}
+                  />
+                ) : null}
               </div>
 
               <div className='space-y-2'>
@@ -721,10 +892,9 @@ export const ManageCustomActionsScreen = ({
                   </Button>
                 </div>
                 <p className='text-xs text-clay'>
-                  Adds extra checklist items and tag effects on top of the unconditional ones above, scoped to patients with a specific
-                  combination of tags applied. Each condition matches independently — several can apply to the same patient at once. A
-                  patient this action does nothing for (no unconditional items/effects and no condition met) is left unaffected and
-                  flagged rather than guessed at.
+                  {form.scope === 'general'
+                    ? 'Adds extra checklist items on top of the ones above, only on specific days of the week or month. Each condition matches independently — several can apply on the same day.'
+                    : 'Adds extra checklist items and tag effects on top of the unconditional ones above, scoped to patients with a specific combination of tags applied and/or specific days of the week or month. Each condition matches independently — several can apply to the same patient at once. A patient this action does nothing for (no unconditional items/effects and no condition met) is left unaffected and flagged rather than guessed at.'}
                 </p>
                 <div className='space-y-3'>
                   {form.conditions.map((condition, index) => (
@@ -741,6 +911,7 @@ export const ManageCustomActionsScreen = ({
                         index={index}
                         tags={tags}
                         groups={groups}
+                        scope={form.scope}
                         isCollapsed={collapsedConditionIds.has(condition.id)}
                         onToggleCollapsed={() => toggleConditionCollapsed(condition.id)}
                         onChange={(next) => updateCondition(condition.id, next)}
@@ -758,7 +929,7 @@ export const ManageCustomActionsScreen = ({
             <Button variant='ghost' onClick={() => setFormOpen(false)}>Cancel</Button>
             <Button
               onClick={() => void saveForm()}
-              disabled={!form.name.trim() || (form.triggerType === 'automatic' && !form.triggerTagId)}
+              disabled={!form.name.trim() || (form.scope === 'patient' && form.triggerType === 'automatic' && !form.triggerTagId)}
             >
               Save
             </Button>
@@ -772,7 +943,7 @@ export const ManageCustomActionsScreen = ({
             <DialogTitle>Remove this condition?</DialogTitle>
           </DialogHeader>
           <p className='text-sm text-espresso'>
-            {pendingConditionRemoval ? `This removes the "${describeRequiredTags(pendingConditionRemoval.requiredTagIds, tagsById)}" condition, its checklist items, and its tag effects.` : ''}
+            {pendingConditionRemoval ? `This removes the "${describeConditionSummary(pendingConditionRemoval, tagsById, form.scope)}" condition, its checklist items, and its tag effects.` : ''}
           </p>
           <div className='flex justify-end gap-2 pt-1'>
             <Button variant='ghost' onClick={() => setPendingConditionRemovalId(null)}>Cancel</Button>
