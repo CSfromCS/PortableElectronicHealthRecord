@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FocusEvent, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 const DEBOUNCE_MS = 400
@@ -24,6 +24,18 @@ const SEAMLESS_EDITOR_RESET = cn(
   '[&_textarea]:[font-size:inherit] [&_textarea]:[line-height:inherit]',
 )
 
+export type TapToEditFieldKeyDownContext = {
+  /** The editable field's own live DOM value at the moment of the keypress — authoritative
+   * regardless of this field's debounce timing. */
+  fieldValue: string
+  caretOffset: number
+  /** Exits edit mode immediately without committing the in-progress draft — for callers that
+   * are about to replace this field's value themselves (e.g. splitting it into two checklist
+   * items) and would otherwise race the field's own blur-triggered commit of the stale,
+   * un-split draft. */
+  forceExit: () => void
+}
+
 type TapToEditFieldProps = {
   value: string
   onCommit: (nextValue: string) => void
@@ -32,6 +44,15 @@ type TapToEditFieldProps = {
   className?: string
   renderView?: (value: string) => ReactNode
   renderEditor: (params: { value: string; onChange: (nextValue: string) => void }) => ReactNode
+  /** Forwarded from the editor's wrapping container, so a caller can intercept e.g. Enter/
+   * Backspace at a specific caret position without owning the editor itself. */
+  onEditorKeyDown?: (event: KeyboardEvent<HTMLDivElement>, context: TapToEditFieldKeyDownContext) => void
+  /** When set to a new object (by reference), programmatically enters edit mode at the given
+   * caret offset — for a caller that just created this field's value elsewhere (e.g. the new
+   * item produced by a split) and wants to move focus into it, the way a real cursor would land
+   * after pressing Enter. Call `onAutoEnterHandled` once consumed so the caller can clear it. */
+  autoEnter?: { caretOffset: number } | null
+  onAutoEnterHandled?: () => void
 }
 
 type EditorHostProps = {
@@ -92,6 +113,9 @@ export const TapToEditField = ({
   className,
   renderView,
   renderEditor,
+  onEditorKeyDown,
+  autoEnter,
+  onAutoEnterHandled,
 }: TapToEditFieldProps) => {
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -119,6 +143,32 @@ export const TapToEditField = ({
     setDraft(value)
     lastCommittedRef.current = value
     setIsEditing(true)
+  }
+
+  // Fires only when the caller hands us a genuinely new request object (see autoEnter's doc
+  // comment) — not on every re-render, since `value`/`onAutoEnterHandled` aren't meant to
+  // re-trigger this on their own.
+  useEffect(() => {
+    if (!autoEnter) return
+    enterEditMode(autoEnter.caretOffset)
+    onAutoEnterHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoEnter])
+
+  const forceExit = () => {
+    clearDebounce()
+    setIsEditing(false)
+  }
+
+  const handleEditorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!onEditorKeyDown) return
+    const field = findEditableField(event.currentTarget)
+    if (!field) return
+    onEditorKeyDown(event, {
+      fieldValue: field.value,
+      caretOffset: field.selectionStart ?? field.value.length,
+      forceExit,
+    })
   }
 
   const handleChange = (nextValue: string) => {
@@ -160,7 +210,7 @@ export const TapToEditField = ({
 
   if (isEditing) {
     return (
-      <div ref={attachEditingSurface} onBlur={handleContainerBlur} className={cn(BASE_FIELD_CLASSES, className, SEAMLESS_EDITOR_RESET)}>
+      <div ref={attachEditingSurface} onBlur={handleContainerBlur} onKeyDown={handleEditorKeyDown} className={cn(BASE_FIELD_CLASSES, className, SEAMLESS_EDITOR_RESET)}>
         <EditorHost draft={draft} onChange={handleChange} renderEditor={renderEditor} />
       </div>
     )
