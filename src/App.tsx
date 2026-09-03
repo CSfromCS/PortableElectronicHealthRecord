@@ -114,6 +114,8 @@ import {
   formatBytes,
   formatPhotoCategory,
   getPhotoGroupKey,
+  resolveDefaultPhotoBatchTitle,
+  type DefaultTitledPhotoBatch,
 } from './features/photos/photoUtils'
 import { SyncButton, type SyncStatus } from './features/sync/SyncButton'
 import { SyncSetupDialog, type SetupDeviceName, type SetupUsername } from './features/sync/SyncSetupDialog'
@@ -135,7 +137,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Zap } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
@@ -476,6 +478,28 @@ const loadAddPatientCollapsed = (): boolean => {
   }
 }
 
+type PhotoViewMode = 'collapsed' | 'expanded'
+
+const PATIENT_PHOTO_VIEW_MODE_STORAGE_KEY = 'puhrr.patientPhotoViewMode'
+const REVIEW_PHOTO_VIEW_MODE_STORAGE_KEY = 'puhrr.reviewPhotoViewMode'
+
+const loadPhotoViewMode = (storageKey: string): PhotoViewMode => {
+  try {
+    const stored = window.localStorage.getItem(storageKey)
+    return stored === 'expanded' ? 'expanded' : 'collapsed'
+  } catch {
+    return 'collapsed'
+  }
+}
+
+const savePhotoViewMode = (storageKey: string, mode: PhotoViewMode) => {
+  try {
+    window.localStorage.setItem(storageKey, mode)
+  } catch {
+    // Storage can fail (private browsing, quota) — view mode just won't persist this session.
+  }
+}
+
 const ensurePatientLastModified = (patient: Patient): Patient => {
   return {
     ...patient,
@@ -601,11 +625,30 @@ function App() {
   const [attachmentCategory, setAttachmentCategory] = useState<PhotoCategory>('profile')
   const [attachmentFilter, setAttachmentFilter] = useState<PhotoCategory | 'all'>('all')
   const [attachmentTitle, setAttachmentTitle] = useState(() => buildDefaultPhotoTitle('profile'))
+  const [isAttachmentTitleDefault, setIsAttachmentTitleDefault] = useState(true)
   const [isPhotoSaving, setIsPhotoSaving] = useState(false)
   const [selectedAttachmentId, setSelectedAttachmentId] = useState<number | null>(null)
+  const [attachmentViewerSource, setAttachmentViewerSource] = useState<'patient' | 'review'>('patient')
+  const [isCarouselChromeVisible, setIsCarouselChromeVisible] = useState(false)
   const [attachmentPreviewUrls, setAttachmentPreviewUrls] = useState<Record<number, string>>({})
   const [allAttachmentPreviewUrls, setAllAttachmentPreviewUrls] = useState<Record<number, string>>({})
   const [showPhotoReviewDialog, setShowPhotoReviewDialog] = useState(false)
+  const [patientPhotoViewMode, setPatientPhotoViewMode] = useState<PhotoViewMode>(() => loadPhotoViewMode(PATIENT_PHOTO_VIEW_MODE_STORAGE_KEY))
+  const [reviewPhotoViewMode, setReviewPhotoViewMode] = useState<PhotoViewMode>(() => loadPhotoViewMode(REVIEW_PHOTO_VIEW_MODE_STORAGE_KEY))
+  const togglePatientPhotoViewMode = useCallback(() => {
+    setPatientPhotoViewMode((previous) => {
+      const next = previous === 'collapsed' ? 'expanded' : 'collapsed'
+      savePhotoViewMode(PATIENT_PHOTO_VIEW_MODE_STORAGE_KEY, next)
+      return next
+    })
+  }, [])
+  const toggleReviewPhotoViewMode = useCallback(() => {
+    setReviewPhotoViewMode((previous) => {
+      const next = previous === 'collapsed' ? 'expanded' : 'collapsed'
+      savePhotoViewMode(REVIEW_PHOTO_VIEW_MODE_STORAGE_KEY, next)
+      return next
+    })
+  }, [])
   const [reassignTargetsByAttachmentId, setReassignTargetsByAttachmentId] = useState<Record<number, string>>({})
   const [selectedCensusPatientIds, setSelectedCensusPatientIds] = useState<number[]>([])
   // Bulk tag management on the Patients list — entered via long-press (mobile) or the Select
@@ -1517,6 +1560,37 @@ function App() {
       .sort(comparePhotosByNewest)
   }, [photoAttachments])
 
+  const reviewablePhotoGroups = useMemo(() => {
+    const groupsById = new Map<string, PhotoAttachmentGroup & { patientId: number }>()
+    reviewablePhotoAttachments.forEach((entry) => {
+      const groupKey = getPhotoGroupKey(entry)
+      const existing = groupsById.get(groupKey)
+      if (existing) {
+        existing.entries.push(entry)
+        existing.totalByteSize += entry.byteSize
+        if (entry.createdAt > existing.createdAt) {
+          existing.createdAt = entry.createdAt
+        }
+        return
+      }
+
+      groupsById.set(groupKey, {
+        groupId: groupKey,
+        createdAt: entry.createdAt,
+        entries: [entry],
+        totalByteSize: entry.byteSize,
+        patientId: entry.patientId,
+      })
+    })
+
+    return Array.from(groupsById.values())
+      .map((group) => ({
+        ...group,
+        entries: [...group.entries].sort(comparePhotosByNewest),
+      }))
+      .sort(comparePhotoGroupsByNewest)
+  }, [reviewablePhotoAttachments])
+
   const selectedPatientAllAttachments = useMemo(() => {
     if (selectedPatientId === null) return [] as PhotoAttachment[]
 
@@ -1559,6 +1633,27 @@ function App() {
       .sort(comparePhotoGroupsByNewest)
   }, [attachmentFilter, selectedPatientAllAttachments])
 
+  const selectedPatientExpandedPhotoSections = useMemo(() => {
+    const scopedAttachments = selectedPatientAllAttachments
+      .filter((entry): entry is PhotoAttachment & { id: number } => entry.id !== undefined)
+      .filter((entry) => (attachmentFilter === 'all' ? true : entry.category === attachmentFilter))
+
+    const entriesByCategory = new Map<PhotoCategory, Array<PhotoAttachment & { id: number }>>()
+    scopedAttachments.forEach((entry) => {
+      const list = entriesByCategory.get(entry.category) ?? []
+      list.push(entry)
+      entriesByCategory.set(entry.category, list)
+    })
+
+    return PHOTO_CATEGORY_OPTIONS
+      .filter((option) => entriesByCategory.has(option.value))
+      .map((option) => ({
+        category: option.value,
+        label: option.label,
+        entries: [...(entriesByCategory.get(option.value) ?? [])].sort(comparePhotosByNewest),
+      }))
+  }, [attachmentFilter, selectedPatientAllAttachments])
+
   const mentionableAttachments = useMemo(() => {
     const mapped = selectedPatientAllAttachments
       .filter((entry): entry is PhotoAttachment & { id: number } => entry.id !== undefined && entry.title.trim().length > 0)
@@ -1589,6 +1684,14 @@ function App() {
   }, [mentionableAttachments])
 
   const openPhotoById = useCallback((attachmentId: number) => {
+    setAttachmentViewerSource('patient')
+    setIsCarouselChromeVisible(false)
+    setSelectedAttachmentId(attachmentId)
+  }, [])
+
+  const openReviewPhotoById = useCallback((attachmentId: number) => {
+    setAttachmentViewerSource('review')
+    setIsCarouselChromeVisible(false)
     setSelectedAttachmentId(attachmentId)
   }, [])
 
@@ -1620,8 +1723,10 @@ function App() {
   const selectedAttachmentCarousel = useMemo(() => {
     if (selectedAttachmentId === null) return null
 
+    const sourceAttachments = attachmentViewerSource === 'review' ? reviewablePhotoAttachments : selectedPatientAllAttachments
+
     const grouped = new Map<string, Array<PhotoAttachment & { id: number }>>()
-    selectedPatientAllAttachments
+    sourceAttachments
       .filter((entry): entry is PhotoAttachment & { id: number } => entry.id !== undefined)
       .forEach((entry) => {
         const key = getPhotoGroupKey(entry)
@@ -1642,7 +1747,9 @@ function App() {
     }
 
     return null
-  }, [selectedAttachmentId, selectedPatientAllAttachments])
+  }, [attachmentViewerSource, reviewablePhotoAttachments, selectedAttachmentId, selectedPatientAllAttachments])
+
+  const carouselPreviewUrls = attachmentViewerSource === 'review' ? allAttachmentPreviewUrls : attachmentPreviewUrls
 
   const selectedAttachmentCarouselEntry = selectedAttachmentCarousel
     ? selectedAttachmentCarousel.entries[selectedAttachmentCarousel.currentIndex]
@@ -2027,6 +2134,7 @@ function App() {
     setAttachmentCategory('profile')
     setAttachmentFilter('all')
     setAttachmentTitle(buildDefaultPhotoTitle('profile'))
+    setIsAttachmentTitleDefault(true)
     setSelectedAttachmentId(null)
     if (!options?.preserveSelectedTab) {
       setSelectedTab('profile')
@@ -2859,8 +2967,44 @@ function App() {
     setNotice(files.length === 1 ? 'Saving photo...' : `Saving ${files.length} photos...`)
 
     try {
-      const title = attachmentTitle.trim() || buildDefaultPhotoTitle(attachmentCategory)
+      const now = new Date()
+      const trimmedTitle = attachmentTitle.trim()
+      const usingDefaultTitle = isAttachmentTitleDefault || trimmedTitle.length === 0
       const uploadGroupId = buildPhotoUploadGroupId()
+
+      let title: string
+      let isDefaultTitle: boolean
+      if (usingDefaultTitle) {
+        const baseTitle = buildDefaultPhotoTitle(attachmentCategory, now)
+        const today = toLocalISODate(now)
+        const sameDayDefaultBatches = new Map<string, DefaultTitledPhotoBatch>()
+        ;(photoAttachments ?? []).forEach((entry) => {
+          if (
+            entry.patientId !== selectedPatientId ||
+            entry.category !== attachmentCategory ||
+            !entry.isDefaultTitle ||
+            !entry.uploadGroupId ||
+            toLocalISODate(new Date(entry.createdAt)) !== today
+          ) {
+            return
+          }
+          sameDayDefaultBatches.set(entry.uploadGroupId, { groupId: entry.uploadGroupId, title: entry.title })
+        })
+
+        const assignment = resolveDefaultPhotoBatchTitle(baseTitle, Array.from(sameDayDefaultBatches.values()))
+        await Promise.all(
+          assignment.retitledBatches.map((batch) =>
+            db.photoAttachments.where('uploadGroupId').equals(batch.groupId).modify({ title: batch.title }),
+          ),
+        )
+
+        title = assignment.title
+        isDefaultTitle = true
+      } else {
+        title = trimmedTitle
+        isDefaultTitle = false
+      }
+
       const preparedAttachments = await Promise.all(
         files.map(async (file, selectionOrderInGroup) => {
           const compressed = await compressImageFile(file)
@@ -2868,6 +3012,7 @@ function App() {
             patientId: selectedPatientId,
             category: attachmentCategory,
             title,
+            isDefaultTitle,
             uploadGroupId,
             selectionOrderInGroup,
             mimeType: compressed.mimeType,
@@ -2875,7 +3020,7 @@ function App() {
             height: compressed.height,
             byteSize: compressed.blob.size,
             imageBlob: compressed.blob,
-            createdAt: new Date().toISOString(),
+            createdAt: now.toISOString(),
           }
         }),
       )
@@ -2884,6 +3029,7 @@ function App() {
       await touchPatientLastModified(selectedPatientId)
 
       setAttachmentTitle(buildDefaultPhotoTitle(attachmentCategory))
+      setIsAttachmentTitleDefault(true)
       setNotice(files.length === 1 ? 'Photo attached.' : `${files.length} photos attached in one block.`)
     } catch {
       setNotice('Unable to attach photos.')
@@ -3752,6 +3898,7 @@ function App() {
     setAttachmentCategory('profile')
     setAttachmentFilter('all')
     setAttachmentTitle(buildDefaultPhotoTitle('profile'))
+    setIsAttachmentTitleDefault(true)
     setSelectedAttachmentId(null)
     setProfileForm(initialProfileForm)
     setLastSavedAt(null)
@@ -3989,6 +4136,7 @@ function App() {
       setAttachmentCategory('profile')
       setAttachmentFilter('all')
       setAttachmentTitle(buildDefaultPhotoTitle('profile'))
+      setIsAttachmentTitleDefault(true)
       setSelectedAttachmentId(null)
       setProfileForm(initialProfileForm)
       setLastSavedAt(null)
@@ -4045,6 +4193,7 @@ function App() {
       setAttachmentCategory('profile')
       setAttachmentFilter('all')
       setAttachmentTitle(buildDefaultPhotoTitle('profile'))
+      setIsAttachmentTitleDefault(true)
       setSelectedAttachmentId(null)
       setProfileForm(initialProfileForm)
       setDailyUpdateId(undefined)
@@ -6269,6 +6418,7 @@ function App() {
                                 const nextCategory = value as PhotoCategory
                                 setAttachmentCategory(nextCategory)
                                 setAttachmentTitle(buildDefaultPhotoTitle(nextCategory))
+                                setIsAttachmentTitleDefault(true)
                               }}
                             >
                               <SelectTrigger aria-label='Photo category'>
@@ -6288,7 +6438,10 @@ function App() {
                               aria-label='Photo title'
                               placeholder='Photo title'
                               value={attachmentTitle}
-                              onChange={(event) => setAttachmentTitle(event.target.value)}
+                              onChange={(event) => {
+                                setAttachmentTitle(event.target.value)
+                                setIsAttachmentTitleDefault(false)
+                              }}
                             />
                           </div>
                         </div>
@@ -6318,73 +6471,121 @@ function App() {
                           </Button>
                         </div>
 
-                        <div className='space-y-1 max-w-56'>
-                          <Label>Show photos</Label>
-                          <Select
-                            value={attachmentFilter}
-                            onValueChange={(value) => setAttachmentFilter(value as PhotoCategory | 'all')}
+                        <div className='flex items-end justify-between gap-2 flex-wrap'>
+                          <div className='space-y-1 max-w-56'>
+                            <Label>Show photos</Label>
+                            <Select
+                              value={attachmentFilter}
+                              onValueChange={(value) => setAttachmentFilter(value as PhotoCategory | 'all')}
+                            >
+                              <SelectTrigger aria-label='Photo filter'>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value='all'>All categories</SelectItem>
+                                {PHOTO_CATEGORY_OPTIONS.map((option) => (
+                                  <SelectItem key={`filter-${option.value}`} value={option.value}>{option.label}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <Button
+                            size='sm'
+                            variant='secondary'
+                            onClick={togglePatientPhotoViewMode}
+                            aria-label={patientPhotoViewMode === 'collapsed' ? 'Switch to expanded photo view' : 'Switch to collapsed photo view'}
                           >
-                            <SelectTrigger aria-label='Photo filter'>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value='all'>All categories</SelectItem>
-                              {PHOTO_CATEGORY_OPTIONS.map((option) => (
-                                <SelectItem key={`filter-${option.value}`} value={option.value}>{option.label}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                            {patientPhotoViewMode === 'collapsed' ? (
+                              <><LayoutGrid className='h-4 w-4 mr-1.5' />Expanded</>
+                            ) : (
+                              <><Layers className='h-4 w-4 mr-1.5' />Collapsed</>
+                            )}
+                          </Button>
                         </div>
 
                         {selectedPatientAttachmentGroups.length > 0 ? (
-                          <div className='grid grid-cols-2 sm:grid-cols-3 gap-2'>
-                            {selectedPatientAttachmentGroups.map((group) => {
-                              const coverPhoto = group.entries[0]
-                              const previewUrl = attachmentPreviewUrls[coverPhoto.id]
-                              const createdAt = new Date(group.createdAt).toLocaleString()
-                              const photoCount = group.entries.length
+                          patientPhotoViewMode === 'collapsed' ? (
+                            <div className='grid grid-cols-2 sm:grid-cols-3 gap-2'>
+                              {selectedPatientAttachmentGroups.map((group) => {
+                                const coverPhoto = group.entries[0]
+                                const previewUrl = attachmentPreviewUrls[coverPhoto.id]
+                                const createdAt = new Date(group.createdAt).toLocaleString()
+                                const photoCount = group.entries.length
 
-                              return (
-                                <div key={group.groupId} className='rounded-md border border-clay/40 bg-white p-1.5 space-y-1'>
-                                  <button
-                                    type='button'
-                                    className='relative w-full overflow-hidden rounded border border-clay/30 bg-warm-ivory'
-                                    onClick={() => setSelectedAttachmentId(coverPhoto.id)}
-                                  >
-                                    {previewUrl ? (
-                                      <img
-                                        src={previewUrl}
-                                        alt={coverPhoto.title || `Attachment ${formatPhotoCategory(coverPhoto.category)}`}
-                                        className='h-28 w-full object-cover'
-                                        loading='lazy'
-                                      />
-                                    ) : (
-                                      <div className='h-28 flex items-center justify-center text-xs text-clay'>No preview</div>
-                                    )}
-                                    <span className='absolute right-1.5 top-1.5 rounded-full bg-espresso/85 px-1.5 py-0.5 text-[11px] font-semibold text-white'>
-                                      {photoCount}
-                                    </span>
-                                  </button>
-                                  <p className='text-xs text-espresso line-clamp-2'>
-                                    {coverPhoto.title || '(No title)'}
-                                  </p>
-                                  <p className='text-[11px] text-clay'>
-                                    {formatPhotoCategory(coverPhoto.category)} • {createdAt}
-                                  </p>
-                                  <div className='flex justify-between items-center gap-2'>
-                                    <p className='text-[11px] text-clay'>{formatBytes(group.totalByteSize)}</p>
-                                    <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
-                                      title: 'Delete photo set?',
-                                      message: `Permanently remove ${group.entries.length === 1 ? 'this photo' : `these ${group.entries.length} photos`} from the app record?`,
-                                      onConfirm: () => deletePhotoAttachmentGroup(group),
-                                    })}>
-                                      Remove set
-                                    </Button>
+                                return (
+                                  <div key={group.groupId} className='rounded-md border border-clay/40 bg-white p-1.5 space-y-1'>
+                                    <button
+                                      type='button'
+                                      className='relative w-full overflow-hidden rounded border border-clay/30 bg-warm-ivory'
+                                      onClick={() => openPhotoById(coverPhoto.id)}
+                                    >
+                                      {previewUrl ? (
+                                        <img
+                                          src={previewUrl}
+                                          alt={coverPhoto.title || `Attachment ${formatPhotoCategory(coverPhoto.category)}`}
+                                          className='h-28 w-full object-cover'
+                                          loading='lazy'
+                                        />
+                                      ) : (
+                                        <div className='h-28 flex items-center justify-center text-xs text-clay'>No preview</div>
+                                      )}
+                                      <span className='absolute right-1.5 top-1.5 rounded-full bg-espresso/85 px-1.5 py-0.5 text-[11px] font-semibold text-white'>
+                                        {photoCount}
+                                      </span>
+                                    </button>
+                                    <p className='text-xs text-espresso line-clamp-2'>
+                                      {coverPhoto.title || '(No title)'}
+                                    </p>
+                                    <p className='text-[11px] text-clay'>
+                                      {formatPhotoCategory(coverPhoto.category)} • {createdAt}
+                                    </p>
+                                    <div className='flex justify-between items-center gap-2'>
+                                      <p className='text-[11px] text-clay'>{formatBytes(group.totalByteSize)}</p>
+                                      <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
+                                        title: 'Delete photo set?',
+                                        message: `Permanently remove ${group.entries.length === 1 ? 'this photo' : `these ${group.entries.length} photos`} from the app record?`,
+                                        onConfirm: () => deletePhotoAttachmentGroup(group),
+                                      })}>
+                                        Remove set
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          ) : (
+                            <div className='space-y-4'>
+                              {selectedPatientExpandedPhotoSections.map((section) => (
+                                <div key={section.category} className='space-y-1.5'>
+                                  <p className='text-xs font-semibold text-clay uppercase tracking-wide'>{section.label}</p>
+                                  <div className='grid grid-cols-3 sm:grid-cols-4 gap-2'>
+                                    {section.entries.map((entry) => {
+                                      const previewUrl = attachmentPreviewUrls[entry.id]
+                                      return (
+                                        <button
+                                          key={`expanded-photo-${entry.id}`}
+                                          type='button'
+                                          className='relative overflow-hidden rounded border border-clay/30 bg-warm-ivory'
+                                          onClick={() => openPhotoById(entry.id)}
+                                        >
+                                          {previewUrl ? (
+                                            <img
+                                              src={previewUrl}
+                                              alt={entry.title || `Attachment ${formatPhotoCategory(entry.category)}`}
+                                              className='h-24 w-full object-cover'
+                                              loading='lazy'
+                                            />
+                                          ) : (
+                                            <div className='h-24 flex items-center justify-center text-xs text-clay'>No preview</div>
+                                          )}
+                                        </button>
+                                      )
+                                    })}
                                   </div>
                                 </div>
-                              )
-                            })}
-                          </div>
+                              ))}
+                            </div>
+                          )
                         ) : (
                           <div className='flex flex-col items-center justify-center py-8 text-center'>
                             <div className='h-12 w-12 rounded-full bg-blush-sand flex items-center justify-center mb-3'>
@@ -6996,52 +7197,86 @@ function App() {
         </Dialog>
 
         <Dialog open={selectedAttachmentCarouselEntry !== null} onOpenChange={(open) => { if (!open) setSelectedAttachmentId(null) }}>
-          <DialogContent className='flex flex-col gap-2 p-3 w-[95vw] max-w-3xl h-[95vh] max-h-[95vh] md:gap-3 md:p-4 md:h-[92vh] md:max-h-[92vh]'>
-            <DialogHeader>
-              <DialogTitle>
-                {selectedAttachmentCarouselEntry
-                  ? `[${formatPhotoCategory(selectedAttachmentCarouselEntry.category)}] ${selectedAttachmentCarouselEntry.title || 'Untitled'}`
-                  : 'Photo attachment'}
-              </DialogTitle>
-            </DialogHeader>
+          <DialogContent
+            showCloseButton={false}
+            className='flex flex-col gap-0 p-0 border-0 overflow-hidden bg-black w-[95vw] max-w-3xl h-[95vh] max-h-[95vh] md:h-[92vh] md:max-h-[92vh]'
+          >
             {selectedAttachmentCarouselEntry ? (
-              <>
-                {attachmentPreviewUrls[selectedAttachmentCarouselEntry.id] ? (
-                  <div className='flex-1 min-h-0 rounded border border-clay/30 bg-warm-ivory'>
-                    <img
-                      src={attachmentPreviewUrls[selectedAttachmentCarouselEntry.id]}
-                      alt={selectedAttachmentCarouselEntry.title || 'Attachment preview'}
-                      className='h-full w-full object-contain'
-                    />
-                  </div>
+              <div
+                className='relative flex-1 min-h-0 flex items-center justify-center'
+                onClick={() => setIsCarouselChromeVisible((previous) => !previous)}
+              >
+                {carouselPreviewUrls[selectedAttachmentCarouselEntry.id] ? (
+                  <img
+                    src={carouselPreviewUrls[selectedAttachmentCarouselEntry.id]}
+                    alt={selectedAttachmentCarouselEntry.title || 'Attachment preview'}
+                    className='max-h-full max-w-full object-contain'
+                  />
                 ) : (
-                  <p className='text-sm text-clay'>Preview unavailable.</p>
+                  <p className='text-sm text-white/70'>Preview unavailable.</p>
                 )}
-                {selectedAttachmentCarousel && selectedAttachmentCarousel.entries.length > 1 ? (
-                  <div className='space-y-2'>
+
+                {isCarouselChromeVisible ? (
+                  <div
+                    className='absolute inset-x-0 top-0 flex items-center justify-between gap-2 p-3 bg-gradient-to-b from-black/70 to-transparent'
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      type='button'
+                      aria-label='Close'
+                      className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                      onClick={() => setSelectedAttachmentId(null)}
+                    >
+                      <ChevronLeft className='h-5 w-5' />
+                    </button>
+                    <p className='flex-1 min-w-0 truncate text-center text-sm font-medium text-white'>
+                      {`[${formatPhotoCategory(selectedAttachmentCarouselEntry.category)}] ${selectedAttachmentCarouselEntry.title || 'Untitled'}`}
+                    </p>
+                    <button
+                      type='button'
+                      aria-label='Remove from app'
+                      className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                      onClick={() => requestDeleteConfirmation({
+                        title: 'Delete photo?',
+                        message: 'Permanently remove this photo from the app record?',
+                        onConfirm: () => deletePhotoAttachment(selectedAttachmentCarouselEntry.id),
+                      })}
+                    >
+                      <Trash2 className='h-4.5 w-4.5' />
+                    </button>
+                  </div>
+                ) : null}
+
+                {isCarouselChromeVisible && selectedAttachmentCarousel && selectedAttachmentCarousel.entries.length > 1 ? (
+                  <div
+                    className='absolute inset-x-0 bottom-0 space-y-2 p-3 bg-gradient-to-t from-black/70 to-transparent'
+                    onClick={(event) => event.stopPropagation()}
+                  >
                     <div className='flex items-center justify-between gap-2'>
                       <Button
                         variant='secondary'
+                        size='sm'
                         onClick={() => moveCarousel('previous')}
                         aria-label='Previous photo'
                       >
                         {'<'}
                       </Button>
-                      <p className='text-xs text-clay'>
+                      <p className='text-xs text-white'>
                         {selectedAttachmentCarousel.currentIndex + 1} of {selectedAttachmentCarousel.entries.length}
                       </p>
                       <Button
                         variant='secondary'
+                        size='sm'
                         onClick={() => moveCarousel('next')}
                         aria-label='Next photo'
                       >
                         {'>'}
                       </Button>
                     </div>
-                    <div className='w-full overflow-x-auto overflow-y-hidden rounded border border-clay/25 bg-white touch-pan-x' data-no-swipe>
+                    <div className='w-full overflow-x-auto overflow-y-hidden rounded border border-white/20 bg-black/40 touch-pan-x' data-no-swipe>
                       <div className='flex w-max min-w-full gap-1.5 p-1.5'>
                         {selectedAttachmentCarousel.entries.map((entry, index) => {
-                          const previewUrl = attachmentPreviewUrls[entry.id]
+                          const previewUrl = carouselPreviewUrls[entry.id]
                           const isActive = index === selectedAttachmentCarousel.currentIndex
 
                           return (
@@ -7058,7 +7293,7 @@ function App() {
                               }}
                               className={cn(
                                 'h-14 w-14 shrink-0 overflow-hidden rounded border transition-colors',
-                                isActive ? 'border-action-primary ring-1 ring-action-primary/40' : 'border-clay/30 hover:border-clay/60',
+                                isActive ? 'border-action-primary ring-1 ring-action-primary/40' : 'border-white/25 hover:border-white/50',
                               )}
                               aria-label={`Jump to photo ${index + 1}`}
                               onClick={() => jumpToCarouselIndex(index)}
@@ -7080,19 +7315,7 @@ function App() {
                     </div>
                   </div>
                 ) : null}
-                <div className='flex gap-2 flex-wrap'>
-                  <Button variant='destructive' onClick={() => requestDeleteConfirmation({
-                    title: 'Delete photo?',
-                    message: 'Permanently remove this photo from the app record?',
-                    onConfirm: () => deletePhotoAttachment(selectedAttachmentCarouselEntry.id),
-                  })}>
-                    Remove from app
-                  </Button>
-                  <Button variant='secondary' onClick={() => setSelectedAttachmentId(null)}>
-                    Close
-                  </Button>
-                </div>
-              </>
+              </div>
             ) : null}
           </DialogContent>
         </Dialog>
@@ -7102,9 +7325,82 @@ function App() {
             <DialogHeader>
               <DialogTitle>Review all photos</DialogTitle>
             </DialogHeader>
-            <p className='text-sm text-clay'>Review linked and orphan photos across all patients. Reassign, delete, or export any photo.</p>
+            <div className='flex items-start justify-between gap-2 flex-wrap'>
+              <p className='text-sm text-clay'>Review linked and orphan photos across all patients. Reassign, delete, or export any photo.</p>
+              <Button
+                size='sm'
+                variant='secondary'
+                onClick={toggleReviewPhotoViewMode}
+                aria-label={reviewPhotoViewMode === 'collapsed' ? 'Switch to expanded photo view' : 'Switch to collapsed photo view'}
+              >
+                {reviewPhotoViewMode === 'collapsed' ? (
+                  <><LayoutGrid className='h-4 w-4 mr-1.5' />Expanded</>
+                ) : (
+                  <><Layers className='h-4 w-4 mr-1.5' />Collapsed</>
+                )}
+              </Button>
+            </div>
             <ScrollArea className='flex-1 min-h-0 rounded border border-clay/25 bg-warm-ivory p-2'>
-              {reviewablePhotoAttachments.length > 0 ? (
+              {reviewPhotoViewMode === 'collapsed' ? (
+                reviewablePhotoGroups.length > 0 ? (
+                  <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2'>
+                    {reviewablePhotoGroups.map((group) => {
+                      const coverPhoto = group.entries[0]
+                      const previewUrl = allAttachmentPreviewUrls[coverPhoto.id]
+                      const linkedPatient = patientsById.get(group.patientId)
+                      const photoCount = group.entries.length
+
+                      return (
+                        <div key={group.groupId} className='rounded-md border border-clay/40 bg-white p-1.5 space-y-1'>
+                          <button
+                            type='button'
+                            className='relative w-full overflow-hidden rounded border border-clay/30 bg-warm-ivory'
+                            onClick={() => openReviewPhotoById(coverPhoto.id)}
+                          >
+                            {previewUrl ? (
+                              <img
+                                src={previewUrl}
+                                alt={coverPhoto.title || `Attachment ${formatPhotoCategory(coverPhoto.category)}`}
+                                className='h-28 w-full object-cover'
+                                loading='lazy'
+                              />
+                            ) : (
+                              <div className='h-28 flex items-center justify-center text-xs text-clay'>No preview</div>
+                            )}
+                            <span className='absolute right-1.5 top-1.5 rounded-full bg-espresso/85 px-1.5 py-0.5 text-[11px] font-semibold text-white'>
+                              {photoCount}
+                            </span>
+                          </button>
+                          <p className='text-xs text-espresso line-clamp-2'>
+                            {coverPhoto.title || '(No title)'}
+                          </p>
+                          <p className='text-[11px] text-clay'>
+                            {formatPhotoCategory(coverPhoto.category)} • {formatBytes(group.totalByteSize)}
+                          </p>
+                          <p className='text-[11px] text-clay truncate'>
+                            {linkedPatient ? `${linkedPatient.roomNumber} — ${linkedPatient.lastName}, ${linkedPatient.firstName}` : 'Orphan (no linked patient)'}
+                          </p>
+                          <Button size='sm' variant='destructive' className='w-full' onClick={() => requestDeleteConfirmation({
+                            title: 'Delete photo set?',
+                            message: `Permanently remove ${group.entries.length === 1 ? 'this photo' : `these ${group.entries.length} photos`} from the app record?`,
+                            onConfirm: () => deletePhotoAttachmentGroup(group),
+                          })}>
+                            Remove set
+                          </Button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className='h-full min-h-56 flex flex-col items-center justify-center text-center'>
+                    <div className='h-12 w-12 rounded-full bg-blush-sand flex items-center justify-center mb-3'>
+                      <Camera className='h-6 w-6 text-clay' />
+                    </div>
+                    <p className='text-sm font-medium text-espresso'>No photos stored yet</p>
+                    <p className='text-xs text-clay mt-1'>Photos added in patient records will appear here.</p>
+                  </div>
+                )
+              ) : reviewablePhotoAttachments.length > 0 ? (
                 <div className='space-y-2'>
                   {reviewablePhotoAttachments.map((attachment) => {
                     const linkedPatient = patientsById.get(attachment.patientId)
@@ -7130,7 +7426,11 @@ function App() {
                         </div>
 
                         <div className='grid grid-cols-1 sm:grid-cols-[150px_1fr] gap-2'>
-                          <div className='rounded border border-clay/25 bg-warm-ivory overflow-hidden h-30'>
+                          <button
+                            type='button'
+                            className='rounded border border-clay/25 bg-warm-ivory overflow-hidden h-30'
+                            onClick={() => openReviewPhotoById(attachment.id)}
+                          >
                             {previewUrl ? (
                               <img
                                 src={previewUrl}
@@ -7141,7 +7441,7 @@ function App() {
                             ) : (
                               <div className='h-full w-full flex items-center justify-center text-xs text-clay'>No preview</div>
                             )}
-                          </div>
+                          </button>
                           <div className='space-y-2'>
                             <p className='text-xs text-espresso'>
                               {linkedPatient

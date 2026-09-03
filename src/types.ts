@@ -201,6 +201,11 @@ export interface PhotoAttachment {
   patientId: number
   category: PhotoCategory
   title: string
+  /** True while `title` still equals the auto-generated default for this batch's upload
+   * group — flips to false permanently once the user edits the title away from that default.
+   * Drives same-day collision lettering ("Profile_08-11a", "Profile_08-11b", ...), which must
+   * only ever touch batches still at their default title. */
+  isDefaultTitle?: boolean
   uploadGroupId?: string
   selectionOrderInGroup?: number
   mimeType: string
