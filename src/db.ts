@@ -509,4 +509,29 @@ db.version(12).stores({
   await seedDefaultCustomActions(tagIdByName, (action) => customActionTable.add(action))
 })
 
+db.version(13).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+}).upgrade(async (tx) => {
+  // Adds `isDefaultTitle`, tracking whether a photo batch's title is still the auto-generated
+  // default (drives same-day collision lettering going forward). Every pre-existing batch was
+  // titled under the old "Category-YYYY-MM-DD-HH:MM:SS" scheme, which the new collision logic
+  // never generates or matches, so backfilling them as `false` (never touched by relettering)
+  // is correct regardless of whether that old title was later hand-edited.
+  const photoAttachmentTable = tx.table<PhotoAttachment, number>('photoAttachments')
+  await photoAttachmentTable.toCollection().modify({ isDefaultTitle: false })
+})
+
 export { db }

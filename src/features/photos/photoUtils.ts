@@ -25,13 +25,90 @@ export const formatPhotoCategory = (category: PhotoCategory) => {
 
 export const buildDefaultPhotoTitle = (category: PhotoCategory, date = new Date()) => {
   const label = formatPhotoCategory(category)
-  const year = date.getFullYear()
   const month = (date.getMonth() + 1).toString().padStart(2, '0')
   const day = date.getDate().toString().padStart(2, '0')
-  const hours = date.getHours().toString().padStart(2, '0')
-  const minutes = date.getMinutes().toString().padStart(2, '0')
-  const seconds = date.getSeconds().toString().padStart(2, '0')
-  return `${label}-${year}-${month}-${day}-${hours}:${minutes}:${seconds}`
+  return `${label}_${month}-${day}`
+}
+
+/** Converts a 1-based index to a lowercase spreadsheet-column-style suffix: 1 -> "a", 26 -> "z",
+ * 27 -> "aa", 28 -> "ab", etc. */
+export const letterSuffixForIndex = (index: number): string => {
+  let remaining = index
+  let result = ''
+  while (remaining > 0) {
+    const remainder = (remaining - 1) % 26
+    result = String.fromCharCode(97 + remainder) + result
+    remaining = Math.floor((remaining - 1) / 26)
+  }
+  return result
+}
+
+/** Inverse of `letterSuffixForIndex`. Returns null for anything that isn't a run of lowercase
+ * letters (i.e. not a suffix this scheme could have generated). */
+const letterSuffixToIndex = (suffix: string): number | null => {
+  if (!/^[a-z]+$/.test(suffix)) return null
+  let index = 0
+  for (const character of suffix) {
+    index = index * 26 + (character.charCodeAt(0) - 96)
+  }
+  return index
+}
+
+export type DefaultTitledPhotoBatch = {
+  groupId: string
+  title: string
+}
+
+export type DefaultPhotoTitleAssignment = {
+  /** The title to use for the new batch. */
+  title: string
+  /** Other same-day default-titled batches that must be retitled alongside this one (only ever
+   * the bare, unsuffixed batch — retroactively gaining the "a" suffix the first time a
+   * collision occurs). */
+  retitledBatches: DefaultTitledPhotoBatch[]
+}
+
+/**
+ * Resolves the default title for a newly created batch given every other batch already sharing
+ * the same category+day and still at its own default title. `existingSameDayDefaultBatches`
+ * must be pre-filtered to that scope (same patient, same category, same local day,
+ * `isDefaultTitle === true`) — batches the user has already retitled must never be passed in,
+ * since they're no longer part of the collision pool.
+ */
+export const resolveDefaultPhotoBatchTitle = (
+  baseTitle: string,
+  existingSameDayDefaultBatches: DefaultTitledPhotoBatch[],
+): DefaultPhotoTitleAssignment => {
+  if (existingSameDayDefaultBatches.length === 0) {
+    return { title: baseTitle, retitledBatches: [] }
+  }
+
+  let highestSuffixIndex = 0
+  let bareBatch: DefaultTitledPhotoBatch | null = null
+
+  for (const batch of existingSameDayDefaultBatches) {
+    if (batch.title === baseTitle) {
+      bareBatch = batch
+      continue
+    }
+
+    if (!batch.title.startsWith(baseTitle)) continue
+    const suffixIndex = letterSuffixToIndex(batch.title.slice(baseTitle.length))
+    if (suffixIndex !== null) {
+      highestSuffixIndex = Math.max(highestSuffixIndex, suffixIndex)
+    }
+  }
+
+  const retitledBatches: DefaultTitledPhotoBatch[] = []
+  if (bareBatch) {
+    retitledBatches.push({ groupId: bareBatch.groupId, title: `${baseTitle}${letterSuffixForIndex(1)}` })
+    highestSuffixIndex = Math.max(highestSuffixIndex, 1)
+  }
+
+  return {
+    title: `${baseTitle}${letterSuffixForIndex(highestSuffixIndex + 1)}`,
+    retitledBatches,
+  }
 }
 
 export const buildPhotoUploadGroupId = () => {
