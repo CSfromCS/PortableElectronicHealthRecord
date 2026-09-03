@@ -2604,10 +2604,11 @@ function App() {
   }, [])
 
   // Backspacing at the start of an item (empty or not) merges it into the previous one — undoes
-  // an accidental split (issue #78).
-  const mergeDailyChecklistItemWithPrevious = useCallback((index: number) => {
+  // an accidental split (issue #78). Takes the item's live field value rather than reading its
+  // (possibly stale, still-debounced) committed text — see mergeChecklistItemIntoPrevious's doc.
+  const mergeDailyChecklistItemWithPrevious = useCallback((index: number, fieldValue: string) => {
     setDailyUpdateForm((previous) => {
-      const result = mergeChecklistItemIntoPrevious(previous.checklist, index)
+      const result = mergeChecklistItemIntoPrevious(previous.checklist, index, fieldValue)
       if (!result) return previous
       setPendingDailyChecklistFocus({ index: result.focusIndex, caretOffset: result.caretOffset })
       return { ...previous, checklist: result.items }
@@ -2823,7 +2824,7 @@ function App() {
               } else if (event.key === 'Backspace' && !isDraftRow && index > 0 && caretOffset === 0) {
                 event.preventDefault()
                 forceExit()
-                mergeDailyChecklistItemWithPrevious(index)
+                mergeDailyChecklistItemWithPrevious(index, fieldValue)
               }
             }}
             autoEnter={pendingDailyChecklistFocus?.index === index ? { caretOffset: pendingDailyChecklistFocus.caretOffset } : null}
@@ -2959,9 +2960,11 @@ function App() {
     })
   }, [updateMasterChecklist])
 
-  const mergeMasterChecklistItemWithPrevious = useCallback((patientId: number, index: number) => {
+  // Takes the item's live field value rather than reading its (possibly stale, still-debounced)
+  // committed text — see mergeChecklistItemIntoPrevious's doc comment.
+  const mergeMasterChecklistItemWithPrevious = useCallback((patientId: number, index: number, fieldValue: string) => {
     void updateMasterChecklist(patientId, (previous) => {
-      const result = mergeChecklistItemIntoPrevious(previous, index)
+      const result = mergeChecklistItemIntoPrevious(previous, index, fieldValue)
       if (!result) return previous
       setPendingMasterChecklistFocus({
         patientId,
@@ -3251,7 +3254,7 @@ function App() {
               } else if (event.key === 'Backspace' && item.index > 0 && caretOffset === 0) {
                 event.preventDefault()
                 forceExit()
-                mergeMasterChecklistItemWithPrevious(item.patientId, item.index)
+                mergeMasterChecklistItemWithPrevious(item.patientId, item.index, fieldValue)
               }
             }}
             autoEnter={

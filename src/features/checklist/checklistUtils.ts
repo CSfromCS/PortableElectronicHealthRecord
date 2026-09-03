@@ -121,15 +121,24 @@ export type ChecklistMergeResult = {
  * deletes it, moving the cursor to the exact join point. Deliberately mirrors
  * splitChecklistItemAtCursor's split: this is how an accidental Enter-triggered split gets
  * undone by simply backspacing it away again, not just an empty-line-deletion shortcut.
+ *
+ * `currentText` — the item's *live* text, read straight from the DOM field at keydown time —
+ * must be passed in rather than read from `items[index].text`: TapToEditField debounces commits,
+ * so if Backspace-to-merge fires before that debounce (or a blur) has landed, `items[index].text`
+ * would still be whatever was last actually committed, silently discarding whatever was just
+ * typed instead of merging it in.
  */
-export const mergeChecklistItemIntoPrevious = (items: ChecklistItem[], index: number): ChecklistMergeResult | null => {
+export const mergeChecklistItemIntoPrevious = (
+  items: ChecklistItem[],
+  index: number,
+  currentText: string,
+): ChecklistMergeResult | null => {
   if (index <= 0 || index >= items.length) return null
   const previous = items[index - 1]
-  const current = items[index]
-  if (!previous || !current) return null
+  if (!previous) return null
 
   const nextItems = [...items]
-  nextItems.splice(index - 1, 2, { ...previous, text: previous.text + current.text })
+  nextItems.splice(index - 1, 2, { ...previous, text: previous.text + currentText })
   return { items: nextItems, focusIndex: index - 1, caretOffset: previous.text.length }
 }
 
