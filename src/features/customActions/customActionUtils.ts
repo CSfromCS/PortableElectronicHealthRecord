@@ -2,12 +2,32 @@ import { db } from '@/db'
 import { patientHasTagAnywhere } from '@/features/tags/tagUtils'
 import type { CustomAction, CustomActionCondition, CustomActionRun, CustomActionTagEffect, Patient, TagDefinition, TagEvent } from '@/types'
 
-export const conditionMatchesPatient = (patient: Patient, condition: CustomActionCondition): boolean =>
-  condition.requiredTagIds.every((tagId) => patientHasTagAnywhere(patient, tagId))
+/** True if `condition`'s day-of-week/day-of-month restrictions (if any) match `referenceDate` — an
+ * empty/undefined list on either axis means no restriction there. Both restrictions (when set)
+ * must pass for the date requirement as a whole to be satisfied. */
+export const conditionMatchesDate = (condition: CustomActionCondition, referenceDate: Date): boolean => {
+  const daysOfWeek = condition.daysOfWeek ?? []
+  const daysOfMonth = condition.daysOfMonth ?? []
+  const dayOfWeekOk = daysOfWeek.length === 0 || daysOfWeek.includes(referenceDate.getDay())
+  const dayOfMonthOk = daysOfMonth.length === 0 || daysOfMonth.includes(referenceDate.getDate())
+  return dayOfWeekOk && dayOfMonthOk
+}
+
+export const conditionMatchesPatient = (patient: Patient, condition: CustomActionCondition, referenceDate: Date = new Date()): boolean =>
+  condition.requiredTagIds.every((tagId) => patientHasTagAnywhere(patient, tagId)) && conditionMatchesDate(condition, referenceDate)
 
 /** Every condition on `action` that currently matches `patient` — conditions are independent, so several can match at once. */
-export const resolveMatchingConditions = (patient: Patient, action: CustomAction): CustomActionCondition[] =>
-  action.conditions.filter((condition) => conditionMatchesPatient(patient, condition))
+export const resolveMatchingConditions = (patient: Patient, action: CustomAction, referenceDate: Date = new Date()): CustomActionCondition[] =>
+  action.conditions.filter((condition) => conditionMatchesPatient(patient, condition, referenceDate))
+
+/**
+ * General-scope counterpart to resolveMatchingConditions (issue #120): a General action has no
+ * associated patient, so a condition matches purely on its date restriction (if any) — its
+ * requiredTagIds are always empty by construction (the UI never offers a tag picker for a
+ * General action's conditions) and are ignored here regardless.
+ */
+export const resolveMatchingGeneralConditions = (action: CustomAction, referenceDate: Date = new Date()): CustomActionCondition[] =>
+  action.conditions.filter((condition) => conditionMatchesDate(condition, referenceDate))
 
 /** Tags `condition` requires that `patient` doesn't currently have — used to offer "add the missing tag(s) and run" when nothing matched. */
 export const getMissingTagsForCondition = (patient: Patient, condition: CustomActionCondition): number[] =>
@@ -79,6 +99,11 @@ export const addTagsToPatientDirectly = async (patient: Patient, tagIds: number[
 export const actionHasApplicableEffect = (action: CustomAction, matchedConditions: CustomActionCondition[]): boolean =>
   action.checklistItems.length > 0 || action.tagEffects.length > 0 || matchedConditions.length > 0
 
+/** General-scope counterpart to actionHasApplicableEffect — a General action never has tag
+ * effects, so only its unconditional checklist items and matched conditions count. */
+export const actionHasApplicableGeneralEffect = (action: CustomAction, matchedConditions: CustomActionCondition[]): boolean =>
+  action.checklistItems.length > 0 || matchedConditions.length > 0
+
 /**
  * Applies an action's unconditional checklist items/Tag Effects plus every already-matched
  * condition's own checklist items and Tag Effects, for one patient. Checklist items append
@@ -98,6 +123,22 @@ export const applyCustomActionEffects = async (
   }
   const combinedTagEffects = [...action.tagEffects, ...matchedConditions.flatMap((condition) => condition.tagEffects)]
   await applyTagEffectsToPatient(patient, combinedTagEffects, tagsById)
+}
+
+/**
+ * General-scope counterpart to applyCustomActionEffects: appends the action's unconditional
+ * checklist items plus every already-matched condition's own checklist items to the General
+ * checklist. No tag effects — a General action has no associated patient to apply them to.
+ */
+export const applyGeneralCustomActionEffects = async (
+  action: CustomAction,
+  matchedConditions: CustomActionCondition[],
+  appendChecklistItems: (items: string[]) => Promise<void> | void,
+): Promise<void> => {
+  if (action.checklistItems.length > 0) await appendChecklistItems(action.checklistItems)
+  for (const condition of matchedConditions) {
+    if (condition.checklistItems.length > 0) await appendChecklistItems(condition.checklistItems)
+  }
 }
 
 export const hasCustomActionRunOnDate = (

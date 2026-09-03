@@ -148,13 +148,16 @@ import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
 import {
   actionHasApplicableEffect,
+  actionHasApplicableGeneralEffect,
   addTagsToPatientDirectly,
   applyCustomActionEffects,
+  applyGeneralCustomActionEffects,
   formatPatientLabelForNotice,
   getMissingTagsForCondition,
   hasCustomActionRunOnDate,
   recordCustomActionRun,
   resolveMatchingConditions,
+  resolveMatchingGeneralConditions,
 } from './features/customActions/customActionUtils'
 import { TagPicker } from './features/tags/TagPicker'
 import { BulkTagPicker } from './features/tags/BulkTagPicker'
@@ -839,7 +842,13 @@ function App() {
   const customActions = useLiveQuery(() => db.customActions.toArray(), [])
   const customActionRuns = useLiveQuery(() => db.customActionRuns.toArray(), [])
   const manualCustomActions = useMemo(
-    () => (customActions ?? []).filter((action) => action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
+    () => (customActions ?? []).filter((action) => (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
+    [customActions],
+  )
+  // General-scope actions (issue #120) — always manual by construction, shown on the Master
+  // Checklist's General section instead of any patient's Checklist tab.
+  const generalCustomActions = useMemo(
+    () => (customActions ?? []).filter((action) => action.scope === 'general').sort((a, b) => a.sortOrder - b.sortOrder),
     [customActions],
   )
   const dischargedTag = useMemo(() => (tagDefinitions ?? []).find((tag) => tag.name === 'Discharged'), [tagDefinitions])
@@ -3065,6 +3074,26 @@ function App() {
     await recordCustomActionRun(actionId, patientId, dailyDate)
     setNotice(`Ran "${action.name}".`)
   }, [appendCustomActionChecklistItems, dailyDate, selectedPatient, tagsById])
+
+  // General-scope counterpart (issue #120), fired from the Master Checklist's General section.
+  // No patient/tags involved, so there's no "didn't match" resolve dialog to fall back to — a
+  // day-of-week/month condition that doesn't match today simply isn't offered by the button being
+  // disabled-free (it always runs whatever currently applies), and an action with nothing
+  // applicable today just reports that in a notice instead.
+  const triggerGeneralCustomAction = useCallback(async (action: CustomAction) => {
+    if (action.id === undefined) return
+    const actionId = action.id
+
+    const matched = resolveMatchingGeneralConditions(action)
+    if (!actionHasApplicableGeneralEffect(action, matched)) {
+      setNotice(`"${action.name}" has nothing to add today.`)
+      return
+    }
+
+    await applyGeneralCustomActionEffects(action, matched, (items) => appendCustomActionChecklistItems(GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate, items))
+    await recordCustomActionRun(actionId, GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate)
+    setNotice(`Ran "${action.name}".`)
+  }, [appendCustomActionChecklistItems, masterChecklistDate])
 
   // Resolves the "zero conditions matched" dialog opened above: skip does nothing (the button
   // stays enabled so the patient can be retried later that day), while picking a condition adds
@@ -5543,6 +5572,28 @@ function App() {
                           <p className='text-sm font-semibold text-espresso'>{isGeneral ? 'General' : group.patientIdentifier}</p>
                           {groupVisibleTags.length > 0 ? <TagChipRow tags={groupVisibleTags} className='justify-start mt-0.5' /> : null}
                         </div>
+                        {isGeneral && generalCustomActions.length > 0 ? (
+                          <div className='flex flex-wrap gap-1.5'>
+                            {generalCustomActions.map((action) => {
+                              const alreadyRun = hasCustomActionRunOnDate(customActionRuns ?? [], action.id, GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate)
+                              return (
+                                <Button
+                                  key={action.id}
+                                  type='button'
+                                  size='sm'
+                                  variant='outline'
+                                  className='h-7 text-xs gap-1'
+                                  disabled={alreadyRun}
+                                  title={alreadyRun ? `Already run for ${masterChecklistDate}` : undefined}
+                                  onClick={() => void triggerGeneralCustomAction(action)}
+                                >
+                                  <Zap className='h-3.5 w-3.5' aria-hidden='true' />
+                                  {alreadyRun ? `${action.name} (done)` : action.name}
+                                </Button>
+                              )
+                            })}
+                          </div>
+                        ) : null}
                         <div className='space-y-2'>
                           {group.items.map((item) => renderMasterChecklistItem(item, `master-${item.patientId}-${item.viewDate}-${item.index}`))}
                           {isGeneral && group.items.length === 0 ? (
