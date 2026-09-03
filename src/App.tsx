@@ -38,6 +38,7 @@ import { MasterChecklistQuickAdd } from '@/features/checklist/MasterChecklistQui
 import {
   appendChecklistItemsForPatientDate,
   insertBlankChecklistItemAfter,
+  insertMissingChecklistItems,
   insertNewChecklistItem,
   mergeChecklistItemIntoPrevious,
   normalizeChecklistItems,
@@ -154,8 +155,6 @@ import {
   applyGeneralCustomActionEffects,
   formatPatientLabelForNotice,
   getMissingTagsForCondition,
-  hasCustomActionRunOnDate,
-  recordCustomActionRun,
   resolveMatchingConditions,
   resolveMatchingGeneralConditions,
 } from './features/customActions/customActionUtils'
@@ -840,7 +839,6 @@ function App() {
   const tagDefinitions = useLiveQuery(() => db.tagDefinitions.toArray(), [])
   const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
   const customActions = useLiveQuery(() => db.customActions.toArray(), [])
-  const customActionRuns = useLiveQuery(() => db.customActionRuns.toArray(), [])
   const manualCustomActions = useMemo(
     () => (customActions ?? []).filter((action) => (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
     [customActions],
@@ -1003,13 +1001,12 @@ function App() {
   // Bulk-triggers a Manual Custom Action for every selected patient independently: each patient's
   // conditions are resolved against its own tags, several can match at once, and a patient
   // matching none of them is simply left unaffected and named in a single summary notice rather
-  // than pausing the batch with an interactive per-patient prompt. The once-per-day
-  // duplicate-prevention rule is applied per-patient by silently skipping anyone who already ran
-  // this action today rather than blocking the whole batch.
+  // than pausing the batch with an interactive per-patient prompt. No once-per-day limit (issue
+  // #121) — safe to re-run any number of times since tag effects are already idempotent and
+  // checklist items skip any text already listed (see appendCustomActionChecklistItems).
   const confirmBulkCustomAction = async () => {
     const action = bulkCustomActionTarget
     if (!action || action.id === undefined) return
-    const actionId = action.id
     const targetPatients = (patients ?? []).filter(
       (patient) => patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id),
     )
@@ -1022,7 +1019,6 @@ function App() {
       let ranCount = 0
       for (const patient of targetPatients) {
         if (patient.id === undefined) continue
-        if (hasCustomActionRunOnDate(customActionRuns ?? [], actionId, patient.id, today)) continue
 
         const matched = resolveMatchingConditions(patient, action)
         if (!actionHasApplicableEffect(action, matched)) {
@@ -1030,7 +1026,6 @@ function App() {
           continue
         }
         await applyCustomActionEffects(patient, action, matched, tagsById, (items) => appendCustomActionChecklistItems(patient.id as number, today, items))
-        await recordCustomActionRun(actionId, patient.id, today)
         ranCount += 1
       }
 
@@ -3007,13 +3002,17 @@ function App() {
   // patient/date already open in the Checklist tab, updating local form state (and letting the
   // existing autosave persist it) avoids clobbering any other unsaved edits on the same daily
   // entry; otherwise it writes straight to IndexedDB the same way updateMasterChecklist does.
+  // Skips any text already listed on the target date's checklist (exact match, regardless of
+  // completed state or notes) so a Custom Action can be re-run any number of times without
+  // duplicating items it already added (issue #121) — the once-per-day CustomActionRun gate this
+  // used to lean on is gone; text-based dedup is what makes repeat runs safe now.
   const appendCustomActionChecklistItems = useCallback(async (patientId: number, date: string, items: string[]) => {
     if (items.length === 0) return
 
     if (selectedPatientId === patientId && dailyDate === date) {
       setDailyUpdateForm((previous) => ({
         ...previous,
-        checklist: items.reduce((checklist, text) => insertNewChecklistItem(checklist, { text, completed: false }), previous.checklist),
+        checklist: insertMissingChecklistItems(previous.checklist, items),
       }))
       setDailyDirty(true)
       return
@@ -3055,14 +3054,14 @@ function App() {
   }, [appendCustomActionChecklistItems, customActions, tagsById])
 
   // Manual trigger button on a single patient's Checklist tab. If at least one condition matches,
-  // every matched condition's checklist items and tag effects run and the daily run record is
-  // written (duplicate-prevention: the button then disables for the rest of this date). If zero
+  // every matched condition's checklist items and tag effects run. No once-per-day limit (issue
+  // #121) — safe to re-run any number of times, since tag effects are already idempotent and
+  // checklist items skip any text already listed (see appendCustomActionChecklistItems). If zero
   // conditions match, nothing runs yet — instead this opens the interactive resolve dialog so the
   // user can skip this patient or add the missing tag(s) for a specific condition on the spot.
   const triggerCustomActionForSelectedPatient = useCallback(async (action: CustomAction) => {
     if (!selectedPatient || selectedPatient.id === undefined || action.id === undefined) return
     const patientId = selectedPatient.id
-    const actionId = action.id
 
     const matched = resolveMatchingConditions(selectedPatient, action)
     if (!actionHasApplicableEffect(action, matched)) {
@@ -3071,7 +3070,6 @@ function App() {
     }
 
     await applyCustomActionEffects(selectedPatient, action, matched, tagsById, (items) => appendCustomActionChecklistItems(patientId, dailyDate, items))
-    await recordCustomActionRun(actionId, patientId, dailyDate)
     setNotice(`Ran "${action.name}".`)
   }, [appendCustomActionChecklistItems, dailyDate, selectedPatient, tagsById])
 
@@ -3082,7 +3080,6 @@ function App() {
   // applicable today just reports that in a notice instead.
   const triggerGeneralCustomAction = useCallback(async (action: CustomAction) => {
     if (action.id === undefined) return
-    const actionId = action.id
 
     const matched = resolveMatchingGeneralConditions(action)
     if (!actionHasApplicableGeneralEffect(action, matched)) {
@@ -3091,19 +3088,17 @@ function App() {
     }
 
     await applyGeneralCustomActionEffects(action, matched, (items) => appendCustomActionChecklistItems(GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate, items))
-    await recordCustomActionRun(actionId, GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate)
     setNotice(`Ran "${action.name}".`)
   }, [appendCustomActionChecklistItems, masterChecklistDate])
 
   // Resolves the "zero conditions matched" dialog opened above: skip does nothing (the button
-  // stays enabled so the patient can be retried later that day), while picking a condition adds
-  // just its missing tags, then re-resolves and runs every condition that now matches (which may
-  // be more than just the one the user picked, if the added tag(s) also satisfy another).
+  // stays enabled so the patient can be retried later), while picking a condition adds just its
+  // missing tags, then re-resolves and runs every condition that now matches (which may be more
+  // than just the one the user picked, if the added tag(s) also satisfy another).
   const resolveCustomActionByAddingTags = useCallback(async (condition: CustomActionCondition) => {
     const state = customActionResolveState
     if (!state || state.patient.id === undefined || state.action.id === undefined) return
     const patientId = state.patient.id
-    const actionId = state.action.id
 
     const missingTagIds = getMissingTagsForCondition(state.patient, condition)
     if (missingTagIds.length > 0) await addTagsToPatientDirectly(state.patient, missingTagIds, tagsById)
@@ -3112,7 +3107,6 @@ function App() {
     const matched = resolveMatchingConditions(patientAfterAdd, state.action)
     if (actionHasApplicableEffect(state.action, matched)) {
       await applyCustomActionEffects(patientAfterAdd, state.action, matched, tagsById, (items) => appendCustomActionChecklistItems(patientId, dailyDate, items))
-      await recordCustomActionRun(actionId, patientId, dailyDate)
       setNotice(`Ran "${state.action.name}".`)
     }
     setCustomActionResolveState(null)
@@ -5574,24 +5568,19 @@ function App() {
                         </div>
                         {isGeneral && generalCustomActions.length > 0 ? (
                           <div className='flex flex-wrap gap-1.5'>
-                            {generalCustomActions.map((action) => {
-                              const alreadyRun = hasCustomActionRunOnDate(customActionRuns ?? [], action.id, GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate)
-                              return (
-                                <Button
-                                  key={action.id}
-                                  type='button'
-                                  size='sm'
-                                  variant='outline'
-                                  className='h-7 text-xs gap-1'
-                                  disabled={alreadyRun}
-                                  title={alreadyRun ? `Already run for ${masterChecklistDate}` : undefined}
-                                  onClick={() => void triggerGeneralCustomAction(action)}
-                                >
-                                  <Zap className='h-3.5 w-3.5' aria-hidden='true' />
-                                  {alreadyRun ? `${action.name} (done)` : action.name}
-                                </Button>
-                              )
-                            })}
+                            {generalCustomActions.map((action) => (
+                              <Button
+                                key={action.id}
+                                type='button'
+                                size='sm'
+                                variant='outline'
+                                className='h-7 text-xs gap-1'
+                                onClick={() => void triggerGeneralCustomAction(action)}
+                              >
+                                <Zap className='h-3.5 w-3.5' aria-hidden='true' />
+                                {action.name}
+                              </Button>
+                            ))}
                           </div>
                         ) : null}
                         <div className='space-y-2'>
@@ -6058,24 +6047,19 @@ function App() {
                       <div className='space-y-1'>
                         <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Custom Actions</p>
                         <div className='flex flex-wrap gap-1.5'>
-                          {manualCustomActions.map((action) => {
-                            const alreadyRun = hasCustomActionRunOnDate(customActionRuns ?? [], action.id, selectedPatient.id, dailyDate)
-                            return (
-                              <Button
-                                key={action.id}
-                                type='button'
-                                size='sm'
-                                variant='outline'
-                                className='h-7 text-xs gap-1'
-                                disabled={alreadyRun}
-                                title={alreadyRun ? `Already run for ${dailyDate}` : undefined}
-                                onClick={() => void triggerCustomActionForSelectedPatient(action)}
-                              >
-                                <Zap className='h-3.5 w-3.5' aria-hidden='true' />
-                                {alreadyRun ? `${action.name} (done)` : action.name}
-                              </Button>
-                            )
-                          })}
+                          {manualCustomActions.map((action) => (
+                            <Button
+                              key={action.id}
+                              type='button'
+                              size='sm'
+                              variant='outline'
+                              className='h-7 text-xs gap-1'
+                              onClick={() => void triggerCustomActionForSelectedPatient(action)}
+                            >
+                              <Zap className='h-3.5 w-3.5' aria-hidden='true' />
+                              {action.name}
+                            </Button>
+                          ))}
                         </div>
                       </div>
                     ) : null}
