@@ -1775,6 +1775,59 @@ function App() {
     setSelectedAttachmentId(entry.id)
   }, [selectedAttachmentCarousel])
 
+  // Swipe left/right on the full-screen photo viewer to move through the carousel, same
+  // deadzone/lock approach as the patient-card swipe (only locks into a horizontal drag, and
+  // blocks the page/click once locked, after movement is clearly more horizontal than
+  // vertical) so a plain tap still reaches the chrome-toggle onClick and a vertical drag still
+  // scrolls/dismisses normally. Ignored when the gesture starts on a control or an explicitly
+  // opted-out area (see data-no-swipe, used by the thumbnail strip).
+  const photoSwipeStartRef = useRef<{ x: number; y: number; locked: boolean } | null>(null)
+  const PHOTO_SWIPE_LOCK_DEADZONE_PX = 10
+  const PHOTO_SWIPE_MIN_DISTANCE_PX = 50
+
+  const handlePhotoSwipeTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    const target = event.target
+    if (target instanceof Element && target.closest('button, [data-no-swipe]')) {
+      photoSwipeStartRef.current = null
+      return
+    }
+    const touch = event.touches[0]
+    if (!touch) return
+    photoSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, locked: false }
+  }
+
+  const handlePhotoSwipeTouchMove = (event: TouchEvent<HTMLDivElement>) => {
+    const start = photoSwipeStartRef.current
+    if (!start) return
+    const touch = event.touches[0]
+    if (!touch) return
+    const deltaX = touch.clientX - start.x
+    const deltaY = touch.clientY - start.y
+
+    if (!start.locked) {
+      if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > PHOTO_SWIPE_LOCK_DEADZONE_PX) {
+        photoSwipeStartRef.current = null
+        return
+      }
+      if (Math.abs(deltaX) < PHOTO_SWIPE_LOCK_DEADZONE_PX) return
+      start.locked = true
+    }
+
+    event.preventDefault()
+  }
+
+  const handlePhotoSwipeTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const start = photoSwipeStartRef.current
+    photoSwipeStartRef.current = null
+    if (!start?.locked) return
+
+    const touch = event.changedTouches[0]
+    if (!touch) return
+    const deltaX = touch.clientX - start.x
+    if (Math.abs(deltaX) < PHOTO_SWIPE_MIN_DISTANCE_PX) return
+    moveCarousel(deltaX < 0 ? 'next' : 'previous')
+  }
+
   useEffect(() => {
     if (!selectedAttachmentCarouselEntry) return
 
@@ -7205,6 +7258,9 @@ function App() {
               <div
                 className='relative flex-1 min-h-0 flex items-center justify-center'
                 onClick={() => setIsCarouselChromeVisible((previous) => !previous)}
+                onTouchStart={handlePhotoSwipeTouchStart}
+                onTouchMove={handlePhotoSwipeTouchMove}
+                onTouchEnd={handlePhotoSwipeTouchEnd}
               >
                 {carouselPreviewUrls[selectedAttachmentCarouselEntry.id] ? (
                   <img
