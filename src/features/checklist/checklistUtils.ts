@@ -100,9 +100,11 @@ export type ChecklistMergeResult = {
 }
 
 /**
- * Backspacing at the start of an empty line merges it into the previous item — deletes the
- * empty item and moves the cursor to the end of the previous item's (unchanged, since the
- * merged line was empty) text, mirroring standard text-editor empty-line deletion.
+ * Backspacing at the start of an item (caret at offset 0, regardless of whether the item is
+ * empty) merges it into the previous item — appends its text onto the previous item's and
+ * deletes it, moving the cursor to the exact join point. Deliberately mirrors
+ * splitChecklistItemAtCursor's split: this is how an accidental Enter-triggered split gets
+ * undone by simply backspacing it away again, not just an empty-line-deletion shortcut.
  */
 export const mergeChecklistItemIntoPrevious = (items: ChecklistItem[], index: number): ChecklistMergeResult | null => {
   if (index <= 0 || index >= items.length) return null

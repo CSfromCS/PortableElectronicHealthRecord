@@ -555,7 +555,13 @@ function App() {
   const [activeDailyChecklistIndex, setActiveDailyChecklistIndex] = useState<number | null>(null)
   const [pendingDailyChecklistFocus, setPendingDailyChecklistFocus] = useState<{ index: number; caretOffset: number } | null>(null)
   const [activeMasterChecklistRow, setActiveMasterChecklistRow] = useState<{ patientId: number; index: number } | null>(null)
-  const [pendingMasterChecklistFocus, setPendingMasterChecklistFocus] = useState<{ patientId: number; index: number; caretOffset: number } | null>(null)
+  // expectedText guards against the Master Checklist's async write/live-query race: the focus
+  // request is set the instant the edit is queued, but the row it targets won't show the new
+  // content until the IndexedDB write lands and the live query re-derives masterChecklistItems
+  // (not necessarily by the very next render) — so autoEnter only fires once the row's *actual*
+  // text matches what this edit was expected to produce there, not merely once some row exists
+  // at that index (which, until then, is still whatever was there before the edit).
+  const [pendingMasterChecklistFocus, setPendingMasterChecklistFocus] = useState<{ patientId: number; index: number; caretOffset: number; expectedText: string } | null>(null)
   const [vitalForm, setVitalForm] = useState<VitalFormState>(() => initialVitalForm())
   const [editingVitalId, setEditingVitalId] = useState<number | null>(null)
   const [vitalDraftId, setVitalDraftId] = useState<number | null>(null)
@@ -2546,7 +2552,8 @@ function App() {
     setDailyDirty(true)
   }, [])
 
-  // Backspacing at the start of an empty item merges it into the previous one (issue #78).
+  // Backspacing at the start of an item (empty or not) merges it into the previous one — undoes
+  // an accidental split (issue #78).
   const mergeDailyChecklistItemWithPrevious = useCallback((index: number) => {
     setDailyUpdateForm((previous) => {
       const result = mergeChecklistItemIntoPrevious(previous.checklist, index)
@@ -2762,7 +2769,7 @@ function App() {
                 event.preventDefault()
                 forceExit()
                 splitDailyChecklistItem(index, fieldValue, caretOffset)
-              } else if (event.key === 'Backspace' && !isDraftRow && index > 0 && fieldValue.length === 0 && caretOffset === 0) {
+              } else if (event.key === 'Backspace' && !isDraftRow && index > 0 && caretOffset === 0) {
                 event.preventDefault()
                 forceExit()
                 mergeDailyChecklistItemWithPrevious(index)
@@ -2879,48 +2886,44 @@ function App() {
   }, [updateMasterChecklist])
 
   // Same split-at-cursor / merge-into-previous / notes-Enter behavior as the per-patient tab
-  // (issue #78). Unlike the per-patient tab's local form state, updateMasterChecklist writes
-  // straight to IndexedDB and the list re-renders only once the live query picks that up — so
-  // the focus request is set *after* that write resolves, not inside the updater itself, or it
-  // would race the still-stale (pre-edit) list and land on the wrong row.
-  const splitMasterChecklistItem = useCallback(async (patientId: number, index: number, fieldValue: string, caretOffset: number) => {
-    let focusIndex: number | null = null
-    await updateMasterChecklist(patientId, (previous) => {
+  // (issue #78). The focus request is set right away (inside the updater, using the post-edit
+  // items it already computed) rather than waiting on updateMasterChecklist's returned promise
+  // — that write lands in IndexedDB and the list only re-renders once the live query re-derives
+  // masterChecklistItems from it, which isn't guaranteed to have happened by the time the write
+  // "completes" from this function's point of view. pendingMasterChecklistFocus's expectedText
+  // is what actually makes this race-proof: autoEnter only fires once the target row's real text
+  // matches it, so it naturally waits out however many extra renders the live query needs.
+  const splitMasterChecklistItem = useCallback((patientId: number, index: number, fieldValue: string, caretOffset: number) => {
+    void updateMasterChecklist(patientId, (previous) => {
       const result = splitChecklistItemAtCursor(previous, index, fieldValue, caretOffset)
-      focusIndex = result.focusIndex
+      if (result.focusIndex !== null) {
+        setPendingMasterChecklistFocus({ patientId, index: result.focusIndex, caretOffset: 0, expectedText: result.items[result.focusIndex]?.text ?? '' })
+      }
       return result.items
     })
-    if (focusIndex !== null) {
-      setPendingMasterChecklistFocus({ patientId, index: focusIndex, caretOffset: 0 })
-    }
   }, [updateMasterChecklist])
 
-  const mergeMasterChecklistItemWithPrevious = useCallback(async (patientId: number, index: number) => {
-    let focusIndex: number | null = null
-    let focusCaretOffset = 0
-    await updateMasterChecklist(patientId, (previous) => {
+  const mergeMasterChecklistItemWithPrevious = useCallback((patientId: number, index: number) => {
+    void updateMasterChecklist(patientId, (previous) => {
       const result = mergeChecklistItemIntoPrevious(previous, index)
       if (!result) return previous
-      focusIndex = result.focusIndex
-      focusCaretOffset = result.caretOffset
+      setPendingMasterChecklistFocus({
+        patientId,
+        index: result.focusIndex,
+        caretOffset: result.caretOffset,
+        expectedText: result.items[result.focusIndex]?.text ?? '',
+      })
       return result.items
     })
-    if (focusIndex !== null) {
-      setPendingMasterChecklistFocus({ patientId, index: focusIndex, caretOffset: focusCaretOffset })
-    }
   }, [updateMasterChecklist])
 
-  const insertBlankMasterChecklistItemAfter = useCallback(async (patientId: number, index: number) => {
-    let focusIndex: number | null = null
-    await updateMasterChecklist(patientId, (previous) => {
+  const insertBlankMasterChecklistItemAfter = useCallback((patientId: number, index: number) => {
+    void updateMasterChecklist(patientId, (previous) => {
       const result = insertBlankChecklistItemAfter(previous, index)
       if (!result) return previous
-      focusIndex = result.focusIndex
+      setPendingMasterChecklistFocus({ patientId, index: result.focusIndex, caretOffset: 0, expectedText: '' })
       return result.items
     })
-    if (focusIndex !== null) {
-      setPendingMasterChecklistFocus({ patientId, index: focusIndex, caretOffset: 0 })
-    }
   }, [updateMasterChecklist])
 
   // Custom Actions (issue #75) append checklist items to a specific patient+date. When that's the
@@ -3168,15 +3171,17 @@ function App() {
               if (event.key === 'Enter') {
                 event.preventDefault()
                 forceExit()
-                void splitMasterChecklistItem(item.patientId, item.index, fieldValue, caretOffset)
-              } else if (event.key === 'Backspace' && item.index > 0 && fieldValue.length === 0 && caretOffset === 0) {
+                splitMasterChecklistItem(item.patientId, item.index, fieldValue, caretOffset)
+              } else if (event.key === 'Backspace' && item.index > 0 && caretOffset === 0) {
                 event.preventDefault()
                 forceExit()
-                void mergeMasterChecklistItemWithPrevious(item.patientId, item.index)
+                mergeMasterChecklistItemWithPrevious(item.patientId, item.index)
               }
             }}
             autoEnter={
-              pendingMasterChecklistFocus?.patientId === item.patientId && pendingMasterChecklistFocus.index === item.index
+              pendingMasterChecklistFocus?.patientId === item.patientId
+              && pendingMasterChecklistFocus.index === item.index
+              && pendingMasterChecklistFocus.expectedText === item.text
                 ? { caretOffset: pendingMasterChecklistFocus.caretOffset }
                 : null
             }
@@ -3204,7 +3209,7 @@ function App() {
                 event.preventDefault()
                 updateMasterChecklistItemNotes(item.patientId, item.index, fieldValue)
                 forceExit()
-                void insertBlankMasterChecklistItemAfter(item.patientId, item.index)
+                insertBlankMasterChecklistItemAfter(item.patientId, item.index)
               }}
               renderView={(text) => <span>{text}</span>}
               renderEditor={({ value, onChange }) => (
@@ -5931,7 +5936,7 @@ function App() {
                       </div>
                     ) : null}
                     <div className='space-y-2'>
-                      <p className='text-xs text-clay'>Tap any line to edit it, or the blank line at the end to add a new one. Press Enter to split at the cursor into a new item; Backspace at the start of an empty line removes it. Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
+                      <p className='text-xs text-clay'>Tap any line to edit it, or the blank line at the end to add a new one. Press Enter to split at the cursor into a new item; Backspace at the start of a line merges it back into the one above (undoes a split). Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
                       <div className='space-y-2'>
                         {withTrailingBlankChecklistItem(dailyUpdateForm.checklist).map((item, index) => (
                           renderDailyChecklistItem(item, index, index >= dailyUpdateForm.checklist.length)
