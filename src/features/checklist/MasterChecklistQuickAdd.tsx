@@ -2,68 +2,70 @@ import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import type { Patient } from '@/types'
 
-type MasterChecklistQuickAddProps = {
-  /** Active patients only, already sorted for display. */
-  patients: Patient[]
-  onAdd: (patientId: number, text: string) => void
+export type MasterChecklistQuickAddOption = {
+  id: number
+  label: string
 }
 
-const patientLabel = (patient: Patient) => `${patient.roomNumber} — ${patient.lastName}, ${patient.firstName}`
+type MasterChecklistQuickAddProps = {
+  /** Selectable targets, already sorted for display — real patients plus the General
+   * (no-patient) checklist (issue #79). */
+  options: MasterChecklistQuickAddOption[]
+  onAdd: (id: number, text: string) => void
+}
 
-export const MasterChecklistQuickAdd = ({ patients, onAdd }: MasterChecklistQuickAddProps) => {
+export const MasterChecklistQuickAdd = ({ options, onAdd }: MasterChecklistQuickAddProps) => {
   const [isOpen, setIsOpen] = useState(false)
-  const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
-  const [patientQuery, setPatientQuery] = useState('')
-  const [isPatientListOpen, setIsPatientListOpen] = useState(false)
+  const [selectedOptionId, setSelectedOptionId] = useState<number | null>(null)
+  const [optionQuery, setOptionQuery] = useState('')
+  const [isOptionListOpen, setIsOptionListOpen] = useState(false)
   const [itemText, setItemText] = useState('')
   const itemInputRef = useRef<HTMLInputElement>(null)
 
-  const selectedPatient = useMemo(
-    () => patients.find((patient) => patient.id === selectedPatientId) ?? null,
-    [patients, selectedPatientId],
+  const selectedOption = useMemo(
+    () => options.find((option) => option.id === selectedOptionId) ?? null,
+    [options, selectedOptionId],
   )
 
   const suggestions = useMemo(() => {
-    const normalizedQuery = patientQuery.trim().toLowerCase()
-    if (!normalizedQuery) return patients.slice(0, 6)
-    return patients
-      .filter((patient) => `${patient.roomNumber} ${patient.lastName} ${patient.firstName}`.toLowerCase().includes(normalizedQuery))
+    const normalizedQuery = optionQuery.trim().toLowerCase()
+    if (!normalizedQuery) return options.slice(0, 6)
+    return options
+      .filter((option) => option.label.toLowerCase().includes(normalizedQuery))
       .slice(0, 6)
-  }, [patients, patientQuery])
+  }, [options, optionQuery])
 
   const reset = () => {
     setIsOpen(false)
-    setSelectedPatientId(null)
-    setPatientQuery('')
-    setIsPatientListOpen(false)
+    setSelectedOptionId(null)
+    setOptionQuery('')
+    setIsOptionListOpen(false)
     setItemText('')
   }
 
-  const selectPatientSuggestion = (patient: Patient) => {
-    if (patient.id === undefined) return
-    setSelectedPatientId(patient.id)
-    setPatientQuery('')
-    setIsPatientListOpen(false)
+  const selectOptionSuggestion = (option: MasterChecklistQuickAddOption) => {
+    setSelectedOptionId(option.id)
+    setOptionQuery('')
+    setIsOptionListOpen(false)
     window.setTimeout(() => itemInputRef.current?.focus(), 0)
   }
 
   const submitItem = () => {
     const nextText = itemText.trim()
-    if (!nextText || selectedPatientId == null) return
-    onAdd(selectedPatientId, nextText)
+    if (!nextText || selectedOptionId == null) return
+    onAdd(selectedOptionId, nextText)
     setItemText('')
     itemInputRef.current?.focus()
   }
 
-  const handlePatientKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const handleOptionKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') {
-      setIsPatientListOpen(false)
+      setIsOptionListOpen(false)
       return
     }
     if (event.key === 'Enter' && suggestions.length > 0) {
-      selectPatientSuggestion(suggestions[0])
+      selectOptionSuggestion(suggestions[0])
     }
   }
 
@@ -94,32 +96,32 @@ export const MasterChecklistQuickAdd = ({ patients, onAdd }: MasterChecklistQuic
         <Input
           aria-label='Patient'
           placeholder='Find patient by room or name'
-          value={selectedPatient ? patientLabel(selectedPatient) : patientQuery}
+          value={selectedOption ? selectedOption.label : optionQuery}
           onChange={(event) => {
-            setSelectedPatientId(null)
-            setPatientQuery(event.target.value)
-            setIsPatientListOpen(true)
+            setSelectedOptionId(null)
+            setOptionQuery(event.target.value)
+            setIsOptionListOpen(true)
           }}
           onFocus={() => {
-            setSelectedPatientId(null)
-            setPatientQuery('')
-            setIsPatientListOpen(true)
+            setSelectedOptionId(null)
+            setOptionQuery('')
+            setIsOptionListOpen(true)
           }}
-          onBlur={() => window.setTimeout(() => setIsPatientListOpen(false), 120)}
-          onKeyDown={handlePatientKeyDown}
+          onBlur={() => window.setTimeout(() => setIsOptionListOpen(false), 120)}
+          onKeyDown={handleOptionKeyDown}
         />
-        {isPatientListOpen && suggestions.length > 0 ? (
+        {isOptionListOpen && suggestions.length > 0 ? (
           <div className='absolute left-0 right-0 z-20 mt-1 rounded-lg border border-clay/25 bg-white/97 shadow-lg shadow-espresso/8 backdrop-blur-sm overflow-hidden'>
             <ul className='max-h-44 overflow-auto py-1'>
-              {suggestions.map((patient) => (
-                <li key={patient.id}>
+              {suggestions.map((option) => (
+                <li key={option.id}>
                   <button
                     type='button'
                     className='w-full px-3 py-2 text-left text-sm hover:bg-blush-sand/50 transition-colors'
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => selectPatientSuggestion(patient)}
+                    onClick={() => selectOptionSuggestion(option)}
                   >
-                    {patientLabel(patient)}
+                    {option.label}
                   </button>
                 </li>
               ))}
@@ -135,14 +137,14 @@ export const MasterChecklistQuickAdd = ({ patients, onAdd }: MasterChecklistQuic
         value={itemText}
         onChange={(event) => setItemText(event.target.value)}
         onKeyDown={handleItemKeyDown}
-        disabled={!selectedPatient}
+        disabled={!selectedOption}
       />
       <Button
         type='button'
         variant='secondary'
         size='sm'
         onClick={submitItem}
-        disabled={!selectedPatient || itemText.trim().length === 0}
+        disabled={!selectedOption || itemText.trim().length === 0}
       >
         Add
       </Button>

@@ -261,6 +261,77 @@ type MasterChecklistItem = {
   lastFoundDate: string | null
 }
 
+// A checklist not tied to any patient (issue #79) — stored as an ordinary DailyUpdate row like
+// any patient's, just addressed by this reserved patientId instead of a real one. Real patient
+// ids are Dexie auto-increment ('++id'), which only ever assigns positive integers, so a
+// negative sentinel can never collide with one.
+const GENERAL_CHECKLIST_PATIENT_ID = -1
+const GENERAL_CHECKLIST_LABEL = 'General (no patient)'
+
+/**
+ * Builds the MasterChecklistItem rows for one checklist source — a real patient's DailyUpdate
+ * history, or the General checklist's — sharing the same "show today's entry if it exists,
+ * otherwise carry forward incomplete items from the latest prior date" logic either way.
+ */
+const buildMasterChecklistItemsForSource = (
+  patientId: number,
+  patientIdentifier: string,
+  updates: DailyUpdate[],
+  viewDate: string,
+): MasterChecklistItem[] => {
+  const priorOrCurrent = updates.filter((entry) => entry.date <= viewDate)
+  if (priorOrCurrent.length === 0) return []
+
+  const dateMatchedUpdate = priorOrCurrent.find((entry) => entry.date === viewDate)
+  const sourceUpdate = dateMatchedUpdate ?? selectLatestDailyUpdate(priorOrCurrent)
+  if (!sourceUpdate) return []
+
+  // dateMatchedUpdate means this is the entry actively being viewed/edited "live" — keep blank
+  // items so a split's blank "after" item can actually render (see updateMasterChecklist). A
+  // checklist merely carried forward from a prior date is never live-edited directly, so it
+  // still drops blanks as stale abandoned edits.
+  const scopedChecklist = dateMatchedUpdate
+    ? normalizeChecklistItemsKeepingBlanks(sourceUpdate.checklist)
+    : toPendingChecklistItems(sourceUpdate.checklist)
+  if (scopedChecklist.length === 0) return []
+
+  const normalizedHistory = priorOrCurrent.map((entry) => ({
+    date: entry.date,
+    checklist: normalizeChecklistItems(entry.checklist),
+  }))
+
+  return scopedChecklist.map((item, index) => {
+    let createdDate: string | null = null
+    let completedDate: string | null = null
+    let lastFoundDate: string | null = null
+
+    normalizedHistory.forEach((historyEntry) => {
+      const matchedHistoryItem = historyEntry.checklist.find((historyItem) => historyItem.text === item.text)
+      if (!matchedHistoryItem) return
+      lastFoundDate = historyEntry.date
+      if (createdDate === null) {
+        createdDate = historyEntry.date
+      }
+      if (completedDate === null && matchedHistoryItem.completed) {
+        completedDate = historyEntry.date
+      }
+    })
+
+    return {
+      patientId,
+      patientIdentifier,
+      viewDate,
+      index,
+      text: item.text,
+      completed: item.completed,
+      notes: item.notes ?? '',
+      createdDate,
+      completedDate,
+      lastFoundDate,
+    }
+  })
+}
+
 type VitalFormState = {
   date: string
   time: string
@@ -1230,6 +1301,15 @@ function App() {
     })
   }, [activePatients])
 
+  // The General (no-patient) checklist first, then real patients (issue #79) — a plain
+  // {id, label} list rather than Patient objects, since General has no such record.
+  const masterChecklistQuickAddOptions = useMemo(() => [
+    { id: GENERAL_CHECKLIST_PATIENT_ID, label: GENERAL_CHECKLIST_LABEL },
+    ...reportingSelectablePatients
+      .filter((patient): patient is Patient & { id: number } => patient.id !== undefined)
+      .map((patient) => ({ id: patient.id, label: `${patient.roomNumber} — ${patient.lastName}, ${patient.firstName}` })),
+  ], [reportingSelectablePatients])
+
   useEffect(() => {
     if (activePatientIds.length === 0) {
       setSelectedCensusPatientIds([])
@@ -1514,64 +1594,26 @@ function App() {
       return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
     })
 
-    const items: MasterChecklistItem[] = []
+    const items: MasterChecklistItem[] = [
+      ...buildMasterChecklistItemsForSource(
+        GENERAL_CHECKLIST_PATIENT_ID,
+        GENERAL_CHECKLIST_LABEL,
+        dailyUpdatesByPatient.get(GENERAL_CHECKLIST_PATIENT_ID) ?? [],
+        masterChecklistDate,
+      ),
+    ]
+
     sortedPatients.forEach((patient) => {
       if (patient.id === undefined) return
       const patientId = patient.id
-
-      const updates = dailyUpdatesByPatient.get(patientId) ?? []
-      const priorOrCurrent = updates.filter((entry) => entry.date <= masterChecklistDate)
-      if (priorOrCurrent.length === 0) return
-
-      const dateMatchedUpdate = priorOrCurrent.find((entry) => entry.date === masterChecklistDate)
-      const sourceUpdate = dateMatchedUpdate ?? selectLatestDailyUpdate(priorOrCurrent)
-      if (!sourceUpdate) return
-
-      // dateMatchedUpdate means this is the entry actively being viewed/edited "live" — keep
-      // blank items so a split's blank "after" item can actually render (see updateMasterChecklist).
-      // A checklist merely carried forward from a prior date is never live-edited directly, so it
-      // still drops blanks as stale abandoned edits.
-      const scopedChecklist = dateMatchedUpdate
-        ? normalizeChecklistItemsKeepingBlanks(sourceUpdate.checklist)
-        : toPendingChecklistItems(sourceUpdate.checklist)
-      if (scopedChecklist.length === 0) return
-
       const patientIdentifier = `${patient.roomNumber} — ${patient.lastName.toUpperCase()}`
-      const normalizedHistory = priorOrCurrent.map((entry) => ({
-        date: entry.date,
-        checklist: normalizeChecklistItems(entry.checklist),
-      }))
 
-      scopedChecklist.forEach((item, index) => {
-        let createdDate: string | null = null
-        let completedDate: string | null = null
-        let lastFoundDate: string | null = null
-
-        normalizedHistory.forEach((historyEntry) => {
-          const matchedHistoryItem = historyEntry.checklist.find((historyItem) => historyItem.text === item.text)
-          if (!matchedHistoryItem) return
-          lastFoundDate = historyEntry.date
-          if (createdDate === null) {
-            createdDate = historyEntry.date
-          }
-          if (completedDate === null && matchedHistoryItem.completed) {
-            completedDate = historyEntry.date
-          }
-        })
-
-        items.push({
-          patientId,
-          patientIdentifier,
-          viewDate: masterChecklistDate,
-          index,
-          text: item.text,
-          completed: item.completed,
-          notes: item.notes ?? '',
-          createdDate,
-          completedDate,
-          lastFoundDate,
-        })
-      })
+      items.push(...buildMasterChecklistItemsForSource(
+        patientId,
+        patientIdentifier,
+        dailyUpdatesByPatient.get(patientId) ?? [],
+        masterChecklistDate,
+      ))
     })
 
     return items
@@ -3282,7 +3324,7 @@ function App() {
           aria-label='Remove checklist item'
           onClick={() => requestDeleteConfirmation({
             title: 'Delete checklist item?',
-            message: `Remove "${item.text || 'this item'}" from ${item.patientIdentifier}'s checklist?`,
+            message: `Remove "${item.text || 'this item'}" from ${item.patientId === GENERAL_CHECKLIST_PATIENT_ID ? 'General' : item.patientIdentifier}'s checklist?`,
             onConfirm: () => removeMasterChecklistItem(item.patientId, item.index),
           })}
         >
@@ -5050,9 +5092,20 @@ function App() {
       })
     })
 
+    // The General checklist is a permanent fixture of this view (issue #79), not one-of-many
+    // like patients — shown even with zero items so it's always discoverable, unlike a patient
+    // section which simply doesn't render until they have checklist history.
+    if (!grouped.has(GENERAL_CHECKLIST_PATIENT_ID)) {
+      grouped.set(GENERAL_CHECKLIST_PATIENT_ID, { patientIdentifier: GENERAL_CHECKLIST_LABEL, items: [] })
+    }
+
     return Array.from(grouped.entries())
       .map(([patientId, value]) => ({ patientId, ...value }))
-      .sort((a, b) => a.patientIdentifier.localeCompare(b.patientIdentifier, undefined, { numeric: true, sensitivity: 'base' }))
+      .sort((a, b) => {
+        if (a.patientId === GENERAL_CHECKLIST_PATIENT_ID) return -1
+        if (b.patientId === GENERAL_CHECKLIST_PATIENT_ID) return 1
+        return a.patientIdentifier.localeCompare(b.patientIdentifier, undefined, { numeric: true, sensitivity: 'base' })
+      })
   }, [masterChecklistItems])
 
   return (
@@ -5457,7 +5510,7 @@ function App() {
             {view === 'checklist' ? (
               <Card className='bg-warm-ivory border-clay shadow-sm'>
                 <CardHeader className='pb-2'>
-                  <CardTitle className='text-base text-espresso'>Master Checklist (Active Patients)</CardTitle>
+                  <CardTitle className='text-base text-espresso'>Master Checklist</CardTitle>
                 </CardHeader>
                 <CardContent className='space-y-3'>
                   <div className='space-y-1 max-w-60'>
@@ -5472,26 +5525,30 @@ function App() {
                   <p className='text-xs text-clay'>
                     Viewing checklist state for {formatDateShortMonthDay(masterChecklistDate)}. Pending items carry forward to future dates; completed items stay on their original completion date.
                   </p>
-                  <MasterChecklistQuickAdd patients={reportingSelectablePatients} onAdd={addMasterChecklistItem} />
+                  <MasterChecklistQuickAdd options={masterChecklistQuickAddOptions} onAdd={addMasterChecklistItem} />
                   <div className='space-y-3'>
                     {masterChecklistGroupedByPatient.map((group) => {
-                      const groupPatient = patientsById.get(group.patientId)
+                      const isGeneral = group.patientId === GENERAL_CHECKLIST_PATIENT_ID
+                      const groupPatient = isGeneral ? undefined : patientsById.get(group.patientId)
                       const groupVisibleTags = groupPatient ? getVisiblePatientTags(groupPatient, tagsById, tagGroups ?? []) : []
                       return (
-                      <div key={`master-patient-${group.patientId}`} className='space-y-2'>
+                      <div
+                        key={`master-patient-${group.patientId}`}
+                        className={cn('space-y-2', isGeneral && 'rounded-lg border border-clay/30 bg-blush-sand/40 p-2.5')}
+                      >
                         <div>
-                          <p className='text-sm font-semibold text-espresso'>{group.patientIdentifier}</p>
+                          <p className='text-sm font-semibold text-espresso'>{isGeneral ? 'General' : group.patientIdentifier}</p>
                           {groupVisibleTags.length > 0 ? <TagChipRow tags={groupVisibleTags} className='justify-start mt-0.5' /> : null}
                         </div>
                         <div className='space-y-2'>
                           {group.items.map((item) => renderMasterChecklistItem(item, `master-${item.patientId}-${item.viewDate}-${item.index}`))}
+                          {isGeneral && group.items.length === 0 ? (
+                            <p className='text-xs text-clay'>No general items yet — use "Add item" above.</p>
+                          ) : null}
                         </div>
                       </div>
                       )
                     })}
-                    {masterChecklistItems.length === 0 ? (
-                      <p className='text-xs text-clay'>No checklist items for this date.</p>
-                    ) : null}
                   </div>
                 </CardContent>
               </Card>
