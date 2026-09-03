@@ -1775,15 +1775,51 @@ function App() {
     setSelectedAttachmentId(entry.id)
   }, [selectedAttachmentCarousel])
 
-  // Swipe left/right on the full-screen photo viewer to move through the carousel, same
-  // deadzone/lock approach as the patient-card swipe (only locks into a horizontal drag, and
-  // blocks the page/click once locked, after movement is clearly more horizontal than
-  // vertical) so a plain tap still reaches the chrome-toggle onClick and a vertical drag still
-  // scrolls/dismisses normally. Ignored when the gesture starts on a control or an explicitly
-  // opted-out area (see data-no-swipe, used by the thumbnail strip).
+  // Swipe left/right on the full-screen photo viewer to move through the carousel, mirroring
+  // the patient-card swipe's feel exactly: the same deadzone/lock approach (only locks into a
+  // horizontal drag, and blocks the page/click once locked, after movement is clearly more
+  // horizontal than vertical, so a plain tap still reaches the chrome-toggle onClick and a
+  // vertical drag is untouched), the same live 1:1 finger-tracked translate+fade during the
+  // drag (mutated directly on the ref'd node, bypassing React, since this component re-renders
+  // the whole app on every setState), and on release the same spring-back (below threshold) or
+  // exit-then-opposite-edge-entry animation (at/above threshold) driven by a handful of state
+  // updates rather than per-frame ones. Ignored when the gesture starts on a control or an
+  // explicitly opted-out area (see data-no-swipe, used by the thumbnail strip).
   const photoSwipeStartRef = useRef<{ x: number; y: number; locked: boolean } | null>(null)
+  const photoSwipeVisualRef = useRef<HTMLDivElement | null>(null)
+  const photoSwipeExitTimeoutRef = useRef<number | null>(null)
+  const photoSwipeRafRef = useRef<number | null>(null)
+  const photoSwipePendingDeltaXRef = useRef(0)
+  const [photoSwipeOffsetX, setPhotoSwipeOffsetX] = useState(0)
+  const [photoSwipeTransitionOn, setPhotoSwipeTransitionOn] = useState(false)
+  const [photoSwipeReleaseActive, setPhotoSwipeReleaseActive] = useState(false)
+
   const PHOTO_SWIPE_LOCK_DEADZONE_PX = 10
-  const PHOTO_SWIPE_MIN_DISTANCE_PX = 50
+  const PHOTO_SWIPE_MIN_DISTANCE_PX = 60
+  const PHOTO_SWIPE_EXIT_DISTANCE_PX = 300
+  const PHOTO_SWIPE_ENTRY_DISTANCE_PX = 56
+  const PHOTO_SWIPE_EXIT_DURATION_MS = 180
+
+  const photoSwipeOpacityForOffset = (offsetX: number) => 1 - Math.min(Math.abs(offsetX) / 250, 0.85)
+
+  const applyPhotoSwipeVisualTransform = (offsetX: number) => {
+    const node = photoSwipeVisualRef.current
+    if (!node) return
+    node.style.transform = `translateX(${offsetX}px)`
+    node.style.opacity = String(photoSwipeOpacityForOffset(offsetX))
+  }
+
+  const resetPhotoSwipe = () => {
+    photoSwipeStartRef.current = null
+    if (photoSwipeRafRef.current !== null) {
+      cancelAnimationFrame(photoSwipeRafRef.current)
+      photoSwipeRafRef.current = null
+    }
+    setPhotoSwipeReleaseActive(false)
+    setPhotoSwipeTransitionOn(false)
+    setPhotoSwipeOffsetX(0)
+    applyPhotoSwipeVisualTransform(0)
+  }
 
   const handlePhotoSwipeTouchStart = (event: TouchEvent<HTMLDivElement>) => {
     const target = event.target
@@ -1791,8 +1827,13 @@ function App() {
       photoSwipeStartRef.current = null
       return
     }
+    if (photoSwipeExitTimeoutRef.current !== null) {
+      window.clearTimeout(photoSwipeExitTimeoutRef.current)
+      photoSwipeExitTimeoutRef.current = null
+    }
     const touch = event.touches[0]
     if (!touch) return
+    resetPhotoSwipe()
     photoSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, locked: false }
   }
 
@@ -1814,18 +1855,62 @@ function App() {
     }
 
     event.preventDefault()
+    photoSwipePendingDeltaXRef.current = deltaX
+    if (photoSwipeRafRef.current !== null) return
+    photoSwipeRafRef.current = requestAnimationFrame(() => {
+      photoSwipeRafRef.current = null
+      applyPhotoSwipeVisualTransform(photoSwipePendingDeltaXRef.current)
+    })
   }
 
   const handlePhotoSwipeTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
     const start = photoSwipeStartRef.current
     photoSwipeStartRef.current = null
-    if (!start?.locked) return
+    if (photoSwipeRafRef.current !== null) {
+      cancelAnimationFrame(photoSwipeRafRef.current)
+      photoSwipeRafRef.current = null
+    }
+    if (!start?.locked) {
+      resetPhotoSwipe()
+      return
+    }
 
     const touch = event.changedTouches[0]
-    if (!touch) return
-    const deltaX = touch.clientX - start.x
-    if (Math.abs(deltaX) < PHOTO_SWIPE_MIN_DISTANCE_PX) return
-    moveCarousel(deltaX < 0 ? 'next' : 'previous')
+    const deltaX = touch ? touch.clientX - start.x : photoSwipePendingDeltaXRef.current
+    const direction: 'next' | 'previous' = deltaX < 0 ? 'next' : 'previous'
+    const hasMultiplePhotos = (selectedAttachmentCarousel?.entries.length ?? 0) > 1
+    const shouldAdvance = hasMultiplePhotos && Math.abs(deltaX) >= PHOTO_SWIPE_MIN_DISTANCE_PX
+
+    // Hand off from the imperative ref-driven transform to React-state-driven `style` at the
+    // exact live position, so switching modes here can't cause a visual jump.
+    setPhotoSwipeReleaseActive(true)
+    setPhotoSwipeTransitionOn(false)
+    setPhotoSwipeOffsetX(deltaX)
+
+    if (!shouldAdvance) {
+      requestAnimationFrame(() => {
+        setPhotoSwipeTransitionOn(true)
+        setPhotoSwipeOffsetX(0)
+      })
+      return
+    }
+
+    const exitOffset = direction === 'next' ? -PHOTO_SWIPE_EXIT_DISTANCE_PX : PHOTO_SWIPE_EXIT_DISTANCE_PX
+    requestAnimationFrame(() => {
+      setPhotoSwipeTransitionOn(true)
+      setPhotoSwipeOffsetX(exitOffset)
+    })
+    photoSwipeExitTimeoutRef.current = window.setTimeout(() => {
+      moveCarousel(direction)
+      setPhotoSwipeTransitionOn(false)
+      setPhotoSwipeOffsetX(direction === 'next' ? PHOTO_SWIPE_ENTRY_DISTANCE_PX : -PHOTO_SWIPE_ENTRY_DISTANCE_PX)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setPhotoSwipeTransitionOn(true)
+          setPhotoSwipeOffsetX(0)
+        })
+      })
+    }, PHOTO_SWIPE_EXIT_DURATION_MS)
   }
 
   useEffect(() => {
@@ -6618,18 +6703,18 @@ function App() {
                                         <button
                                           key={`expanded-photo-${entry.id}`}
                                           type='button'
-                                          className='relative overflow-hidden rounded border border-clay/30 bg-warm-ivory'
+                                          className='relative aspect-square overflow-hidden rounded border border-clay/30 bg-warm-ivory'
                                           onClick={() => openPhotoById(entry.id)}
                                         >
                                           {previewUrl ? (
                                             <img
                                               src={previewUrl}
                                               alt={entry.title || `Attachment ${formatPhotoCategory(entry.category)}`}
-                                              className='h-24 w-full object-cover'
+                                              className='h-full w-full object-cover'
                                               loading='lazy'
                                             />
                                           ) : (
-                                            <div className='h-24 flex items-center justify-center text-xs text-clay'>No preview</div>
+                                            <div className='h-full w-full flex items-center justify-center text-xs text-clay'>No preview</div>
                                           )}
                                         </button>
                                       )
@@ -7256,21 +7341,31 @@ function App() {
           >
             {selectedAttachmentCarouselEntry ? (
               <div
-                className='relative flex-1 min-h-0 flex items-center justify-center'
+                className='relative flex-1 min-h-0 flex items-center justify-center overflow-hidden'
                 onClick={() => setIsCarouselChromeVisible((previous) => !previous)}
                 onTouchStart={handlePhotoSwipeTouchStart}
                 onTouchMove={handlePhotoSwipeTouchMove}
                 onTouchEnd={handlePhotoSwipeTouchEnd}
+                onTouchCancel={resetPhotoSwipe}
               >
-                {carouselPreviewUrls[selectedAttachmentCarouselEntry.id] ? (
-                  <img
-                    src={carouselPreviewUrls[selectedAttachmentCarouselEntry.id]}
-                    alt={selectedAttachmentCarouselEntry.title || 'Attachment preview'}
-                    className='max-h-full max-w-full object-contain'
-                  />
-                ) : (
-                  <p className='text-sm text-white/70'>Preview unavailable.</p>
-                )}
+                <div
+                  ref={photoSwipeVisualRef}
+                  className={cn(
+                    'flex h-full w-full items-center justify-center',
+                    photoSwipeTransitionOn && 'transition-transform duration-200 ease-out',
+                  )}
+                  style={photoSwipeReleaseActive ? { transform: `translateX(${photoSwipeOffsetX}px)`, opacity: photoSwipeOpacityForOffset(photoSwipeOffsetX) } : undefined}
+                >
+                  {carouselPreviewUrls[selectedAttachmentCarouselEntry.id] ? (
+                    <img
+                      src={carouselPreviewUrls[selectedAttachmentCarouselEntry.id]}
+                      alt={selectedAttachmentCarouselEntry.title || 'Attachment preview'}
+                      className='max-h-full max-w-full object-contain'
+                    />
+                  ) : (
+                    <p className='text-sm text-white/70'>Preview unavailable.</p>
+                  )}
+                </div>
 
                 {isCarouselChromeVisible ? (
                   <div
