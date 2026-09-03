@@ -73,6 +73,26 @@ export const splitChecklistItemAtCursor = (
   return { items: nextItems, focusIndex: index + 1 }
 }
 
+export type ChecklistInsertResult = {
+  items: ChecklistItem[]
+  focusIndex: number
+}
+
+/**
+ * Inserts a new blank item immediately after `index`, inheriting its completed state. Used when
+ * Enter is pressed inside an item's *notes* (issue #78 follow-up): unlike splitting the item's
+ * main text, the notes text is never divided — it stays put on the original item while a fresh
+ * item appears right below it, ready to type into.
+ */
+export const insertBlankChecklistItemAfter = (items: ChecklistItem[], index: number): ChecklistInsertResult | null => {
+  const existing = items[index]
+  if (!existing) return null
+
+  const nextItems = [...items]
+  nextItems.splice(index + 1, 0, { text: '', completed: existing.completed })
+  return { items: nextItems, focusIndex: index + 1 }
+}
+
 export type ChecklistMergeResult = {
   items: ChecklistItem[]
   focusIndex: number

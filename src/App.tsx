@@ -37,6 +37,7 @@ import { cn } from '@/lib/utils'
 import { MasterChecklistQuickAdd } from '@/features/checklist/MasterChecklistQuickAdd'
 import {
   appendChecklistItemsForPatientDate,
+  insertBlankChecklistItemAfter,
   insertNewChecklistItem,
   mergeChecklistItemIntoPrevious,
   normalizeChecklistItems,
@@ -2556,6 +2557,18 @@ function App() {
     setDailyDirty(true)
   }, [])
 
+  // Enter inside an item's notes always adds a new item below it, unsplit — see
+  // insertBlankChecklistItemAfter's doc comment.
+  const insertBlankDailyChecklistItemAfter = useCallback((index: number) => {
+    setDailyUpdateForm((previous) => {
+      const result = insertBlankChecklistItemAfter(previous.checklist, index)
+      if (!result) return previous
+      setPendingDailyChecklistFocus({ index: result.focusIndex, caretOffset: 0 })
+      return { ...previous, checklist: result.items }
+    })
+    setDailyDirty(true)
+  }, [])
+
   const updateDailyChecklistItemNotes = useCallback((index: number, notes: string) => {
     const nextNotes = notes.trim()
 
@@ -2775,6 +2788,13 @@ function App() {
               emptyText='Add note'
               value={item.notes ?? ''}
               onCommit={(nextNotes) => updateDailyChecklistItemNotes(index, nextNotes)}
+              onEditorKeyDown={(event, { fieldValue, forceExit }) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                updateDailyChecklistItemNotes(index, fieldValue)
+                forceExit()
+                insertBlankDailyChecklistItemAfter(index)
+              }}
               renderView={(text) => <span>{text}</span>}
               renderEditor={({ value, onChange }) => (
                 <AutoGrowTextField
@@ -2825,7 +2845,7 @@ function App() {
         ) : null}
       </div>
     </div>
-  ), [activeDailyChecklistIndex, allowDailyChecklistDrop, appendDailyChecklistItemAtEnd, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, mergeDailyChecklistItemWithPrevious, moveDailyChecklistItemByDirection, pendingDailyChecklistFocus, removeDailyChecklistItem, requestDeleteConfirmation, splitDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemNotes, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
+  ), [activeDailyChecklistIndex, allowDailyChecklistDrop, appendDailyChecklistItemAtEnd, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, insertBlankDailyChecklistItemAfter, mergeDailyChecklistItemWithPrevious, moveDailyChecklistItemByDirection, pendingDailyChecklistFocus, removeDailyChecklistItem, requestDeleteConfirmation, splitDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemNotes, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
 
   const addMasterChecklistItem = useCallback((patientId: number, text: string) => {
     const nextText = text.trim()
@@ -2858,24 +2878,49 @@ function App() {
     )))
   }, [updateMasterChecklist])
 
-  // Same split-at-cursor / merge-into-previous behavior as the per-patient tab (issue #78).
-  const splitMasterChecklistItem = useCallback((patientId: number, index: number, fieldValue: string, caretOffset: number) => {
-    void updateMasterChecklist(patientId, (previous) => {
+  // Same split-at-cursor / merge-into-previous / notes-Enter behavior as the per-patient tab
+  // (issue #78). Unlike the per-patient tab's local form state, updateMasterChecklist writes
+  // straight to IndexedDB and the list re-renders only once the live query picks that up — so
+  // the focus request is set *after* that write resolves, not inside the updater itself, or it
+  // would race the still-stale (pre-edit) list and land on the wrong row.
+  const splitMasterChecklistItem = useCallback(async (patientId: number, index: number, fieldValue: string, caretOffset: number) => {
+    let focusIndex: number | null = null
+    await updateMasterChecklist(patientId, (previous) => {
       const result = splitChecklistItemAtCursor(previous, index, fieldValue, caretOffset)
-      if (result.focusIndex !== null) {
-        setPendingMasterChecklistFocus({ patientId, index: result.focusIndex, caretOffset: 0 })
-      }
+      focusIndex = result.focusIndex
       return result.items
     })
+    if (focusIndex !== null) {
+      setPendingMasterChecklistFocus({ patientId, index: focusIndex, caretOffset: 0 })
+    }
   }, [updateMasterChecklist])
 
-  const mergeMasterChecklistItemWithPrevious = useCallback((patientId: number, index: number) => {
-    void updateMasterChecklist(patientId, (previous) => {
+  const mergeMasterChecklistItemWithPrevious = useCallback(async (patientId: number, index: number) => {
+    let focusIndex: number | null = null
+    let focusCaretOffset = 0
+    await updateMasterChecklist(patientId, (previous) => {
       const result = mergeChecklistItemIntoPrevious(previous, index)
       if (!result) return previous
-      setPendingMasterChecklistFocus({ patientId, index: result.focusIndex, caretOffset: result.caretOffset })
+      focusIndex = result.focusIndex
+      focusCaretOffset = result.caretOffset
       return result.items
     })
+    if (focusIndex !== null) {
+      setPendingMasterChecklistFocus({ patientId, index: focusIndex, caretOffset: focusCaretOffset })
+    }
+  }, [updateMasterChecklist])
+
+  const insertBlankMasterChecklistItemAfter = useCallback(async (patientId: number, index: number) => {
+    let focusIndex: number | null = null
+    await updateMasterChecklist(patientId, (previous) => {
+      const result = insertBlankChecklistItemAfter(previous, index)
+      if (!result) return previous
+      focusIndex = result.focusIndex
+      return result.items
+    })
+    if (focusIndex !== null) {
+      setPendingMasterChecklistFocus({ patientId, index: focusIndex, caretOffset: 0 })
+    }
   }, [updateMasterChecklist])
 
   // Custom Actions (issue #75) append checklist items to a specific patient+date. When that's the
@@ -3123,11 +3168,11 @@ function App() {
               if (event.key === 'Enter') {
                 event.preventDefault()
                 forceExit()
-                splitMasterChecklistItem(item.patientId, item.index, fieldValue, caretOffset)
+                void splitMasterChecklistItem(item.patientId, item.index, fieldValue, caretOffset)
               } else if (event.key === 'Backspace' && item.index > 0 && fieldValue.length === 0 && caretOffset === 0) {
                 event.preventDefault()
                 forceExit()
-                mergeMasterChecklistItemWithPrevious(item.patientId, item.index)
+                void mergeMasterChecklistItemWithPrevious(item.patientId, item.index)
               }
             }}
             autoEnter={
@@ -3154,6 +3199,13 @@ function App() {
               emptyText='Add note'
               value={item.notes}
               onCommit={(nextNotes) => updateMasterChecklistItemNotes(item.patientId, item.index, nextNotes)}
+              onEditorKeyDown={(event, { fieldValue, forceExit }) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                updateMasterChecklistItemNotes(item.patientId, item.index, fieldValue)
+                forceExit()
+                void insertBlankMasterChecklistItemAfter(item.patientId, item.index)
+              }}
               renderView={(text) => <span>{text}</span>}
               renderEditor={({ value, onChange }) => (
                 <AutoGrowTextField
@@ -3200,7 +3252,7 @@ function App() {
         </Button>
       </div>
     </div>
-    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
+    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, insertBlankMasterChecklistItemAfter, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
