@@ -177,6 +177,7 @@ import {
 } from './features/tags/tagUtils'
 import { SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
 import { FilterButton } from './features/filters/FilterButton'
+import { FilterSummary } from './features/filters/FilterSummary'
 import { PatientFilterDialog } from './features/filters/PatientFilterDialog'
 import {
   DEFAULT_PATIENT_POOL_CRITERIA,
@@ -186,6 +187,8 @@ import {
   collectDistinctWards,
   computeDefaultWindowLookback,
   countTagWardSelections,
+  describePatientPoolFilter,
+  describeTagWardFilter,
   matchesPatientPool,
   matchesTagWardFilter,
   resolveWindowDefaults,
@@ -673,6 +676,13 @@ function App() {
   const [censusPoolCriteria, setCensusPoolCriteria] = useState<PatientPoolCriterion[]>(DEFAULT_PATIENT_POOL_CRITERIA)
   const [censusPoolUseWindow, setCensusPoolUseWindow] = useState(true)
   const [censusPoolWindow, setCensusPoolWindow] = useState<DateTimeWindow>(EMPTY_DATE_TIME_WINDOW)
+  // Ticks once a minute so the "last 12 hours, ending now" default keeps up with actual time even
+  // while the Patient Pool filter dialog stays closed (see censusPoolWindowDefaults below).
+  const [censusWindowNowTick, setCensusWindowNowTick] = useState(0)
+  useEffect(() => {
+    const interval = window.setInterval(() => setCensusWindowNowTick((tick) => tick + 1), 60_000)
+    return () => window.clearInterval(interval)
+  }, [])
   const [profileForm, setProfileForm] = useState<ProfileFormState>(initialProfileForm)
   const [dailyDate, setDailyDate] = useState(() => toLocalISODate())
   const [masterChecklistDate, setMasterChecklistDate] = useState(() => toLocalISODate())
@@ -1378,13 +1388,15 @@ function App() {
     [tagsById, allTagEvents],
   )
   // Recomputed (not on every render, which would recreate a new object each time and defeat the
-  // memos/effect below that key off it) whenever the raw window fields change or the filter
-  // dialog opens/closes — close enough to "now" for a manual filter window, without the object
-  // identity churning every render.
+  // memos/effect below that key off it) whenever the raw window fields change, the filter dialog
+  // opens/closes, or the minute ticks over — that last trigger matters even while the dialog stays
+  // closed: without it, applying a tag and immediately checking "Included" could miss it, because
+  // the "until now" boundary was still frozen at whatever it was the last time the dialog was
+  // touched (which could be well before the tag's event timestamp).
   const censusPoolWindowDefaults = useMemo(
     () => computeDefaultWindowLookback(),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deps are a deliberate recompute trigger, not captured values
-    [censusPoolWindow, censusFilterDialogOpen],
+    [censusPoolWindow, censusFilterDialogOpen, censusWindowNowTick],
   )
   const censusResolvedWindow = useMemo(
     () => resolveWindowDefaults(censusPoolWindow, censusPoolWindowDefaults),
@@ -5447,6 +5459,8 @@ function App() {
               </CardContent>
             </Card>
 
+            <FilterSummary lines={describeTagWardFilter(patientListFilter, tagsById)} />
+
             <div className='flex items-center justify-between px-1 mb-2 gap-2'>
               <p className='text-xs font-medium text-clay'>
                 {visiblePatients.length} patient{visiblePatients.length === 1 ? '' : 's'}
@@ -5691,6 +5705,7 @@ function App() {
                       onClick={() => setChecklistFilterDialogOpen(true)}
                     />
                   </div>
+                  <FilterSummary lines={describeTagWardFilter(checklistFilter, tagsById)} />
                 </CardHeader>
                 <CardContent className='space-y-3'>
                   <div className='space-y-1 max-w-60'>
@@ -7249,6 +7264,12 @@ function App() {
                                   </Button>
                                 </div>
                               </div>
+                              <FilterSummary
+                                lines={[
+                                  ...describeTagWardFilter(censusFilter, tagsById),
+                                  describePatientPoolFilter(censusPoolCriteria, censusPoolUseWindow, censusResolvedWindow),
+                                ]}
+                              />
                               {censusSelectablePatients.length > 0 ? (
                                 <div className='flex flex-wrap gap-2'>
                                   {censusSelectablePatients.map((patient) => {

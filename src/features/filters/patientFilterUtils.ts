@@ -1,4 +1,4 @@
-import { toLocalISODate, toLocalTime, isWithinDateTimeWindow, getEffectiveAdmitDate } from '@/lib/dateTime'
+import { toLocalISODate, toLocalTime, isWithinDateTimeWindow, getEffectiveAdmitDate, formatDateMMDD, formatClock } from '@/lib/dateTime'
 import { getAppliedPatientTags } from '@/features/tags/tagUtils'
 import type { Patient, TagDefinition, TagEvent } from '@/types'
 
@@ -199,4 +199,36 @@ export const matchesPatientPool = (
       default: return false
     }
   })
+}
+
+/** Human-readable lines describing the Tag and Ward facets currently in effect for a view — empty for a facet at its default (no restriction). Used to show the viewer exactly what a view's filter is doing, not just a badge count. */
+export const describeTagWardFilter = (
+  filter: TagWardFilterState,
+  tagsById: Map<number, TagDefinition>,
+): string[] => {
+  const lines: string[] = []
+  if (filter.tagIds.length > 0) {
+    const names = filter.tagIds.map((id) => tagsById.get(id)?.name ?? `#${id}`).join(', ')
+    lines.push(`Tags (${filter.tagMode === 'AND' ? 'all of' : 'any of'}): ${names}`)
+  }
+  if (filter.wards.length > 0) {
+    lines.push(`Ward (any of): ${filter.wards.join(', ')}`)
+  }
+  return lines
+}
+
+/** Human-readable line describing the Patient Pool facet currently in effect, including the actual resolved window (so a blank field's computed default is visible, not just "no window entered"). `resolvedWindow` should already have blanks substituted via `resolveWindowDefaults`. */
+export const describePatientPoolFilter = (
+  criteria: PatientPoolCriterion[],
+  useWindow: boolean,
+  resolvedWindow: DateTimeWindow,
+): string => {
+  const labels = criteria.length > 0
+    ? criteria.map((id) => PATIENT_POOL_CRITERIA.find((c) => c.id === id)?.label ?? id).join(', ')
+    : 'none (all patients)'
+  if (!patientPoolCriteriaNeedWindow(criteria)) return `Patient Pool: ${labels}`
+  if (!useWindow) return `Patient Pool: ${labels} (any time)`
+
+  const windowText = `${formatDateMMDD(resolvedWindow.dateFrom)} ${formatClock(resolvedWindow.timeFrom)} – ${formatDateMMDD(resolvedWindow.dateTo)} ${formatClock(resolvedWindow.timeTo)}`
+  return `Patient Pool: ${labels} (${windowText})`
 }
