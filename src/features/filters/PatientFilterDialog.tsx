@@ -16,8 +16,11 @@ export type PatientPoolFacetProps = {
   /** Whether the shared window below actually narrows Admitted/Discharged/Referred/MGH. False means those criteria match regardless of when (issue #81's "if no window is set" fallback). */
   useWindow: boolean
   onChangeUseWindow: (useWindow: boolean) => void
+  /** Raw, independently-blankable fields — a blank field falls back to the matching field in `defaults` (last 12 hours, ending now), same as any other optional date/time field in this app. */
   window: DateTimeWindow
   onChangeWindow: (window: DateTimeWindow) => void
+  /** The computed "(Default)" values shown when a field above is blank. */
+  defaults: DateTimeWindow
 }
 
 export const PatientFilterDialog = ({
@@ -167,7 +170,7 @@ export const PatientFilterDialog = ({
                     </label>
                     <p className='text-xs text-clay'>
                       {pool.useWindow
-                        ? 'Shared window for Admitted/Discharged/Referred/MGH.'
+                        ? 'Shared window for Admitted/Discharged/Referred/MGH. Leave a field blank to use its default (last 12 hours, ending now).'
                         : 'Unchecked: Admitted/Discharged/Referred/MGH match regardless of when.'}
                     </p>
                     <div className={cn('grid grid-cols-2 gap-2', !pool.useWindow && 'opacity-40 pointer-events-none')}>
@@ -177,6 +180,8 @@ export const PatientFilterDialog = ({
                           ariaLabel='Patient pool window from date'
                           value={pool.window.dateFrom}
                           onChange={(isoDate) => pool.onChangeWindow({ ...pool.window, dateFrom: isoDate })}
+                          defaultIso={pool.defaults.dateFrom}
+                          emitEmptyOnClear
                         />
                       </div>
                       <div className='space-y-1'>
@@ -185,6 +190,8 @@ export const PatientFilterDialog = ({
                           ariaLabel='Patient pool window from time'
                           value={pool.window.timeFrom}
                           onChange={(hhmm) => pool.onChangeWindow({ ...pool.window, timeFrom: hhmm })}
+                          defaultHhmm={pool.defaults.timeFrom}
+                          emitEmptyOnClear
                         />
                       </div>
                       <div className='space-y-1'>
@@ -193,6 +200,8 @@ export const PatientFilterDialog = ({
                           ariaLabel='Patient pool window until date'
                           value={pool.window.dateTo}
                           onChange={(isoDate) => pool.onChangeWindow({ ...pool.window, dateTo: isoDate })}
+                          defaultIso={pool.defaults.dateTo}
+                          emitEmptyOnClear
                         />
                       </div>
                       <div className='space-y-1'>
@@ -201,6 +210,8 @@ export const PatientFilterDialog = ({
                           ariaLabel='Patient pool window until time'
                           value={pool.window.timeTo}
                           onChange={(hhmm) => pool.onChangeWindow({ ...pool.window, timeTo: hhmm })}
+                          defaultHhmm={pool.defaults.timeTo}
+                          emitEmptyOnClear
                         />
                       </div>
                     </div>

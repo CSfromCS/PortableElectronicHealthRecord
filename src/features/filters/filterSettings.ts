@@ -23,24 +23,3 @@ export const saveTagFilterMode = (view: FilterViewKey, mode: TagFilterMode) => {
     // Storage can fail (private browsing, quota) — the toggle just won't persist this session.
   }
 }
-
-const CENSUS_WINDOW_BOOKMARK_KEY = 'puhrr.patientFilter.census.lastGeneratedAt'
-
-/** Convenience default for the Patient Pool facet's shared window: pre-fills "From" with the last
- * time a Multiple Census/Vitals export was generated, so the common workflow (generate once near
- * shift start, again near the end) needs no manual date entry. Always overridable by hand. */
-export const loadCensusWindowBookmark = (): string | null => {
-  try {
-    return window.localStorage.getItem(CENSUS_WINDOW_BOOKMARK_KEY)
-  } catch {
-    return null
-  }
-}
-
-export const saveCensusWindowBookmark = (isoTimestamp: string) => {
-  try {
-    window.localStorage.setItem(CENSUS_WINDOW_BOOKMARK_KEY, isoTimestamp)
-  } catch {
-    // Storage can fail (private browsing, quota) — the bookmark just won't persist this session.
-  }
-}

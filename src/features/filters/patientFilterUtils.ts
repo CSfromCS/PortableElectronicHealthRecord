@@ -69,6 +69,31 @@ export type DateTimeWindow = {
   timeTo: string
 }
 
+export const EMPTY_DATE_TIME_WINDOW: DateTimeWindow = { dateFrom: '', timeFrom: '', dateTo: '', timeTo: '' }
+
+const DEFAULT_WINDOW_LOOKBACK_HOURS = 12
+
+/** Computed default for the Patient Pool facet's shared window when its date/time fields are left
+ * blank: the last 12 hours, ending now — matching how other optional date/time fields in this app
+ * (e.g. a Vitals entry's time) render a computed default instead of requiring explicit entry. */
+export const computeDefaultWindowLookback = (now = new Date()): DateTimeWindow => {
+  const from = new Date(now.getTime() - DEFAULT_WINDOW_LOOKBACK_HOURS * 3_600_000)
+  return {
+    dateFrom: toLocalISODate(from),
+    timeFrom: toLocalTime(from),
+    dateTo: toLocalISODate(now),
+    timeTo: toLocalTime(now),
+  }
+}
+
+/** Resolves the window actually used for filtering: each blank field in `raw` falls back to the same field in `defaults`, independently — mirrors FlexibleDateInput/FlexibleTimeInput's own per-field blank-means-default behavior. */
+export const resolveWindowDefaults = (raw: DateTimeWindow, defaults: DateTimeWindow): DateTimeWindow => ({
+  dateFrom: raw.dateFrom || defaults.dateFrom,
+  timeFrom: raw.timeFrom || defaults.timeFrom,
+  dateTo: raw.dateTo || defaults.dateTo,
+  timeTo: raw.timeTo || defaults.timeTo,
+})
+
 /** True when `at` (a stored ISO UTC timestamp, e.g. a TagEvent's `at`) falls within `window`, compared in local date/time — matching how the window's own date/time fields are entered and how other date-scoped data (VitalEntry, OrderEntry) in this app is compared. */
 export const isTimestampWithinWindow = (at: string, window: DateTimeWindow): boolean => {
   const eventDate = new Date(at)

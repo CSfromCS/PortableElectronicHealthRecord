@@ -180,20 +180,18 @@ import { FilterButton } from './features/filters/FilterButton'
 import { PatientFilterDialog } from './features/filters/PatientFilterDialog'
 import {
   DEFAULT_PATIENT_POOL_CRITERIA,
+  EMPTY_DATE_TIME_WINDOW,
   EMPTY_TAG_WARD_FILTER,
   buildPatientPoolContext,
   collectDistinctWards,
+  computeDefaultWindowLookback,
   countTagWardSelections,
   matchesPatientPool,
   matchesTagWardFilter,
+  resolveWindowDefaults,
 } from './features/filters/patientFilterUtils'
 import type { DateTimeWindow, PatientPoolCriterion, TagWardFilterState } from './features/filters/patientFilterUtils'
-import {
-  loadCensusWindowBookmark,
-  loadTagFilterMode,
-  saveCensusWindowBookmark,
-  saveTagFilterMode,
-} from './features/filters/filterSettings'
+import { loadTagFilterMode, saveTagFilterMode } from './features/filters/filterSettings'
 import {
   addMainServiceTagToPatient,
   addReferralServiceTagToPatient,
@@ -668,22 +666,13 @@ function App() {
   const [censusFilterDialogOpen, setCensusFilterDialogOpen] = useState(false)
 
   // Patient Pool facet (census/reporting only) — "Active Only" is a hard default every time,
-  // not sticky, per point 3 of issue #81. The shared window defaults its "From" to the last time
-  // a Multiple Census/Vitals export was generated, so the common start-of-shift/end-of-shift
-  // workflow needs no manual date entry; "Limit to a time window" starts on so that default applies.
+  // not sticky, per point 3 of issue #81. The shared window's fields start blank, like every
+  // other optional date/time field in this app (Vitals entry, etc.) — left blank, each resolves
+  // to its own computed default (last 12 hours, ending now); "Limit to a time window" starts on
+  // so that default actually applies.
   const [censusPoolCriteria, setCensusPoolCriteria] = useState<PatientPoolCriterion[]>(DEFAULT_PATIENT_POOL_CRITERIA)
   const [censusPoolUseWindow, setCensusPoolUseWindow] = useState(true)
-  const [censusPoolWindow, setCensusPoolWindow] = useState<DateTimeWindow>(() => {
-    const bookmark = loadCensusWindowBookmark()
-    const now = new Date()
-    const bookmarkDate = bookmark ? new Date(bookmark) : null
-    return {
-      dateFrom: bookmarkDate ? toLocalISODate(bookmarkDate) : toLocalISODate(now),
-      timeFrom: bookmarkDate ? toLocalTime(bookmarkDate) : '00:00',
-      dateTo: toLocalISODate(now),
-      timeTo: toLocalTime(now),
-    }
-  })
+  const [censusPoolWindow, setCensusPoolWindow] = useState<DateTimeWindow>(EMPTY_DATE_TIME_WINDOW)
   const [profileForm, setProfileForm] = useState<ProfileFormState>(initialProfileForm)
   const [dailyDate, setDailyDate] = useState(() => toLocalISODate())
   const [masterChecklistDate, setMasterChecklistDate] = useState(() => toLocalISODate())
@@ -1388,7 +1377,23 @@ function App() {
     () => buildPatientPoolContext(tagsById, allTagEvents ?? []),
     [tagsById, allTagEvents],
   )
-  const censusEffectiveWindow = censusPoolUseWindow ? censusPoolWindow : null
+  // Recomputed (not on every render, which would recreate a new object each time and defeat the
+  // memos/effect below that key off it) whenever the raw window fields change or the filter
+  // dialog opens/closes — close enough to "now" for a manual filter window, without the object
+  // identity churning every render.
+  const censusPoolWindowDefaults = useMemo(
+    () => computeDefaultWindowLookback(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps are a deliberate recompute trigger, not captured values
+    [censusPoolWindow, censusFilterDialogOpen],
+  )
+  const censusResolvedWindow = useMemo(
+    () => resolveWindowDefaults(censusPoolWindow, censusPoolWindowDefaults),
+    [censusPoolWindow, censusPoolWindowDefaults],
+  )
+  const censusEffectiveWindow = useMemo(
+    () => (censusPoolUseWindow ? censusResolvedWindow : null),
+    [censusPoolUseWindow, censusResolvedWindow],
+  )
   const censusSelectablePatients = useMemo(() => {
     return (patients ?? [])
       .filter((patient) => matchesTagWardFilter(patient, censusFilter))
@@ -1406,17 +1411,22 @@ function App() {
 
   useEffect(() => {
     if (censusSelectablePatientIds.length === 0) {
-      setSelectedCensusPatientIds([])
       censusSelectionInitializedRef.current = false
+      setSelectedCensusPatientIds([])
+      return
+    }
+
+    // The ref check happens here, outside the updater, and mutates synchronously — so React
+    // StrictMode's dev-only double-invocation of this effect (which re-runs the setup function
+    // without an intervening render) sees the ref's already-updated value on its second pass,
+    // instead of a stale `previous` read from inside a functional updater on both passes.
+    if (!censusSelectionInitializedRef.current) {
+      censusSelectionInitializedRef.current = true
+      setSelectedCensusPatientIds(censusSelectablePatientIds)
       return
     }
 
     setSelectedCensusPatientIds((previous) => {
-      if (!censusSelectionInitializedRef.current) {
-        censusSelectionInitializedRef.current = true
-        return censusSelectablePatientIds
-      }
-
       const selectableIdSet = new Set(censusSelectablePatientIds)
       return previous.filter((id) => selectableIdSet.has(id))
     })
@@ -7397,9 +7407,6 @@ function App() {
                                   onClick={() => {
                                     try {
                                       openCopyModal(action.buildText(), action.outputTitle)
-                                      if (action.id === 'all-census' || action.id === 'all-vitals') {
-                                        saveCensusWindowBookmark(new Date().toISOString())
-                                      }
                                     } catch (error) {
                                       const message = error instanceof Error ? error.message : 'Unable to generate report.'
                                       setNotice(message)
@@ -8341,11 +8348,13 @@ function App() {
             onChangeUseWindow: setCensusPoolUseWindow,
             window: censusPoolWindow,
             onChangeWindow: setCensusPoolWindow,
+            defaults: censusPoolWindowDefaults,
           }}
           onClear={() => {
             setCensusFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: censusFilter.tagMode })
             setCensusPoolCriteria(DEFAULT_PATIENT_POOL_CRITERIA)
             setCensusPoolUseWindow(true)
+            setCensusPoolWindow(EMPTY_DATE_TIME_WINDOW)
           }}
         />
       </main>
