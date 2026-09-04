@@ -176,6 +176,24 @@ import {
   toggleTagOnPatient,
 } from './features/tags/tagUtils'
 import { SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
+import { FilterButton } from './features/filters/FilterButton'
+import { PatientFilterDialog } from './features/filters/PatientFilterDialog'
+import {
+  DEFAULT_PATIENT_POOL_CRITERIA,
+  EMPTY_TAG_WARD_FILTER,
+  buildPatientPoolContext,
+  collectDistinctWards,
+  countTagWardSelections,
+  matchesPatientPool,
+  matchesTagWardFilter,
+} from './features/filters/patientFilterUtils'
+import type { DateTimeWindow, PatientPoolCriterion, TagWardFilterState } from './features/filters/patientFilterUtils'
+import {
+  loadCensusWindowBookmark,
+  loadTagFilterMode,
+  saveCensusWindowBookmark,
+  saveTagFilterMode,
+} from './features/filters/filterSettings'
 import {
   addMainServiceTagToPatient,
   addReferralServiceTagToPatient,
@@ -614,6 +632,58 @@ function App() {
   const [isAddPatientCollapsed, setIsAddPatientCollapsed] = useState(() => loadAddPatientCollapsed())
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
   const [sortBy, setSortBy] = useState<'room' | 'name' | 'admitDate'>('room')
+
+  // Issue #81: independent Tag+Ward filters for the Patients list, Master Checklist, and the
+  // census/vitals patient picker (this app's closest analog to a "Reporting" multi-patient view —
+  // there is no separate templated Reporting screen yet). Each view's Tag AND/OR toggle is sticky
+  // per view (localStorage); tag/ward selections themselves are not.
+  const [patientListFilter, setPatientListFilterRaw] = useState<TagWardFilterState>(() => ({
+    ...EMPTY_TAG_WARD_FILTER,
+    tagMode: loadTagFilterMode('patients'),
+  }))
+  const setPatientListFilter = (next: TagWardFilterState) => {
+    if (next.tagMode !== patientListFilter.tagMode) saveTagFilterMode('patients', next.tagMode)
+    setPatientListFilterRaw(next)
+  }
+  const [patientListFilterDialogOpen, setPatientListFilterDialogOpen] = useState(false)
+
+  const [checklistFilter, setChecklistFilterRaw] = useState<TagWardFilterState>(() => ({
+    ...EMPTY_TAG_WARD_FILTER,
+    tagMode: loadTagFilterMode('checklist'),
+  }))
+  const setChecklistFilter = (next: TagWardFilterState) => {
+    if (next.tagMode !== checklistFilter.tagMode) saveTagFilterMode('checklist', next.tagMode)
+    setChecklistFilterRaw(next)
+  }
+  const [checklistFilterDialogOpen, setChecklistFilterDialogOpen] = useState(false)
+
+  const [censusFilter, setCensusFilterRaw] = useState<TagWardFilterState>(() => ({
+    ...EMPTY_TAG_WARD_FILTER,
+    tagMode: loadTagFilterMode('census'),
+  }))
+  const setCensusFilter = (next: TagWardFilterState) => {
+    if (next.tagMode !== censusFilter.tagMode) saveTagFilterMode('census', next.tagMode)
+    setCensusFilterRaw(next)
+  }
+  const [censusFilterDialogOpen, setCensusFilterDialogOpen] = useState(false)
+
+  // Patient Pool facet (census/reporting only) — "Active Only" is a hard default every time,
+  // not sticky, per point 3 of issue #81. The shared window defaults its "From" to the last time
+  // a Multiple Census/Vitals export was generated, so the common start-of-shift/end-of-shift
+  // workflow needs no manual date entry; "Limit to a time window" starts on so that default applies.
+  const [censusPoolCriteria, setCensusPoolCriteria] = useState<PatientPoolCriterion[]>(DEFAULT_PATIENT_POOL_CRITERIA)
+  const [censusPoolUseWindow, setCensusPoolUseWindow] = useState(true)
+  const [censusPoolWindow, setCensusPoolWindow] = useState<DateTimeWindow>(() => {
+    const bookmark = loadCensusWindowBookmark()
+    const now = new Date()
+    const bookmarkDate = bookmark ? new Date(bookmark) : null
+    return {
+      dateFrom: bookmarkDate ? toLocalISODate(bookmarkDate) : toLocalISODate(now),
+      timeFrom: bookmarkDate ? toLocalTime(bookmarkDate) : '00:00',
+      dateTo: toLocalISODate(now),
+      timeTo: toLocalTime(now),
+    }
+  })
   const [profileForm, setProfileForm] = useState<ProfileFormState>(initialProfileForm)
   const [dailyDate, setDailyDate] = useState(() => toLocalISODate())
   const [masterChecklistDate, setMasterChecklistDate] = useState(() => toLocalISODate())
@@ -837,6 +907,7 @@ function App() {
   const photoAttachments = useLiveQuery(() => db.photoAttachments.toArray(), [])
   const tagGroups = useLiveQuery(() => db.tagGroups.toArray(), [])
   const tagDefinitions = useLiveQuery(() => db.tagDefinitions.toArray(), [])
+  const allTagEvents = useLiveQuery(() => db.tagEvents.toArray(), [])
   const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
   const customActions = useLiveQuery(() => db.customActions.toArray(), [])
   const manualCustomActions = useMemo(
@@ -1292,11 +1363,6 @@ function App() {
 
   const activePatients = useMemo(() => (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)), [patients, tagsById])
 
-  const activePatientIds = useMemo(
-    () => activePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined),
-    [activePatients],
-  )
-
   const reportingSelectablePatients = useMemo(() => {
     return [...activePatients].sort((a, b) => {
       const byRoom = a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
@@ -1314,8 +1380,32 @@ function App() {
       .map((patient) => ({ id: patient.id, label: `${patient.roomNumber} — ${patient.lastName}, ${patient.firstName}` })),
   ], [reportingSelectablePatients])
 
+  // Issue #81 Patient Pool facet: unlike the quick-add list above (always active-only), the
+  // Multiple Census/Vitals picker draws from the FULL roster, narrowed by the Tag+Ward filter and
+  // by the Patient Pool facet (which defaults to "Active" — matching the picker's old active-only
+  // behavior — but can also surface Admitted/Discharged/Referred/MGH patients within a window).
+  const patientPoolContext = useMemo(
+    () => buildPatientPoolContext(tagsById, allTagEvents ?? []),
+    [tagsById, allTagEvents],
+  )
+  const censusEffectiveWindow = censusPoolUseWindow ? censusPoolWindow : null
+  const censusSelectablePatients = useMemo(() => {
+    return (patients ?? [])
+      .filter((patient) => matchesTagWardFilter(patient, censusFilter))
+      .filter((patient) => matchesPatientPool(patient, censusPoolCriteria, censusEffectiveWindow, patientPoolContext))
+      .sort((a, b) => {
+        const byRoom = a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
+        if (byRoom !== 0) return byRoom
+        return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
+      })
+  }, [patients, censusFilter, censusPoolCriteria, censusEffectiveWindow, patientPoolContext])
+  const censusSelectablePatientIds = useMemo(
+    () => censusSelectablePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined),
+    [censusSelectablePatients],
+  )
+
   useEffect(() => {
-    if (activePatientIds.length === 0) {
+    if (censusSelectablePatientIds.length === 0) {
       setSelectedCensusPatientIds([])
       censusSelectionInitializedRef.current = false
       return
@@ -1324,17 +1414,17 @@ function App() {
     setSelectedCensusPatientIds((previous) => {
       if (!censusSelectionInitializedRef.current) {
         censusSelectionInitializedRef.current = true
-        return activePatientIds
+        return censusSelectablePatientIds
       }
 
-      const activeIdSet = new Set(activePatientIds)
-      return previous.filter((id) => activeIdSet.has(id))
+      const selectableIdSet = new Set(censusSelectablePatientIds)
+      return previous.filter((id) => selectableIdSet.has(id))
     })
-  }, [activePatientIds])
+  }, [censusSelectablePatientIds])
 
   const selectedCensusPatients = useMemo(() => {
     const patientsById = new Map<number, Patient>()
-    reportingSelectablePatients.forEach((patient) => {
+    censusSelectablePatients.forEach((patient) => {
       if (patient.id === undefined) return
       patientsById.set(patient.id, patient)
     })
@@ -1342,7 +1432,7 @@ function App() {
     return selectedCensusPatientIds
       .map((id) => patientsById.get(id))
       .filter((patient): patient is Patient => patient !== undefined)
-  }, [reportingSelectablePatients, selectedCensusPatientIds])
+  }, [censusSelectablePatients, selectedCensusPatientIds])
 
   const toggleCensusPatientSelection = (patientId: number) => {
     setSelectedCensusPatientIds((previous) =>
@@ -1353,7 +1443,7 @@ function App() {
   }
 
   const selectAllCensusPatients = () => {
-    setSelectedCensusPatientIds(activePatientIds)
+    setSelectedCensusPatientIds(censusSelectablePatientIds)
   }
 
   const clearCensusPatientsSelection = () => {
@@ -2037,6 +2127,10 @@ function App() {
     })
   }, [selectedAttachmentCarouselEntry])
 
+  // Ward facet options — shared by all three views' filter dialogs.
+  const distinctWards = useMemo(() => collectDistinctWards(patients ?? []), [patients])
+
+  // Point 2, issue #81: (Tag facet AND/OR result) AND (ward match, if any) AND (patient pool, in the census view).
   const visiblePatients = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
     const matchesQuery = (patient: Patient) => {
@@ -2061,6 +2155,7 @@ function App() {
         return statusFilter === 'active' ? active : !active
       })
       .filter(matchesQuery)
+      .filter((patient) => matchesTagWardFilter(patient, patientListFilter))
       .sort((a, b) => {
         if (sortBy === 'name') {
           return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
@@ -2070,7 +2165,7 @@ function App() {
         }
         return compareByRoom(a, b)
       })
-  }, [patients, searchQuery, sortBy, statusFilter, tagsById])
+  }, [patients, searchQuery, sortBy, statusFilter, tagsById, patientListFilter])
 
   const quickSwitchPatients = useMemo(() => {
     const compareByRoom = (a: Patient, b: Patient) =>
@@ -5162,6 +5257,17 @@ function App() {
       })
   }, [masterChecklistItems])
 
+  // Issue #81: Tag+Ward filter for the Master Checklist, independent of the Patients list and
+  // census filters. General always stays visible — it has no ward/tags for the facets to match.
+  const filteredMasterChecklistGroupedByPatient = useMemo(
+    () => masterChecklistGroupedByPatient.filter((group) => {
+      if (group.patientId === GENERAL_CHECKLIST_PATIENT_ID) return true
+      const groupPatient = patientsById.get(group.patientId)
+      return groupPatient ? matchesTagWardFilter(groupPatient, checklistFilter) : true
+    }),
+    [masterChecklistGroupedByPatient, patientsById, checklistFilter],
+  )
+
   return (
     <div className='min-h-screen pb-20 sm:pb-0'>
       {/* Brand accent bar */}
@@ -5322,6 +5428,10 @@ function App() {
                         <SelectItem value='admitDate'>Sort: Admit date</SelectItem>
                       </SelectContent>
                     </Select>
+                    <FilterButton
+                      activeCount={countTagWardSelections(patientListFilter)}
+                      onClick={() => setPatientListFilterDialogOpen(true)}
+                    />
                   </div>
                 </div>
               </CardContent>
@@ -5564,7 +5674,13 @@ function App() {
             {view === 'checklist' ? (
               <Card className='bg-warm-ivory border-clay shadow-sm'>
                 <CardHeader className='pb-2'>
-                  <CardTitle className='text-base text-espresso'>Master Checklist</CardTitle>
+                  <div className='flex items-center justify-between gap-2'>
+                    <CardTitle className='text-base text-espresso'>Master Checklist</CardTitle>
+                    <FilterButton
+                      activeCount={countTagWardSelections(checklistFilter)}
+                      onClick={() => setChecklistFilterDialogOpen(true)}
+                    />
+                  </div>
                 </CardHeader>
                 <CardContent className='space-y-3'>
                   <div className='space-y-1 max-w-60'>
@@ -5581,7 +5697,7 @@ function App() {
                   </p>
                   <MasterChecklistQuickAdd options={masterChecklistQuickAddOptions} onAdd={addMasterChecklistItem} />
                   <div className='space-y-3'>
-                    {masterChecklistGroupedByPatient.map((group) => {
+                    {filteredMasterChecklistGroupedByPatient.map((group) => {
                       const isGeneral = group.patientId === GENERAL_CHECKLIST_PATIENT_ID
                       const groupPatient = isGeneral ? undefined : patientsById.get(group.patientId)
                       const groupVisibleTags = groupPatient ? getVisiblePatientTags(groupPatient, tagsById, tagGroups ?? []) : []
@@ -7108,9 +7224,13 @@ function App() {
                               <p className='text-xs text-clay'>Selected Vitals uses the Vitals Filter above (same date/time window as Current patient exports).</p>
                               <div className='flex items-center justify-between gap-2 flex-wrap'>
                                 <p className='text-xs text-clay'>
-                                  Included: {selectedCensusPatients.length} of {reportingSelectablePatients.length} active patients
+                                  Included: {selectedCensusPatients.length} of {censusSelectablePatients.length} matching patients
                                 </p>
                                 <div className='flex gap-2'>
+                                  <FilterButton
+                                    activeCount={countTagWardSelections(censusFilter) + (censusPoolCriteria.length !== 1 || censusPoolCriteria[0] !== 'active' ? censusPoolCriteria.length : 0)}
+                                    onClick={() => setCensusFilterDialogOpen(true)}
+                                  />
                                   <Button size='sm' variant='secondary' onClick={selectAllCensusPatients}>
                                     Select all
                                   </Button>
@@ -7119,9 +7239,9 @@ function App() {
                                   </Button>
                                 </div>
                               </div>
-                              {reportingSelectablePatients.length > 0 ? (
+                              {censusSelectablePatients.length > 0 ? (
                                 <div className='flex flex-wrap gap-2'>
-                                  {reportingSelectablePatients.map((patient) => {
+                                  {censusSelectablePatients.map((patient) => {
                                     if (patient.id === undefined) return null
                                     const patientId = patient.id
                                     const isSelected = selectedCensusPatientIds.includes(patient.id)
@@ -7139,7 +7259,7 @@ function App() {
                                   })}
                                 </div>
                               ) : (
-                                <p className='text-sm text-clay'>No active patients to include.</p>
+                                <p className='text-sm text-clay'>No patients match the current filter.</p>
                               )}
                               {selectedCensusPatients.length > 0 ? (
                                 <div className='space-y-1'>
@@ -7277,6 +7397,9 @@ function App() {
                                   onClick={() => {
                                     try {
                                       openCopyModal(action.buildText(), action.outputTitle)
+                                      if (action.id === 'all-census' || action.id === 'all-vitals') {
+                                        saveCensusWindowBookmark(new Date().toISOString())
+                                      }
                                     } catch (error) {
                                       const message = error instanceof Error ? error.message : 'Unable to generate report.'
                                       setNotice(message)
@@ -8177,6 +8300,54 @@ function App() {
             </div>
           </DialogContent>
         </Dialog>
+
+        <PatientFilterDialog
+          open={patientListFilterDialogOpen}
+          onOpenChange={setPatientListFilterDialogOpen}
+          title='Filter patients'
+          tags={tagDefinitions ?? []}
+          groups={tagGroups ?? []}
+          wards={distinctWards}
+          filter={patientListFilter}
+          onChangeFilter={setPatientListFilter}
+          onClear={() => setPatientListFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: patientListFilter.tagMode })}
+        />
+
+        <PatientFilterDialog
+          open={checklistFilterDialogOpen}
+          onOpenChange={setChecklistFilterDialogOpen}
+          title='Filter Master Checklist'
+          tags={tagDefinitions ?? []}
+          groups={tagGroups ?? []}
+          wards={distinctWards}
+          filter={checklistFilter}
+          onChangeFilter={setChecklistFilter}
+          onClear={() => setChecklistFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: checklistFilter.tagMode })}
+        />
+
+        <PatientFilterDialog
+          open={censusFilterDialogOpen}
+          onOpenChange={setCensusFilterDialogOpen}
+          title='Filter census patients'
+          tags={tagDefinitions ?? []}
+          groups={tagGroups ?? []}
+          wards={distinctWards}
+          filter={censusFilter}
+          onChangeFilter={setCensusFilter}
+          pool={{
+            criteria: censusPoolCriteria,
+            onChangeCriteria: setCensusPoolCriteria,
+            useWindow: censusPoolUseWindow,
+            onChangeUseWindow: setCensusPoolUseWindow,
+            window: censusPoolWindow,
+            onChangeWindow: setCensusPoolWindow,
+          }}
+          onClear={() => {
+            setCensusFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: censusFilter.tagMode })
+            setCensusPoolCriteria(DEFAULT_PATIENT_POOL_CRITERIA)
+            setCensusPoolUseWindow(true)
+          }}
+        />
       </main>
       <nav className={cn(
         'fixed inset-x-0 bottom-0 z-40 border-t border-clay/25 bg-warm-ivory/97 backdrop-blur-md sm:hidden transition-transform duration-150 ease-out',
