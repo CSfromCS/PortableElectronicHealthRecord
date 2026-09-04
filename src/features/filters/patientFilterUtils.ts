@@ -217,7 +217,7 @@ export const describeTagWardFilter = (
   return lines
 }
 
-/** Human-readable line describing the Patient Pool facet currently in effect, including the actual resolved window (so a blank field's computed default is visible, not just "no window entered"). `resolvedWindow` should already have blanks substituted via `resolveWindowDefaults`. */
+/** Human-readable line describing the Patient Pool facet currently in effect, including the actual resolved window (so a blank field's computed default is visible, not just "no window entered"). `resolvedWindow` should already have blanks substituted via `resolveWindowDefaults`. Labeled "Special/Timebound Filter" to match the dialog section — this facet only exists on the census/reporting picker, unlike Tags/Ward. */
 export const describePatientPoolFilter = (
   criteria: PatientPoolCriterion[],
   useWindow: boolean,
@@ -226,9 +226,10 @@ export const describePatientPoolFilter = (
   const labels = criteria.length > 0
     ? criteria.map((id) => PATIENT_POOL_CRITERIA.find((c) => c.id === id)?.label ?? id).join(', ')
     : 'none (all patients)'
-  if (!patientPoolCriteriaNeedWindow(criteria)) return `Patient Pool: ${labels}`
-  if (!useWindow) return `Patient Pool: ${labels} (any time)`
+  const prefix = 'Special/Timebound Filter'
+  if (!patientPoolCriteriaNeedWindow(criteria)) return `${prefix}: ${labels}`
+  if (!useWindow) return `${prefix}: ${labels} (any time)`
 
   const windowText = `${formatDateMMDD(resolvedWindow.dateFrom)} ${formatClock(resolvedWindow.timeFrom)} – ${formatDateMMDD(resolvedWindow.dateTo)} ${formatClock(resolvedWindow.timeTo)}`
-  return `Patient Pool: ${labels} (${windowText})`
+  return `${prefix}: ${labels} (${windowText})`
 }

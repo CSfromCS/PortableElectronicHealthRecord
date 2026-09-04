@@ -7265,10 +7265,8 @@ function App() {
                                 </div>
                               </div>
                               <FilterSummary
-                                lines={[
-                                  ...describeTagWardFilter(censusFilter, tagsById),
-                                  describePatientPoolFilter(censusPoolCriteria, censusPoolUseWindow, censusResolvedWindow),
-                                ]}
+                                lines={describeTagWardFilter(censusFilter, tagsById)}
+                                specialLine={describePatientPoolFilter(censusPoolCriteria, censusPoolUseWindow, censusResolvedWindow)}
                               />
                               {censusSelectablePatients.length > 0 ? (
                                 <div className='flex flex-wrap gap-2'>

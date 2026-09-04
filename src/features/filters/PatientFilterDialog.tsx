@@ -1,3 +1,4 @@
+import { Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -140,8 +141,14 @@ export const PatientFilterDialog = ({
             </div>
 
             {pool ? (
-              <div className='space-y-1.5'>
-                <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Patient Pool</p>
+              <div className='space-y-2 rounded-xl border-2 border-dashed border-action-primary/50 bg-action-primary/5 p-3'>
+                <div className='flex items-center gap-1.5'>
+                  <Clock className='h-3.5 w-3.5 text-action-primary shrink-0' aria-hidden='true' />
+                  <p className='text-[11px] font-bold uppercase tracking-widest text-action-primary'>Special/Timebound Filter</p>
+                </div>
+                <p className='text-xs text-clay'>
+                  Unique to this picker — not available on the Patients list or Master Checklist filters. Narrows the pool by clinical status (Active/Admitted/Discharged/Referred/MGH), optionally within a shared time window.
+                </p>
                 <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
                   {PATIENT_POOL_CRITERIA.map((criterion) => (
                     <label key={criterion.id} className='flex items-center gap-2.5 py-1 cursor-pointer'>
