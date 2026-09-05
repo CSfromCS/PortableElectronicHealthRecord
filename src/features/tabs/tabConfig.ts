@@ -8,7 +8,6 @@ export type PatientTabId =
   | 'medications'
   | 'orders'
   | 'photos'
-  | 'reporting'
 
 export const PATIENT_TAB_LABELS: Record<PatientTabId, string> = {
   profile: 'Profile',
@@ -20,7 +19,6 @@ export const PATIENT_TAB_LABELS: Record<PatientTabId, string> = {
   medications: 'Meds',
   orders: 'Orders',
   photos: 'Photos',
-  reporting: 'Report',
 }
 
 export const PATIENT_TAB_DESCRIPTIONS: Record<PatientTabId, string> = {
@@ -33,7 +31,6 @@ export const PATIENT_TAB_DESCRIPTIONS: Record<PatientTabId, string> = {
   medications: 'Structured medication list: drug, dose, route, frequency, status, plus drag-to-reorder',
   orders: "Doctor's orders with date, time, service & status tracking",
   photos: 'Categorized image attachments with grouped uploads & carousel',
-  reporting: 'Copy-ready text exports for handoffs, census, vitals & labs',
 }
 
 export const DEFAULT_PATIENT_TAB_ORDER: PatientTabId[] = [
@@ -46,7 +43,6 @@ export const DEFAULT_PATIENT_TAB_ORDER: PatientTabId[] = [
   'medications',
   'orders',
   'photos',
-  'reporting',
 ]
 
 export type PatientTabSetting = { id: PatientTabId; visible: boolean }

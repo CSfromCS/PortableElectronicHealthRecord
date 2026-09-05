@@ -245,3 +245,83 @@ export interface PhotoAttachment {
   imageBlob: Blob
   createdAt: string
 }
+
+/** Single-value fields with no date dimension — inserted inline as plain text at a Format Pattern
+ * placeholder. `admissionDiagnosis`/`dischargeDiagnosis` split what issue #82 originally specified
+ * as one "Diagnosis" variable, matching the per-service Admission/Discharge Diagnosis model this
+ * app actually has (see Patient.admissionDiagnosisByService et al.). `currentDate`/`currentTime`
+ * don't come from patient data at all — they're captured once at the start of report generation. */
+export type FlatVariableId =
+  | 'roomNumber'
+  | 'ward'
+  | 'lastName'
+  | 'firstName'
+  | 'middleName'
+  | 'age'
+  | 'sex'
+  | 'mainService'
+  | 'admissionDiagnosis'
+  | 'dischargeDiagnosis'
+  | 'clinicalSummary'
+  | 'admitDate'
+  | 'referralDate'
+  | 'dischargeDate'
+  | 'medications'
+  | 'database'
+  | 'currentDate'
+  | 'currentTime'
+
+/** Fields with a date dimension — multiple dated entries over the admission — inserted as a
+ * (potentially multi-line) formatted block per `BlockVariableConfig`. */
+export type BlockVariableId = 'vitals' | 'labs' | 'problems' | 'checklist' | 'orders'
+
+export type BlockVariableRangeMode = 'latest' | 'dateRange' | 'numberOfEntries'
+
+export type RelativeDateRangeMode = 'fixed' | 'sinceAdmission' | 'lastNDays'
+
+/** Set once when a Block variable is placed into a template and saved as part of that specific
+ * placeholder — never re-prompted at generation time. */
+export interface BlockVariableConfig {
+  rangeMode: BlockVariableRangeMode
+  /** Only meaningful when rangeMode === 'numberOfEntries'. Feeding exactly 2 into Labs reuses the
+   * existing 2-entry comparison-mode formatting unchanged. */
+  entryCount: number
+  /** Only meaningful when rangeMode === 'dateRange'. */
+  relativeMode: RelativeDateRangeMode
+  /** Only meaningful when relativeMode === 'fixed'. */
+  fixedDateFrom: string
+  fixedDateTo: string
+  /** Only meaningful when relativeMode === 'lastNDays'. */
+  lastNDays: number
+}
+
+/** Tags is a Flat variable (single inline placement) but — uniquely among Flat variables — carries
+ * its own per-placeholder settings, so it gets its own segment type instead of being lumped in
+ * with the configless FlatVariableId list. */
+export interface TagsVariableConfig {
+  /** True includes every tag currently visible on the patient card at that placement (Issue 1's
+   * `visibleOnPatientCard`), ignoring tagIds/groupIds below. */
+  includeAll: boolean
+  tagIds: number[]
+  groupIds: number[]
+  /** Text-with-Color tags always render as their plain name regardless of this setting — only
+   * Emoji-type tags are affected. */
+  emojiRendering: 'emoji' | 'name'
+}
+
+export type TemplateSegment =
+  | { id: string; type: 'text'; text: string }
+  | { id: string; type: 'lineBreak' }
+  | { id: string; type: 'flatVariable'; variableId: FlatVariableId }
+  | { id: string; type: 'blockVariable'; variableId: BlockVariableId; config: BlockVariableConfig }
+  | { id: string; type: 'tagsVariable'; config: TagsVariableConfig }
+
+/** A user-defined, savable report format (issue #82). `segments` is the single source of truth for
+ * both content and spacing — there is no separate field list plus separator setting. */
+export interface ReportTemplate {
+  id?: number
+  name: string
+  segments: TemplateSegment[]
+  sortOrder: number
+  createdAt: string
+}

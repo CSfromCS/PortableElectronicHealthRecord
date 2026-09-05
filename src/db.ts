@@ -4,6 +4,7 @@ import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } fr
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
 import { seedDefaultCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
+import { buildDefaultReportTemplates } from './features/templates/templateDefaults'
 import type {
   CustomAction,
   CustomActionRun,
@@ -14,6 +15,7 @@ import type {
   Patient,
   PhotoAttachment,
   ProblemBlock,
+  ReportTemplate,
   TagDefinition,
   TagEvent,
   TagGroupDefinition,
@@ -35,6 +37,7 @@ const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
   tagEvents: EntityTable<TagEvent, 'id'>
   customActions: EntityTable<CustomAction, 'id'>
   customActionRuns: EntityTable<CustomActionRun, 'id'>
+  reportTemplates: EntityTable<ReportTemplate, 'id'>
 }
 
 db.version(1).stores({
@@ -162,6 +165,7 @@ db.on('populate', async () => {
     (tag) => db.tagDefinitions.add(tag) as Promise<number>,
   )
   await seedDefaultCustomActions(tagIdByName, (action) => db.customActions.add(action) as Promise<number>)
+  await db.reportTemplates.bulkAdd(buildDefaultReportTemplates(new Date().toISOString()))
 })
 
 db.version(5).stores({
@@ -611,6 +615,30 @@ db.version(15).stores({
       dischargeDiagnosisByService: {},
     })
   }
+})
+
+db.version(16).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Issue #82: user-defined, savable report templates, replacing the Reporting tab's fixed export
+  // formats. Pre-populate the same two example templates ("Full Census", "Short List") a fresh
+  // install gets, since an existing database never had any.
+  const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
+  await reportTemplateTable.bulkAdd(buildDefaultReportTemplates(new Date().toISOString()))
 })
 
 export { db }

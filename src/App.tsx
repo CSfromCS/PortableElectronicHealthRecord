@@ -56,8 +56,6 @@ import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import {
-  formatClock,
-  formatDateMMDD,
   formatDateShortMonthDay,
   formatCalculatedNumber,
   getEffectiveAdmitDate,
@@ -68,15 +66,6 @@ import {
 import {
   buildStructuredLabLines,
   formatOrderEntryWithoutService,
-  toCensusEntry,
-  toLabsSummary,
-  toMedicationsSummary,
-  toOrdersSummary,
-  toProfileSummary,
-  toProblemsSummary,
-  toSelectedPatientCensusReport,
-  toSelectedPatientsVitalsSummary,
-  toVitalsLogSummary,
 } from './features/reporting/reportBuilders'
 import { formatAgeSex, formatFullName, formatRoomWard, joinNonBlank } from './lib/patientIdentity'
 import {
@@ -84,6 +73,13 @@ import {
   migrateUnassignedDiagnosisOnFirstService,
 } from './features/patients/serviceDiagnosis'
 import { ServiceDiagnosisFields } from './features/patients/ServiceDiagnosisFields'
+import { ManageTemplatesScreen } from './features/templates/ManageTemplatesScreen'
+import {
+  PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE,
+  buildCurrentDateTimeText,
+  classifyTemplateRepeatMode,
+  renderTemplateForPatient,
+} from './features/templates/templateEngine'
 import {
   ABG_ACTUAL_FIO2_KEY,
   ABG_DESIRED_FIO2_KEY,
@@ -149,8 +145,8 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap } from 'lucide-react'
-import type { CustomAction, CustomActionCondition, TagDefinition, TagEvent, TagGroupDefinition } from './types'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText } from 'lucide-react'
+import type { CustomAction, CustomActionCondition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
 import {
@@ -178,7 +174,6 @@ import {
   isPatientActive,
   orderTagsCanonically,
   removeTagsFromPatients,
-  renderTagDisplayText,
   toggleTagOnPatient,
 } from './features/tags/tagUtils'
 import { SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
@@ -412,20 +407,7 @@ type BackupPayload = {
   tagGroups?: TagGroupDefinition[]
   tagDefinitions?: TagDefinition[]
   tagEvents?: TagEvent[]
-}
-
-type ReportingAction = {
-  id: string
-  label: string
-  outputTitle: string
-  buildText: () => string
-}
-
-type ReportingSection = {
-  id: string
-  title: string
-  description: string
-  actions: ReportingAction[]
+  reportTemplates?: ReportTemplate[]
 }
 
 const initialDailyUpdateForm: DailyUpdateFormState = {
@@ -532,7 +514,8 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
   const validTagGroups = candidate.tagGroups === undefined || Array.isArray(candidate.tagGroups)
   const validTagDefinitions = candidate.tagDefinitions === undefined || Array.isArray(candidate.tagDefinitions)
   const validTagEvents = candidate.tagEvents === undefined || Array.isArray(candidate.tagEvents)
-  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents
+  const validReportTemplates = candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates)
+  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates
 }
 
 const isConflictSyncResult = (result: SyncNowResult): result is ConflictResult => {
@@ -639,7 +622,7 @@ function App() {
   const patientLongPressFiredRef = useRef(false)
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [pendingMainServiceTagIds, setPendingMainServiceTagIds] = useState<number[]>([])
-  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'settings' | 'manageTags' | 'tabSettings' | 'manageCustomActions'>('patients')
+  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'reporting' | 'settings' | 'manageTags' | 'tabSettings' | 'manageCustomActions' | 'manageTemplates'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
   // Snapshot, per patient, of whether tags were already applied the first time this patient's
@@ -689,6 +672,7 @@ function App() {
     setCensusFilterRaw(next)
   }
   const [censusFilterDialogOpen, setCensusFilterDialogOpen] = useState(false)
+  const [selectedReportTemplateId, setSelectedReportTemplateId] = useState<number | null>(null)
 
   // Patient Pool facet (census/reporting only) — "Active Only" is a hard default every time,
   // not sticky, per point 3 of issue #81. The shared window's fields start blank, like every
@@ -845,15 +829,6 @@ function App() {
   const [bulkCustomActionTarget, setBulkCustomActionTarget] = useState<CustomAction | null>(null)
   const [isBulkCustomActionApplying, setIsBulkCustomActionApplying] = useState(false)
   const [customActionResolveState, setCustomActionResolveState] = useState<{ action: CustomAction; patient: Patient } | null>(null)
-  const [reportVitalsDateFrom, setReportVitalsDateFrom] = useState(() => toLocalISODate())
-  const [reportVitalsDateTo, setReportVitalsDateTo] = useState(() => toLocalISODate())
-  const [reportVitalsTimeFrom, setReportVitalsTimeFrom] = useState('00:00')
-  const [reportVitalsTimeTo, setReportVitalsTimeTo] = useState('23:59')
-  const [reportOrdersDateFrom, setReportOrdersDateFrom] = useState(() => toLocalISODate())
-  const [reportOrdersDateTo, setReportOrdersDateTo] = useState(() => toLocalISODate())
-  const [reportOrdersTimeFrom, setReportOrdersTimeFrom] = useState('00:00')
-  const [reportOrdersTimeTo, setReportOrdersTimeTo] = useState('23:59')
-  const [selectedPatientLabReportIds, setSelectedPatientLabReportIds] = useState<number[]>([])
   const censusSelectionInitializedRef = useRef(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const onboardingAutoInstallAttemptedRef = useRef(false)
@@ -932,6 +907,7 @@ function App() {
   const allTagEvents = useLiveQuery(() => db.tagEvents.toArray(), [])
   const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
   const customActions = useLiveQuery(() => db.customActions.toArray(), [])
+  const reportTemplates = useLiveQuery(() => db.reportTemplates.toArray(), [])
   const manualCustomActions = useMemo(
     () => (customActions ?? []).filter((action) => (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
     [customActions],
@@ -1560,14 +1536,6 @@ function App() {
   }
   const censusPatientDrag = useDragReorder(selectedCensusPatientIds, reorderCensusPatientSelection)
 
-  const toggleSelectedPatientLabReportId = (labId: number) => {
-    setSelectedPatientLabReportIds((previous) =>
-      previous.includes(labId)
-        ? previous.filter((id) => id !== labId)
-        : [...previous, labId],
-    )
-  }
-
   const structuredMedsByPatient = useMemo(() => {
     const grouped = new Map<number, MedicationEntry[]>()
     ;(medications ?? []).forEach((entry) => {
@@ -1628,35 +1596,10 @@ function App() {
     return structuredLabsByPatient.get(selectedPatientId) ?? []
   }, [selectedPatientId, structuredLabsByPatient])
 
-  useEffect(() => {
-    const entryIds = selectedPatientStructuredLabs
-      .map((entry) => entry.id)
-      .filter((id): id is number => id !== undefined)
-    setSelectedPatientLabReportIds(entryIds)
-  }, [selectedPatientId, selectedPatientStructuredLabs])
-
   const labTemplatesById = useMemo(
     () => new Map(LAB_TEMPLATES.map((template) => [template.id, template] as const)),
     [],
   )
-
-  const selectedPatientLabGroupsForReporting = useMemo(() => {
-    const grouped = new Map<string, LabEntry[]>()
-    selectedPatientStructuredLabs.forEach((entry) => {
-      const list = grouped.get(entry.templateId) ?? []
-      list.push(entry)
-      grouped.set(entry.templateId, list)
-    })
-    return Array.from(grouped.entries()).map(([templateId, entries]) => {
-      const template = labTemplatesById.get(templateId)
-      const templateName = template?.name ?? templateId
-      return {
-        templateId,
-        templateName,
-        entries,
-      }
-    })
-  }, [labTemplatesById, selectedPatientStructuredLabs])
 
   const selectedLabTemplate = useMemo(
     () => LAB_TEMPLATES.find((template) => template.id === selectedLabTemplateId) ?? LAB_TEMPLATES[0],
@@ -1751,6 +1694,19 @@ function App() {
 
     return grouped
   }, [allVitals])
+
+  // Every DailyUpdate row (all dates), grouped by patient — feeds the Problems/Checklist Block
+  // variables in report templates, which read across dates rather than just the one currently
+  // open in the Problems/Checklist tabs.
+  const dailyUpdatesByPatientAllDates = useMemo(() => {
+    const grouped = new Map<number, DailyUpdate[]>()
+    ;(allDailyUpdates ?? []).forEach((entry) => {
+      const list = grouped.get(entry.patientId) ?? []
+      list.push(entry)
+      grouped.set(entry.patientId, list)
+    })
+    return grouped
+  }, [allDailyUpdates])
 
   const selectedPatientOrders = useMemo(() => {
     if (selectedPatientId === null) return []
@@ -3954,6 +3910,37 @@ function App() {
     setNotice('Text ready. Select any section or copy everything.')
   }
 
+  const selectedReportTemplate = useMemo(
+    () => (reportTemplates ?? []).find((template) => template.id === selectedReportTemplateId) ?? null,
+    [reportTemplates, selectedReportTemplateId],
+  )
+  const reportRepeatMode = useMemo(
+    () => (selectedReportTemplate ? classifyTemplateRepeatMode(selectedReportTemplate) : null),
+    [selectedReportTemplate],
+  )
+
+  const handleGenerateReport = () => {
+    if (!selectedReportTemplate) return
+    try {
+      const ctx = {
+        tagsById,
+        tagGroups: tagGroups ?? [],
+        vitalsByPatient: structuredVitalsByPatient,
+        labsByPatient: structuredLabsByPatient,
+        ordersByPatient: structuredOrdersByPatient,
+        medicationsByPatient: structuredMedsByPatient,
+        dailyUpdatesByPatient: dailyUpdatesByPatientAllDates,
+        ...buildCurrentDateTimeText(),
+      }
+      const text = reportRepeatMode === 'prints-once'
+        ? renderTemplateForPatient(selectedReportTemplate, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
+        : selectedCensusPatients.map((patient) => renderTemplateForPatient(selectedReportTemplate, patient, ctx)).join('\n\n')
+      openCopyModal(text, selectedReportTemplate.name)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to generate report.')
+    }
+  }
+
   const copyPreviewToClipboard = async () => {
     if (!outputPreview) return
     if (!navigator.clipboard?.writeText) {
@@ -4753,6 +4740,7 @@ function App() {
       tagGroups: await db.tagGroups.toArray(),
       tagDefinitions: await db.tagDefinitions.toArray(),
       tagEvents: await db.tagEvents.toArray(),
+      reportTemplates: await db.reportTemplates.toArray(),
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -4780,7 +4768,7 @@ function App() {
 
       await db.transaction(
         'rw',
-        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents],
+        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates],
         async () => {
         await db.labs.clear()
         await db.medications.clear()
@@ -4791,6 +4779,7 @@ function App() {
         await db.tagGroups.clear()
         await db.tagDefinitions.clear()
         await db.tagEvents.clear()
+        await db.reportTemplates.clear()
         if (parsed.patients.length > 0) {
           await db.patients.bulkPut(parsed.patients.map((patient) => ensurePatientLastModified(patient)))
         }
@@ -4817,6 +4806,9 @@ function App() {
         }
         if ((parsed.tagEvents ?? []).length > 0) {
           await db.tagEvents.bulkPut(parsed.tagEvents ?? [])
+        }
+        if ((parsed.reportTemplates ?? []).length > 0) {
+          await db.reportTemplates.bulkPut(parsed.reportTemplates ?? [])
         }
       },
       )
@@ -5224,136 +5216,6 @@ function App() {
     setNotice('Sample patient "Juan Dela Cruz" added successfully.')
   }
 
-  const reportingSections: ReportingSection[] = selectedPatient
-    ? [
-        {
-          id: 'patient-reporting',
-          title: 'Current patient exports',
-          description: 'Generate and format text output for the currently opened patient.',
-          actions: [
-            {
-              id: 'profile-summary',
-              label: 'Profile',
-              outputTitle: 'Profile summary',
-              buildText: () => toProfileSummary(
-                selectedPatient,
-                profileForm,
-                tagsById,
-                getVisiblePatientTags(selectedPatient, tagsById, tagGroups ?? []).map(renderTagDisplayText),
-                resolveServiceTagNames(selectedPatient.mainServiceTagIds, tagsById),
-                resolveServiceTagNames(selectedPatient.referralServiceTagIds, tagsById),
-              ),
-            },
-            {
-              id: 'daily-summary',
-              label: 'Problems',
-              outputTitle: 'Problems List',
-              buildText: () => toProblemsSummary(selectedPatient, dailyUpdateForm, patientVitals ?? [], dailyDate),
-            },
-            {
-              id: 'vitals-log',
-              label: 'Vitals',
-              outputTitle: 'Vitals log',
-              buildText: () =>
-                toVitalsLogSummary(selectedPatient, patientVitals ?? [], {
-                  dateFrom: reportVitalsDateFrom,
-                  dateTo: reportVitalsDateTo,
-                  timeFrom: reportVitalsTimeFrom,
-                  timeTo: reportVitalsTimeTo,
-                }),
-            },
-            {
-              id: 'labs-summary',
-              label: 'Labs',
-              outputTitle: 'Labs',
-              buildText: () => toLabsSummary(selectedPatient, selectedPatientStructuredLabs, selectedPatientLabReportIds),
-            },
-            {
-              id: 'medications-summary',
-              label: 'Meds',
-              outputTitle: 'Medications',
-              buildText: () => toMedicationsSummary(selectedPatient, selectedPatientStructuredMeds),
-            },
-            {
-              id: 'orders-summary',
-              label: 'Orders',
-              outputTitle: 'Orders',
-              buildText: () =>
-                toOrdersSummary(selectedPatient, selectedPatientOrders, {
-                  dateFrom: reportOrdersDateFrom,
-                  dateTo: reportOrdersDateTo,
-                  timeFrom: reportOrdersTimeFrom,
-                  timeTo: reportOrdersTimeTo,
-                }),
-            },
-            {
-              id: 'census-entry',
-              label: 'Census',
-              outputTitle: 'Census entry',
-              buildText: () =>
-                toSelectedPatientCensusReport(
-                  selectedPatient,
-                  composeDiagnosisText(selectedPatient, profileForm.admissionDiagnosisUnassigned, profileForm.admissionDiagnosisByService, tagsById),
-                  patientVitals ?? [],
-                  selectedPatientStructuredLabs,
-                  selectedPatientLabReportIds,
-                  selectedPatientOrders,
-                  {
-                    dateFrom: reportVitalsDateFrom,
-                    dateTo: reportVitalsDateTo,
-                    timeFrom: reportVitalsTimeFrom,
-                    timeTo: reportVitalsTimeTo,
-                  },
-                  {
-                    dateFrom: reportOrdersDateFrom,
-                    dateTo: reportOrdersDateTo,
-                    timeFrom: reportOrdersTimeFrom,
-                    timeTo: reportOrdersTimeTo,
-                  },
-                ),
-            },
-          ],
-        },
-        {
-          id: 'census-reporting',
-          title: 'All patient exports',
-          description: 'Generate census text for selected active patients in your chosen order.',
-          actions: [
-            {
-              id: 'all-vitals',
-              label: 'Multiple Vitals',
-              outputTitle: 'Selected Vitals',
-              buildText: () =>
-                toSelectedPatientsVitalsSummary(selectedCensusPatients, structuredVitalsByPatient, {
-                  dateFrom: reportVitalsDateFrom,
-                  dateTo: reportVitalsDateTo,
-                  timeFrom: reportVitalsTimeFrom,
-                  timeTo: reportVitalsTimeTo,
-                }),
-            },
-            {
-              id: 'all-census',
-              label: 'Multiple Census',
-              outputTitle: 'Selected Census',
-              buildText: () =>
-                selectedCensusPatients
-                  .map((patient) =>
-                    toCensusEntry(
-                      patient,
-                      structuredMedsByPatient.get(patient.id ?? -1) ?? [],
-                      structuredLabsByPatient.get(patient.id ?? -1) ?? [],
-                      structuredOrdersByPatient.get(patient.id ?? -1) ?? [],
-                      getVisiblePatientTags(patient, tagsById, tagGroups ?? []).map(renderTagDisplayText),
-                      tagsById,
-                    ),
-                  )
-                  .join('\n\n'),
-            },
-          ],
-        },
-      ]
-    : []
-
   const focusedPatientNavLabel = selectedPatient
     ? joinNonBlank([selectedPatient.roomNumber, selectedPatient.lastName], ' - ')
     : 'Patient'
@@ -5457,6 +5319,7 @@ function App() {
                 </Button>
               ) : null}
               <Button variant={view === 'checklist' ? 'default' : 'ghost'} size='sm' onClick={() => setView('checklist')}>Checklist</Button>
+              <Button variant={view === 'reporting' || view === 'manageTemplates' ? 'default' : 'ghost'} size='sm' onClick={() => setView('reporting')}>Reports</Button>
               <Button variant={view === 'settings' || view === 'manageTags' || view === 'tabSettings' || view === 'manageCustomActions' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
             </div>
           </div>
@@ -5485,6 +5348,13 @@ function App() {
             tags={tagDefinitions ?? []}
             groups={tagGroups ?? []}
             onBack={() => setView('settings')}
+          />
+        ) : view === 'manageTemplates' ? (
+          <ManageTemplatesScreen
+            templates={reportTemplates ?? []}
+            tags={tagDefinitions ?? []}
+            groups={tagGroups ?? []}
+            onBack={() => setView('reporting')}
           />
         ) : view !== 'settings' ? (
           <>
@@ -5873,6 +5743,134 @@ function App() {
                       )
                     })}
                   </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {view === 'reporting' ? (
+              <Card className='bg-warm-ivory border-clay shadow-sm'>
+                <CardHeader className='pb-2'>
+                  <div className='flex items-center justify-between gap-2'>
+                    <CardTitle className='text-base text-espresso'>Reports</CardTitle>
+                    <Button variant='outline' size='sm' onClick={() => setView('manageTemplates')}>Manage Templates</Button>
+                  </div>
+                </CardHeader>
+                <CardContent className='space-y-3'>
+                  <div className='space-y-1'>
+                    <Label htmlFor='report-template-picker'>Template</Label>
+                    <Select
+                      value={selectedReportTemplateId !== null ? String(selectedReportTemplateId) : ''}
+                      onValueChange={(v) => setSelectedReportTemplateId(Number.parseInt(v, 10))}
+                    >
+                      <SelectTrigger id='report-template-picker'><SelectValue placeholder='Choose a template' /></SelectTrigger>
+                      <SelectContent>
+                        {(reportTemplates ?? []).map((template) => (
+                          <SelectItem key={template.id} value={String(template.id)}>{template.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {(reportTemplates ?? []).length === 0 ? (
+                      <p className='text-xs text-clay'>No templates yet — create one in Manage Templates.</p>
+                    ) : null}
+                  </div>
+
+                  {selectedReportTemplate ? (
+                    <>
+                      <p className='text-xs text-clay'>
+                        {reportRepeatMode === 'per-patient'
+                          ? 'Per-Patient — generates once per matching patient below, in the chosen export order.'
+                          : 'Prints Once — this template has no patient-dependent content, so the filters below are inactive.'}
+                      </p>
+
+                      {reportRepeatMode === 'per-patient' ? (
+                        <div className='space-y-2 rounded-md border border-clay/40 bg-white p-2'>
+                          <div className='flex items-center justify-between gap-2 flex-wrap'>
+                            <p className='text-xs text-clay'>
+                              Included: {selectedCensusPatients.length} of {censusSelectablePatients.length} matching patients
+                            </p>
+                            <div className='flex gap-2'>
+                              <FilterButton
+                                activeCount={countTagWardSelections(censusFilter) + (censusPoolCriteria.length !== 1 || censusPoolCriteria[0] !== 'active' ? censusPoolCriteria.length : 0)}
+                                onClick={() => setCensusFilterDialogOpen(true)}
+                              />
+                              <Button size='sm' variant='secondary' onClick={selectAllCensusPatients}>
+                                Select all
+                              </Button>
+                              <Button size='sm' variant='secondary' onClick={clearCensusPatientsSelection}>
+                                Unselect
+                              </Button>
+                            </div>
+                          </div>
+                          <FilterSummary
+                            lines={describeTagWardFilter(censusFilter, tagsById)}
+                            specialLine={describePatientPoolFilter(censusPoolCriteria, censusPoolUseWindow, censusResolvedWindow)}
+                          />
+                          {censusSelectablePatients.length > 0 ? (
+                            <div className='flex flex-wrap gap-2'>
+                              {censusSelectablePatients.map((patient) => {
+                                if (patient.id === undefined) return null
+                                const patientId = patient.id
+                                const isSelected = selectedCensusPatientIds.includes(patient.id)
+                                return (
+                                  <Button
+                                    key={patientId}
+                                    type='button'
+                                    size='sm'
+                                    variant={isSelected ? 'default' : 'secondary'}
+                                    onClick={() => toggleCensusPatientSelection(patientId)}
+                                  >
+                                    {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' — ')}
+                                  </Button>
+                                )
+                              })}
+                            </div>
+                          ) : (
+                            <p className='text-sm text-clay'>No patients match the current filter.</p>
+                          )}
+                          {selectedCensusPatients.length > 0 ? (
+                            <div className='space-y-1'>
+                              <p className='text-xs text-clay'>Export order</p>
+                              <div className='space-y-1'>
+                                {selectedCensusPatients.map((patient, index) => {
+                                  const patientId = patient.id
+                                  if (patientId === undefined) return null
+
+                                  return (
+                                    <div
+                                      key={`ordered-${patientId}`}
+                                      className={cn(
+                                        'flex items-center gap-2 rounded border border-clay/30 bg-warm-ivory px-2 py-1 transition-shadow',
+                                        censusPatientDrag.isDragging(patientId) && 'opacity-50',
+                                        censusPatientDrag.isDropTarget(patientId) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                                      )}
+                                      {...censusPatientDrag.getItemProps(patientId)}
+                                    >
+                                      <DragHandle
+                                        label={`Drag to reorder ${formatFullName(patient)}`}
+                                        dragProps={censusPatientDrag.getHandleProps(patientId)}
+                                      />
+                                      <p className='flex-1 text-sm text-espresso'>
+                                        {index + 1}. {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' — ')}
+                                      </p>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      <Button
+                        disabled={reportRepeatMode === 'per-patient' && selectedCensusPatients.length === 0}
+                        onClick={handleGenerateReport}
+                      >
+                        Generate and open text preview
+                      </Button>
+                    </>
+                  ) : (
+                    <p className='text-sm text-clay'>Choose a template above to get started.</p>
+                  )}
                 </CardContent>
               </Card>
             ) : null}
@@ -7452,213 +7450,6 @@ function App() {
                     </Card>
                   </div>
                 </TabsContent>
-                <TabsContent value='reporting'>
-                  <div className='space-y-3'>
-                    {reportingSections.map((section) => (
-                      <Card key={section.id} className='bg-blush-sand border-clay'>
-                        <CardHeader className='py-2 px-3 pb-0'>
-                          <CardTitle className='text-sm text-espresso'>{section.title}</CardTitle>
-                        </CardHeader>
-                        <CardContent className='px-3 pb-3 space-y-3'>
-                          <p className='text-sm text-clay'>{section.description}</p>
-                          {section.id === 'census-reporting' ? (
-                            <div className='space-y-2 rounded-md border border-clay/40 bg-white p-2'>
-                              <p className='text-xs text-clay'>Selected Vitals uses the Vitals Filter above (same date/time window as Current patient exports).</p>
-                              <div className='flex items-center justify-between gap-2 flex-wrap'>
-                                <p className='text-xs text-clay'>
-                                  Included: {selectedCensusPatients.length} of {censusSelectablePatients.length} matching patients
-                                </p>
-                                <div className='flex gap-2'>
-                                  <FilterButton
-                                    activeCount={countTagWardSelections(censusFilter) + (censusPoolCriteria.length !== 1 || censusPoolCriteria[0] !== 'active' ? censusPoolCriteria.length : 0)}
-                                    onClick={() => setCensusFilterDialogOpen(true)}
-                                  />
-                                  <Button size='sm' variant='secondary' onClick={selectAllCensusPatients}>
-                                    Select all
-                                  </Button>
-                                  <Button size='sm' variant='secondary' onClick={clearCensusPatientsSelection}>
-                                    Unselect
-                                  </Button>
-                                </div>
-                              </div>
-                              <FilterSummary
-                                lines={describeTagWardFilter(censusFilter, tagsById)}
-                                specialLine={describePatientPoolFilter(censusPoolCriteria, censusPoolUseWindow, censusResolvedWindow)}
-                              />
-                              {censusSelectablePatients.length > 0 ? (
-                                <div className='flex flex-wrap gap-2'>
-                                  {censusSelectablePatients.map((patient) => {
-                                    if (patient.id === undefined) return null
-                                    const patientId = patient.id
-                                    const isSelected = selectedCensusPatientIds.includes(patient.id)
-                                    return (
-                                      <Button
-                                        key={patientId}
-                                        type='button'
-                                        size='sm'
-                                        variant={isSelected ? 'default' : 'secondary'}
-                                        onClick={() => toggleCensusPatientSelection(patientId)}
-                                      >
-                                        {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' — ')}
-                                      </Button>
-                                    )
-                                  })}
-                                </div>
-                              ) : (
-                                <p className='text-sm text-clay'>No patients match the current filter.</p>
-                              )}
-                              {selectedCensusPatients.length > 0 ? (
-                                <div className='space-y-1'>
-                                  <p className='text-xs text-clay'>Export order</p>
-                                  <div className='space-y-1'>
-                                    {selectedCensusPatients.map((patient, index) => {
-                                      const patientId = patient.id
-                                      if (patientId === undefined) return null
-
-                                      return (
-                                        <div
-                                          key={`ordered-${patientId}`}
-                                          className={cn(
-                                            'flex items-center gap-2 rounded border border-clay/30 bg-warm-ivory px-2 py-1 transition-shadow',
-                                            censusPatientDrag.isDragging(patientId) && 'opacity-50',
-                                            censusPatientDrag.isDropTarget(patientId) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
-                                          )}
-                                          {...censusPatientDrag.getItemProps(patientId)}
-                                        >
-                                          <DragHandle
-                                            label={`Drag to reorder ${formatFullName(patient)}`}
-                                            dragProps={censusPatientDrag.getHandleProps(patientId)}
-                                          />
-                                          <p className='flex-1 text-sm text-espresso'>
-                                            {index + 1}. {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' — ')}
-                                          </p>
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          {section.id === 'patient-reporting' ? (
-                            <div className='space-y-3 rounded-md border border-clay/40 bg-white p-2'>
-                              <div className='space-y-2'>
-                                <p className='text-xs font-semibold text-espresso'>Labs</p>
-                                <div className='flex items-center gap-2 flex-wrap'>
-                                  <Button
-                                    size='sm'
-                                    variant='secondary'
-                                    onClick={() => setSelectedPatientLabReportIds(
-                                      selectedPatientStructuredLabs
-                                        .map((entry) => entry.id)
-                                        .filter((id): id is number => id !== undefined),
-                                    )}
-                                  >
-                                    Select all labs
-                                  </Button>
-                                  <Button size='sm' variant='secondary' onClick={() => setSelectedPatientLabReportIds([])}>Unselect labs</Button>
-                                </div>
-                                {selectedPatientLabGroupsForReporting.length > 0 ? (
-                                  <div className='space-y-2'>
-                                    {selectedPatientLabGroupsForReporting.map((group) => (
-                                      <div key={`lab-group-${group.templateId}`} className='space-y-1'>
-                                        <p className='text-xs text-clay'>{group.templateName}</p>
-                                        <div className='flex gap-1 flex-wrap'>
-                                          {group.entries.map((entry) => {
-                                            if (entry.id === undefined) return null
-                                            const checked = selectedPatientLabReportIds.includes(entry.id)
-                                            return (
-                                              <Button
-                                                key={`lab-pick-${entry.id}`}
-                                                size='sm'
-                                                variant={checked ? 'default' : 'secondary'}
-                                                onClick={() => toggleSelectedPatientLabReportId(entry.id as number)}
-                                              >
-                                                {formatDateMMDD(entry.date)} {formatClock(entry.time ?? '00:00')}
-                                              </Button>
-                                            )
-                                          })}
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <p className='text-xs text-clay'>No structured labs for selected patient.</p>
-                                )}
-                              </div>
-
-                              <div className='space-y-2'>
-                                <p className='text-xs font-semibold text-espresso'>Vitals Filter</p>
-                                <div className='grid grid-cols-2 sm:grid-cols-4 gap-2'>
-                                  <div className='space-y-1'>
-                                    <Label className='text-xs'>From date</Label>
-                                    <FlexibleDateInput ariaLabel='Vitals filter from date' value={reportVitalsDateFrom} onChange={setReportVitalsDateFrom} />
-                                  </div>
-                                  <div className='space-y-1'>
-                                    <Label className='text-xs'>From time</Label>
-                                    <FlexibleTimeInput ariaLabel='Vitals filter from time' value={reportVitalsTimeFrom} onChange={setReportVitalsTimeFrom} />
-                                  </div>
-                                  <div className='space-y-1'>
-                                    <Label className='text-xs'>Until date</Label>
-                                    <FlexibleDateInput ariaLabel='Vitals filter until date' value={reportVitalsDateTo} onChange={setReportVitalsDateTo} />
-                                  </div>
-                                  <div className='space-y-1'>
-                                    <Label className='text-xs'>Until time</Label>
-                                    <FlexibleTimeInput ariaLabel='Vitals filter until time' value={reportVitalsTimeTo} onChange={setReportVitalsTimeTo} />
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className='space-y-2'>
-                                <p className='text-xs font-semibold text-espresso'>Orders Filter</p>
-                                <div className='grid grid-cols-2 sm:grid-cols-4 gap-2'>
-                                  <div className='space-y-1'>
-                                    <Label className='text-xs'>From date</Label>
-                                    <FlexibleDateInput ariaLabel='Orders filter from date' value={reportOrdersDateFrom} onChange={setReportOrdersDateFrom} />
-                                  </div>
-                                  <div className='space-y-1'>
-                                    <Label className='text-xs'>From time</Label>
-                                    <FlexibleTimeInput ariaLabel='Orders filter from time' value={reportOrdersTimeFrom} onChange={setReportOrdersTimeFrom} />
-                                  </div>
-                                  <div className='space-y-1'>
-                                    <Label className='text-xs'>Until date</Label>
-                                    <FlexibleDateInput ariaLabel='Orders filter until date' value={reportOrdersDateTo} onChange={setReportOrdersDateTo} />
-                                  </div>
-                                  <div className='space-y-1'>
-                                    <Label className='text-xs'>Until time</Label>
-                                    <FlexibleTimeInput ariaLabel='Orders filter until time' value={reportOrdersTimeTo} onChange={setReportOrdersTimeTo} />
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          ) : null}
-                          <div className='space-y-1'>
-                            <p className='text-xs text-clay'>Generate and open text preview:</p>
-                            <div className='flex gap-2 flex-wrap'>
-                              {section.actions.map((action) => (
-                                <Button
-                                  key={action.id}
-                                  type='button'
-                                  disabled={(action.id === 'all-census' || action.id === 'all-vitals') && selectedCensusPatients.length === 0}
-                                  onClick={() => {
-                                    try {
-                                      openCopyModal(action.buildText(), action.outputTitle)
-                                    } catch (error) {
-                                      const message = error instanceof Error ? error.message : 'Unable to generate report.'
-                                      setNotice(message)
-                                    }
-                                  }}
-                                >
-                                  {action.label}
-                                </Button>
-                              ))}
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                </TabsContent>
               </Tabs>
                 </CardContent>
               </Card>
@@ -7838,6 +7629,19 @@ function App() {
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Patient Tabs</p>
                       <p className='text-xs text-clay mt-0.5'>Show, hide, and reorder the tabs shown inside a patient</p>
+                    </div>
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => setView('manageTemplates')}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-primary/10 flex items-center justify-center shrink-0'>
+                      <FileText className='h-4 w-4 text-action-primary' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-espresso'>Manage Templates</p>
+                      <p className='text-xs text-clay mt-0.5'>Create and edit report Format Patterns used in Reports</p>
                     </div>
                   </button>
                 </div>
@@ -8667,6 +8471,18 @@ function App() {
             >
               <CheckCircle2 className='h-5 w-5' />
               <span>Checklist</span>
+            </button>
+            <button
+              className={cn(
+                'flex flex-1 flex-col items-center gap-0.5 px-2 py-1.5 text-xs font-semibold rounded-xl transition-all duration-200',
+                view === 'reporting' || view === 'manageTemplates'
+                  ? 'text-action-primary bg-action-primary/10'
+                  : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
+              )}
+              onClick={() => setView('reporting')}
+            >
+              <FileText className='h-5 w-5' />
+              <span>Reports</span>
             </button>
             <button
               className={cn(
