@@ -1,11 +1,23 @@
 import type { Patient, TagDefinition } from '@/types'
 
-/** Ordered list of service tag ids currently assigned to a patient — Main services first, then
- * Referral, each in the order it was added. Drives both the per-service Diagnosis field order and
- * how those lines are composed for reports. */
+export type OrderedServiceEntry = { tagId: number; role: 'main' | 'referral' }
+
+/** Ordered list of services currently assigned to a patient, each tagged with its Main/Referral
+ * role — Main services first, then Referral, each in the order it was added. Drives the
+ * per-service Diagnosis field order (and its M/R badge) and how those lines are composed for
+ * reports. */
+export const orderedServiceEntries = (
+  patient: Pick<Patient, 'mainServiceTagIds' | 'referralServiceTagIds'>,
+): OrderedServiceEntry[] => [
+  ...patient.mainServiceTagIds.map((tagId): OrderedServiceEntry => ({ tagId, role: 'main' })),
+  ...patient.referralServiceTagIds.map((tagId): OrderedServiceEntry => ({ tagId, role: 'referral' })),
+]
+
+/** Ordered list of service tag ids currently assigned to a patient — same order as
+ * `orderedServiceEntries`, without the role, for callers (report composition) that don't need it. */
 export const orderedServiceTagIds = (
   patient: Pick<Patient, 'mainServiceTagIds' | 'referralServiceTagIds'>,
-): number[] => [...patient.mainServiceTagIds, ...patient.referralServiceTagIds]
+): number[] => orderedServiceEntries(patient).map((entry) => entry.tagId)
 
 /** Composes one diagnosis block: one line per assigned service ("IM: AKI secondary to postrenal
  * obstructive uropathy"), skipping services with no text yet. Falls back to `unassigned` — the

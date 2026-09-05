@@ -1,7 +1,8 @@
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { MentionText, PhotoMentionField, type MentionablePhoto } from '@/features/photos/photoMentions'
+import { TagChip } from '@/features/tags/TagChip'
 import type { Patient, TagDefinition } from '@/types'
-import { orderedServiceTagIds } from './serviceDiagnosis'
+import { orderedServiceEntries } from './serviceDiagnosis'
 
 /** Renders a diagnosis bucket (Admission or Discharge): a single free-text field while the patient
  * has zero Main/Referral services, or one field per assigned service (Main first, then Referral)
@@ -29,9 +30,9 @@ export const ServiceDiagnosisFields = ({
   attachmentByTitle: Map<string, MentionablePhoto>
   onOpenPhotoById: (id: number) => void
 }) => {
-  const serviceIds = orderedServiceTagIds(patient)
+  const serviceEntries = orderedServiceEntries(patient)
 
-  if (serviceIds.length === 0) {
+  if (serviceEntries.length === 0) {
     return (
       <TapToEditField
         ariaLabel={label}
@@ -57,16 +58,22 @@ export const ServiceDiagnosisFields = ({
 
   return (
     <div className='space-y-3'>
-      {serviceIds.map((serviceId) => {
-        const serviceName = tagsById.get(serviceId)?.name ?? `Service #${serviceId}`
+      {serviceEntries.map(({ tagId, role }) => {
+        const tag = tagsById.get(tagId)
+        const serviceName = tag?.name ?? `Service #${tagId}`
+        const roleMarker = role === 'main' ? 'M' : 'R'
         return (
-          <div key={serviceId} className='space-y-1'>
-            <p className='text-xs font-semibold text-espresso'>{serviceName}</p>
+          <div key={tagId} className='space-y-1'>
+            {tag ? (
+              <TagChip tag={tag} roleMarker={roleMarker} />
+            ) : (
+              <p className='text-xs font-semibold text-espresso'>{serviceName}</p>
+            )}
             <TapToEditField
               ariaLabel={`${label} — ${serviceName}`}
               emptyText={`Tap to add ${serviceName} ${label.toLowerCase()}`}
-              value={byService[serviceId] ?? ''}
-              onCommit={(text) => onChangeService(serviceId, text)}
+              value={byService[tagId] ?? ''}
+              onCommit={(text) => onChangeService(tagId, text)}
               renderView={(text) => <MentionText text={text} attachmentByTitle={attachmentByTitle} onOpenPhotoById={onOpenPhotoById} />}
               renderEditor={({ value, onChange }) => (
                 <PhotoMentionField
