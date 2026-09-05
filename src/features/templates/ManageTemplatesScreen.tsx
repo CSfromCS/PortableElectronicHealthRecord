@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { ChevronLeft, Copy, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { ChevronLeft, Copy, Pencil, Plus, Trash2 } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,10 +7,10 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { DragHandle } from '@/lib/dnd/DragHandle'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
+import { DragHandle } from '@/lib/dnd/DragHandle'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
-import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { cn } from '@/lib/utils'
 import type {
   BlockVariableConfig,
@@ -22,7 +22,7 @@ import type {
   TagDefinition,
   TagGroupDefinition,
   TagsVariableConfig,
-  TemplateSegment,
+  TemplateVariableInstance,
 } from '@/types'
 import { bucketTagsByGroup } from '@/features/tags/tagUtils'
 import {
@@ -30,57 +30,47 @@ import {
   DEFAULT_BLOCK_VARIABLE_CONFIG,
   DEFAULT_TAGS_VARIABLE_CONFIG,
   FLAT_VARIABLE_LABELS,
+  buildVariableToken,
   classifyTemplateRepeatMode,
-  createSegmentId,
+  createVariableId,
+  describeBlockConfig,
+  describeVariableInstance,
   renderTemplateForPatient,
+  tokenizePatternText,
 } from './templateEngine'
 import { SAMPLE_PREVIEW_PATIENT, buildSamplePreviewContext } from './samplePreviewData'
 
-const FLAT_VARIABLE_ORDER: FlatVariableId[] = [
-  'roomNumber', 'ward', 'lastName', 'firstName', 'middleName', 'age', 'sex',
-  'mainService', 'admissionDiagnosis', 'dischargeDiagnosis', 'clinicalSummary',
-  'admitDate', 'referralDate', 'dischargeDate', 'medications', 'database',
-  'currentDate', 'currentTime',
-]
-
 const BLOCK_VARIABLE_ORDER: BlockVariableId[] = ['vitals', 'labs', 'problems', 'checklist', 'orders']
+
+type PickerTab = {
+  id: string
+  label: string
+  flatIds?: FlatVariableId[]
+}
+
+/** Grouped so it's obvious at a glance which category of information a variable pulls from,
+ * rather than one long undifferentiated list. */
+const PICKER_TABS: PickerTab[] = [
+  { id: 'identity', label: 'Identity', flatIds: ['roomNumber', 'ward', 'lastName', 'firstName', 'middleName', 'age', 'sex'] },
+  { id: 'clinical', label: 'Clinical', flatIds: ['mainService', 'admissionDiagnosis', 'dischargeDiagnosis', 'clinicalSummary', 'medications', 'database'] },
+  { id: 'dates', label: 'Dates', flatIds: ['admitDate', 'referralDate', 'dischargeDate', 'currentDate', 'currentTime'] },
+  { id: 'tags', label: 'Tags' },
+  { id: 'records', label: 'Records' },
+]
 
 type TemplateFormState = {
   name: string
-  segments: TemplateSegment[]
+  patternText: string
+  variables: Record<string, TemplateVariableInstance>
 }
 
 const templateToForm = (template: ReportTemplate): TemplateFormState => ({
   name: template.name,
-  segments: template.segments.map((segment) => ({ ...segment })),
+  patternText: template.patternText,
+  variables: { ...template.variables },
 })
 
-const blankForm = (): TemplateFormState => ({ name: '', segments: [] })
-
-const segmentSummary = (segment: TemplateSegment, tagsById: Map<number, TagDefinition>): string => {
-  switch (segment.type) {
-    case 'text': return segment.text || '(empty text)'
-    case 'lineBreak': return '↵ Line break'
-    case 'flatVariable': return FLAT_VARIABLE_LABELS[segment.variableId]
-    case 'blockVariable': return BLOCK_VARIABLE_LABELS[segment.variableId]
-    case 'tagsVariable': {
-      if (segment.config.includeAll) return 'Tags (all)'
-      const names = [
-        ...segment.config.tagIds.map((id) => tagsById.get(id)?.name).filter((name): name is string => Boolean(name)),
-      ]
-      return names.length > 0 ? `Tags (${names.join(', ')})` : 'Tags (none selected)'
-    }
-    default: return ''
-  }
-}
-
-const describeBlockConfig = (config: BlockVariableConfig): string => {
-  if (config.rangeMode === 'latest') return 'Latest'
-  if (config.rangeMode === 'numberOfEntries') return `Last ${config.entryCount} entries`
-  if (config.relativeMode === 'sinceAdmission') return 'Since Admission Date'
-  if (config.relativeMode === 'lastNDays') return `Last ${config.lastNDays} days`
-  return `${config.fixedDateFrom || '…'} to ${config.fixedDateTo || '…'}`
-}
+const blankForm = (): TemplateFormState => ({ name: '', patternText: '', variables: {} })
 
 /** A Block variable's Latest/Date Range/Number of Entries setting, prompted right when the
  * variable is placed and saved as part of that specific placeholder (point 2 of issue #82). */
@@ -99,11 +89,16 @@ const BlockVariableConfigDialog = ({
 }) => {
   const [config, setConfig] = useState<BlockVariableConfig>(initialConfig)
 
+  useEffect(() => {
+    if (open) setConfig(initialConfig)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset the draft only when the dialog (re)opens, not on every initialConfig identity change
+  }, [open])
+
   if (!open || variableId === null) return null
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
-      <DialogContent className='max-w-md'>
+      <DialogContent className='max-w-md' onCloseAutoFocus={(event) => event.preventDefault()}>
         <DialogHeader>
           <DialogTitle>{BLOCK_VARIABLE_LABELS[variableId]} settings</DialogTitle>
         </DialogHeader>
@@ -189,7 +184,7 @@ const BlockVariableConfigDialog = ({
         </div>
         <div className='flex justify-end gap-2 pt-2'>
           <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
-          <Button type='button' onClick={() => onSave(config)}>Insert</Button>
+          <Button type='button' onClick={() => onSave(config)}>{describeBlockConfig(config) ? 'Save' : 'Insert'}</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -214,6 +209,12 @@ const TagsVariableConfigDialog = ({
   onSave: (config: TagsVariableConfig) => void
 }) => {
   const [config, setConfig] = useState<TagsVariableConfig>(initialConfig)
+
+  useEffect(() => {
+    if (open) setConfig(initialConfig)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset the draft only when the dialog (re)opens
+  }, [open])
+
   const buckets = bucketTagsByGroup(tags, groups)
 
   if (!open) return null
@@ -233,7 +234,7 @@ const TagsVariableConfigDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
-      <DialogContent className='max-w-md'>
+      <DialogContent className='max-w-md' onCloseAutoFocus={(event) => event.preventDefault()}>
         <DialogHeader>
           <DialogTitle>Tags settings</DialogTitle>
         </DialogHeader>
@@ -297,7 +298,7 @@ const TagsVariableConfigDialog = ({
         </ScrollArea>
         <div className='flex justify-end gap-2 pt-2'>
           <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
-          <Button type='button' onClick={() => onSave(config)}>Insert</Button>
+          <Button type='button' onClick={() => onSave(config)}>Save</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -318,51 +319,56 @@ const VariablePickerDialog = ({
   onPickBlock: (variableId: BlockVariableId) => void
 }) => (
   <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
-    <DialogContent className='max-w-md'>
+    <DialogContent className='max-w-md' onCloseAutoFocus={(event) => event.preventDefault()}>
       <DialogHeader>
         <DialogTitle>Add variable</DialogTitle>
       </DialogHeader>
-      <ScrollArea className='max-h-[60vh] pr-3'>
-        <div className='space-y-4'>
-          <div className='space-y-1.5'>
-            <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Flat</p>
-            <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-2 py-1'>
-              {FLAT_VARIABLE_ORDER.map((variableId) => (
-                <button
-                  key={variableId}
-                  type='button'
-                  className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
-                  onClick={() => onPickFlat(variableId)}
-                >
-                  {FLAT_VARIABLE_LABELS[variableId]}
-                </button>
-              ))}
-              <button
-                type='button'
-                className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
-                onClick={onPickTags}
-              >
-                Tags
-              </button>
-            </div>
-          </div>
-          <div className='space-y-1.5'>
-            <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Block (dated)</p>
-            <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-2 py-1'>
-              {BLOCK_VARIABLE_ORDER.map((variableId) => (
-                <button
-                  key={variableId}
-                  type='button'
-                  className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
-                  onClick={() => onPickBlock(variableId)}
-                >
-                  {BLOCK_VARIABLE_LABELS[variableId]}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </ScrollArea>
+      <Tabs defaultValue='identity'>
+        <TabsList className='flex-wrap h-auto'>
+          {PICKER_TABS.map((tab) => (
+            <TabsTrigger key={tab.id} value={tab.id} className='text-xs'>{tab.label}</TabsTrigger>
+          ))}
+        </TabsList>
+        {PICKER_TABS.map((tab) => (
+          <TabsContent key={tab.id} value={tab.id}>
+            <ScrollArea className='max-h-[50vh] pr-3'>
+              <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-2 py-1'>
+                {tab.id === 'tags' ? (
+                  <button
+                    type='button'
+                    className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                    onClick={onPickTags}
+                  >
+                    Tags
+                  </button>
+                ) : tab.id === 'records' ? (
+                  BLOCK_VARIABLE_ORDER.map((variableId) => (
+                    <button
+                      key={variableId}
+                      type='button'
+                      className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                      onClick={() => onPickBlock(variableId)}
+                    >
+                      {BLOCK_VARIABLE_LABELS[variableId]}
+                    </button>
+                  ))
+                ) : (
+                  (tab.flatIds ?? []).map((variableId) => (
+                    <button
+                      key={variableId}
+                      type='button'
+                      className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                      onClick={() => onPickFlat(variableId)}
+                    >
+                      {FLAT_VARIABLE_LABELS[variableId]}
+                    </button>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+        ))}
+      </Tabs>
       <div className='flex justify-end pt-2'>
         <Button type='button' variant='ghost' onClick={onClose}>Cancel</Button>
       </div>
@@ -370,73 +376,337 @@ const VariablePickerDialog = ({
   </Dialog>
 )
 
+const CHIP_CLASS = 'inline-flex items-center rounded-full bg-action-primary/15 px-2 py-0.5 text-xs font-semibold text-action-primary align-baseline mx-0.5 cursor-pointer select-none whitespace-nowrap'
+
+const buildChipElement = (id: string, instance: TemplateVariableInstance): HTMLSpanElement => {
+  const chip = document.createElement('span')
+  chip.contentEditable = 'false'
+  chip.dataset.variableId = id
+  chip.className = CHIP_CLASS
+  chip.textContent = describeVariableInstance(instance)
+  return chip
+}
+
+/**
+ * A free-text editing surface — type any string, press Enter for a new line — with variable
+ * placeholders rendered as inline, non-editable "chip" blocks instead of raw `{{var:...}}` text.
+ * Mirrors this app's existing @-mention text fields (PhotoMentionField): the canonical value is
+ * still a plain string with embedded tokens, this component just also keeps a live DOM view of it.
+ */
+const FormatPatternEditor = ({
+  initialPatternText,
+  initialVariables,
+  onChange,
+  tags,
+  groups,
+}: {
+  initialPatternText: string
+  initialVariables: Record<string, TemplateVariableInstance>
+  onChange: (patternText: string, variables: Record<string, TemplateVariableInstance>) => void
+  tags: TagDefinition[]
+  groups: TagGroupDefinition[]
+}) => {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const variablesRef = useRef<Record<string, TemplateVariableInstance>>(initialVariables)
+  const savedRangeRef = useRef<Range | null>(null)
+
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pendingBlockVariable, setPendingBlockVariable] = useState<BlockVariableId | null>(null)
+  const [tagsDialogOpen, setTagsDialogOpen] = useState(false)
+  /** Non-null while the config dialog is editing an EXISTING chip (clicked in the editor) rather
+   * than about to insert a brand-new one from the picker. */
+  const [reconfiguringId, setReconfiguringId] = useState<string | null>(null)
+
+  // Builds the initial DOM once on mount. A `key` prop from the parent (the template being
+  // edited) forces a remount whenever a different template is loaded, so this never needs to
+  // reconcile against a changed `initialPatternText` after the fact.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    container.innerHTML = ''
+    tokenizePatternText(initialPatternText).forEach((part) => {
+      if (part.type === 'text') {
+        container.appendChild(document.createTextNode(part.text))
+      } else if (part.type === 'lineBreak') {
+        container.appendChild(document.createElement('br'))
+      } else {
+        const instance = initialVariables[part.id]
+        if (instance) container.appendChild(buildChipElement(part.id, instance))
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately runs once per mount only; see comment above
+  }, [])
+
+  // Tracks the caret continuously (rather than only on click/keyup) so "Add Variable" always
+  // inserts where the user last left the cursor, including right after a typed character —
+  // input events don't reliably follow every selection change, but selectionchange does.
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const selection = window.getSelection()
+      if (!selection || selection.rangeCount === 0) return
+      const range = selection.getRangeAt(0)
+      if (containerRef.current?.contains(range.startContainer)) {
+        savedRangeRef.current = range.cloneRange()
+      }
+    }
+    document.addEventListener('selectionchange', handleSelectionChange)
+    return () => document.removeEventListener('selectionchange', handleSelectionChange)
+  }, [])
+
+  const serialize = (): { patternText: string; variables: Record<string, TemplateVariableInstance> } => {
+    const container = containerRef.current
+    let patternText = ''
+    const usedIds = new Set<string>()
+    if (container) {
+      container.childNodes.forEach((node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          patternText += node.textContent ?? ''
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+          const element = node as HTMLElement
+          if (element.tagName === 'BR') {
+            patternText += '\n'
+          } else if (element.dataset.variableId) {
+            patternText += buildVariableToken(element.dataset.variableId)
+            usedIds.add(element.dataset.variableId)
+          }
+        }
+      })
+    }
+    const nextVariables: Record<string, TemplateVariableInstance> = {}
+    usedIds.forEach((id) => {
+      const instance = variablesRef.current[id]
+      if (instance) nextVariables[id] = instance
+    })
+    variablesRef.current = nextVariables
+    return { patternText, variables: nextVariables }
+  }
+
+  const emitChange = () => {
+    const { patternText, variables } = serialize()
+    onChange(patternText, variables)
+  }
+
+  /** Whether the caret sits immediately before/after a chip — browsers are inconsistent about
+   * deleting an atomic contentEditable=false node with a single Backspace/Delete press, so this
+   * is checked explicitly rather than relying on native contentEditable delete behavior. */
+  const getAdjacentChip = (direction: 'before' | 'after'): HTMLElement | null => {
+    const container = containerRef.current
+    const selection = window.getSelection()
+    if (!container || !selection || selection.rangeCount === 0 || !selection.isCollapsed) return null
+    const { startContainer, startOffset } = selection.getRangeAt(0)
+    if (!container.contains(startContainer)) return null
+
+    if (startContainer.nodeType === Node.TEXT_NODE) {
+      const sibling = direction === 'before'
+        ? (startOffset === 0 ? startContainer.previousSibling : null)
+        : (startOffset === (startContainer.textContent?.length ?? 0) ? startContainer.nextSibling : null)
+      return sibling instanceof HTMLElement && sibling.dataset.variableId ? sibling : null
+    }
+    const node = direction === 'before'
+      ? startContainer.childNodes[startOffset - 1]
+      : startContainer.childNodes[startOffset]
+    return node instanceof HTMLElement && node.dataset.variableId ? node : null
+  }
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      document.execCommand('insertLineBreak')
+      emitChange()
+      return
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      const chip = getAdjacentChip(event.key === 'Backspace' ? 'before' : 'after')
+      if (chip) {
+        event.preventDefault()
+        chip.remove()
+        emitChange()
+      }
+    }
+  }
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const text = event.clipboardData.getData('text/plain')
+    document.execCommand('insertText', false, text)
+    emitChange()
+  }
+
+  const handleContainerClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement
+    const chipEl = target.closest('[data-variable-id]') as HTMLElement | null
+    const id = chipEl?.dataset.variableId
+    if (!id) return
+    const instance = variablesRef.current[id]
+    if (!instance) return
+    if (instance.kind === 'block') {
+      setReconfiguringId(id)
+      setPendingBlockVariable(instance.variableId)
+    } else if (instance.kind === 'tags') {
+      setReconfiguringId(id)
+      setTagsDialogOpen(true)
+    }
+  }
+
+  const insertInstanceAtSavedRange = (instance: TemplateVariableInstance) => {
+    const container = containerRef.current
+    if (!container) return
+    const id = createVariableId()
+    const chip = buildChipElement(id, instance)
+    variablesRef.current = { ...variablesRef.current, [id]: instance }
+
+    let range = savedRangeRef.current
+    if (!range || !container.contains(range.startContainer)) {
+      range = document.createRange()
+      range.selectNodeContents(container)
+      range.collapse(false)
+    }
+    range.deleteContents()
+    range.insertNode(chip)
+
+    const spacer = document.createTextNode('')
+    chip.parentNode?.insertBefore(spacer, chip.nextSibling)
+    const newRange = document.createRange()
+    newRange.setStart(spacer, 0)
+    newRange.collapse(true)
+
+    savedRangeRef.current = newRange.cloneRange()
+    const restoreCaret = () => {
+      container.focus()
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(newRange)
+    }
+    restoreCaret()
+    // The variable picker is a Radix Dialog with a ~200ms close transition; its FocusScope keeps
+    // reclaiming focus for the duration of that animation, so a rAF-timed retry isn't late enough.
+    // Reasserting after the transition settles wins reliably regardless of animation timing quirks.
+    window.setTimeout(restoreCaret, 260)
+    emitChange()
+  }
+
+  const updateExistingChip = (id: string, instance: TemplateVariableInstance) => {
+    variablesRef.current = { ...variablesRef.current, [id]: instance }
+    const chipEl = containerRef.current?.querySelector<HTMLElement>(`[data-variable-id="${id}"]`)
+    if (chipEl) chipEl.textContent = describeVariableInstance(instance)
+    emitChange()
+  }
+
+  const currentBlockConfig = (() => {
+    if (reconfiguringId === null) return DEFAULT_BLOCK_VARIABLE_CONFIG
+    const instance = variablesRef.current[reconfiguringId]
+    return instance?.kind === 'block' ? instance.config : DEFAULT_BLOCK_VARIABLE_CONFIG
+  })()
+
+  const currentTagsConfig = (() => {
+    if (reconfiguringId === null) return DEFAULT_TAGS_VARIABLE_CONFIG
+    const instance = variablesRef.current[reconfiguringId]
+    return instance?.kind === 'tags' ? instance.config : DEFAULT_TAGS_VARIABLE_CONFIG
+  })()
+
+  return (
+    <div className='space-y-1.5'>
+      <div
+        ref={containerRef}
+        role='textbox'
+        aria-multiline='true'
+        aria-label='Format Pattern'
+        contentEditable
+        suppressContentEditableWarning
+        className='min-h-24 whitespace-pre-wrap break-words rounded-lg border border-clay/25 bg-white px-3 py-2 text-sm text-espresso focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
+        onInput={emitChange}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        onClick={handleContainerClick}
+      />
+      <div className='flex flex-wrap gap-2'>
+        <Button type='button' size='sm' variant='outline' onClick={() => setPickerOpen(true)}>
+          <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Add Variable
+        </Button>
+      </div>
+      <p className='text-xs text-clay'>Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Tags block to change its settings.</p>
+
+      <VariablePickerDialog
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onPickFlat={(variableId) => {
+          setPickerOpen(false)
+          insertInstanceAtSavedRange({ kind: 'flat', variableId })
+        }}
+        onPickTags={() => {
+          setPickerOpen(false)
+          setReconfiguringId(null)
+          setTagsDialogOpen(true)
+        }}
+        onPickBlock={(variableId) => {
+          setPickerOpen(false)
+          setReconfiguringId(null)
+          setPendingBlockVariable(variableId)
+        }}
+      />
+
+      <BlockVariableConfigDialog
+        open={pendingBlockVariable !== null}
+        variableId={pendingBlockVariable}
+        initialConfig={currentBlockConfig}
+        onCancel={() => { setPendingBlockVariable(null); setReconfiguringId(null) }}
+        onSave={(config) => {
+          if (pendingBlockVariable === null) return
+          const instance: TemplateVariableInstance = { kind: 'block', variableId: pendingBlockVariable, config }
+          if (reconfiguringId !== null) {
+            updateExistingChip(reconfiguringId, instance)
+          } else {
+            insertInstanceAtSavedRange(instance)
+          }
+          setPendingBlockVariable(null)
+          setReconfiguringId(null)
+        }}
+      />
+
+      <TagsVariableConfigDialog
+        open={tagsDialogOpen}
+        initialConfig={currentTagsConfig}
+        tags={tags}
+        groups={groups}
+        onCancel={() => { setTagsDialogOpen(false); setReconfiguringId(null) }}
+        onSave={(config) => {
+          const instance: TemplateVariableInstance = { kind: 'tags', config }
+          if (reconfiguringId !== null) {
+            updateExistingChip(reconfiguringId, instance)
+          } else {
+            insertInstanceAtSavedRange(instance)
+          }
+          setTagsDialogOpen(false)
+          setReconfiguringId(null)
+        }}
+      />
+    </div>
+  )
+}
+
 const TemplateEditor = ({
   initial,
   tags,
   groups,
-  tagsById,
   onCancel,
   onSave,
 }: {
   initial: TemplateFormState
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
-  tagsById: Map<number, TagDefinition>
   onCancel: () => void
   onSave: (form: TemplateFormState) => void
 }) => {
   const [form, setForm] = useState<TemplateFormState>(initial)
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [pendingBlockVariable, setPendingBlockVariable] = useState<BlockVariableId | null>(null)
-  const [tagsDialogOpen, setTagsDialogOpen] = useState(false)
-
-  const addSegment = (segment: TemplateSegment) => {
-    setForm((previous) => ({ ...previous, segments: [...previous.segments, segment] }))
-  }
-  const removeSegment = (id: string) => {
-    setForm((previous) => ({ ...previous, segments: previous.segments.filter((segment) => segment.id !== id) }))
-  }
-  const updateTextSegment = (id: string, text: string) => {
-    setForm((previous) => ({
-      ...previous,
-      segments: previous.segments.map((segment) => (segment.id === id && segment.type === 'text' ? { ...segment, text } : segment)),
-    }))
-  }
-  const reorderSegments = (sourceId: string, targetId: string) => {
-    setForm((previous) => ({ ...previous, segments: moveItemByKey(previous.segments, (segment) => segment.id, sourceId, targetId) }))
-  }
-  const segmentDrag = useDragReorder(form.segments.map((segment) => segment.id), reorderSegments)
-
-  const [editingBlockSegmentId, setEditingBlockSegmentId] = useState<string | null>(null)
-  const [editingTagsSegmentId, setEditingTagsSegmentId] = useState<string | null>(null)
-
-  const openBlockConfigFor = (segmentId: string, variableId: BlockVariableId) => {
-    setEditingBlockSegmentId(segmentId)
-    setPendingBlockVariable(variableId)
-  }
-  const openTagsConfigFor = (segmentId: string) => {
-    setEditingTagsSegmentId(segmentId)
-    setTagsDialogOpen(true)
-  }
-
-  const currentEditingBlockConfig = useMemo(() => {
-    const segment = form.segments.find((s) => s.id === editingBlockSegmentId)
-    return segment && segment.type === 'blockVariable' ? segment.config : DEFAULT_BLOCK_VARIABLE_CONFIG
-  }, [form.segments, editingBlockSegmentId])
-
-  const currentEditingTagsConfig = useMemo(() => {
-    const segment = form.segments.find((s) => s.id === editingTagsSegmentId)
-    return segment && segment.type === 'tagsVariable' ? segment.config : DEFAULT_TAGS_VARIABLE_CONFIG
-  }, [form.segments, editingTagsSegmentId])
 
   const preview = useMemo(() => {
-    const draftTemplate: ReportTemplate = { name: form.name, segments: form.segments, sortOrder: 0, createdAt: '' }
+    const draftTemplate: ReportTemplate = { name: form.name, patternText: form.patternText, variables: form.variables, sortOrder: 0, createdAt: '' }
     return renderTemplateForPatient(draftTemplate, SAMPLE_PREVIEW_PATIENT, buildSamplePreviewContext())
-  }, [form.name, form.segments])
+  }, [form.name, form.patternText, form.variables])
 
   const repeatMode = useMemo(
-    () => classifyTemplateRepeatMode({ name: form.name, segments: form.segments, sortOrder: 0, createdAt: '' }),
-    [form.name, form.segments],
+    () => classifyTemplateRepeatMode({ name: form.name, patternText: form.patternText, variables: form.variables, sortOrder: 0, createdAt: '' }),
+    [form.name, form.patternText, form.variables],
   )
 
   return (
@@ -453,65 +723,13 @@ const TemplateEditor = ({
             {repeatMode === 'per-patient' ? 'Per-Patient' : 'Prints Once'}
           </span>
         </div>
-        <div className='space-y-1'>
-          {form.segments.length === 0 ? (
-            <p className='text-xs text-clay'>No segments yet — add literal text, a line break, or a variable below.</p>
-          ) : null}
-          {form.segments.map((segment) => (
-            <div
-              key={segment.id}
-              className={cn(
-                'flex items-center gap-2 rounded border border-clay/30 bg-warm-ivory px-2 py-1.5 transition-shadow',
-                segmentDrag.isDragging(segment.id) && 'opacity-50',
-                segmentDrag.isDropTarget(segment.id) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
-              )}
-              {...segmentDrag.getItemProps(segment.id)}
-            >
-              <DragHandle label={`Drag to reorder ${segmentSummary(segment, tagsById)}`} dragProps={segmentDrag.getHandleProps(segment.id)} />
-              <div className='flex-1 min-w-0'>
-                {segment.type === 'text' ? (
-                  <AutoGrowTextField
-                    value={segment.text}
-                    onChange={(value) => updateTextSegment(segment.id, value)}
-                    placeholder='Literal text…'
-                  />
-                ) : segment.type === 'blockVariable' ? (
-                  <button
-                    type='button'
-                    className='w-full text-left text-sm text-espresso hover:underline'
-                    onClick={() => openBlockConfigFor(segment.id, segment.variableId)}
-                  >
-                    {BLOCK_VARIABLE_LABELS[segment.variableId]} — <span className='text-clay'>{describeBlockConfig(segment.config)}</span>
-                  </button>
-                ) : segment.type === 'tagsVariable' ? (
-                  <button
-                    type='button'
-                    className='w-full text-left text-sm text-espresso hover:underline'
-                    onClick={() => openTagsConfigFor(segment.id)}
-                  >
-                    {segmentSummary(segment, tagsById)}
-                  </button>
-                ) : (
-                  <p className='text-sm text-espresso'>{segmentSummary(segment, tagsById)}</p>
-                )}
-              </div>
-              <Button type='button' variant='ghost' className='h-6 w-6 shrink-0 p-0 text-clay' aria-label='Remove segment' onClick={() => removeSegment(segment.id)}>
-                <X className='h-3.5 w-3.5' aria-hidden='true' />
-              </Button>
-            </div>
-          ))}
-        </div>
-        <div className='flex flex-wrap gap-2 pt-1'>
-          <Button type='button' size='sm' variant='outline' onClick={() => addSegment({ id: createSegmentId(), type: 'text', text: '' })}>
-            <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Text
-          </Button>
-          <Button type='button' size='sm' variant='outline' onClick={() => addSegment({ id: createSegmentId(), type: 'lineBreak' })}>
-            <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Line break
-          </Button>
-          <Button type='button' size='sm' variant='outline' onClick={() => setPickerOpen(true)}>
-            <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Variable
-          </Button>
-        </div>
+        <FormatPatternEditor
+          initialPatternText={form.patternText}
+          initialVariables={form.variables}
+          tags={tags}
+          groups={groups}
+          onChange={(patternText, variables) => setForm((previous) => ({ ...previous, patternText, variables }))}
+        />
       </div>
 
       <div className='space-y-1'>
@@ -525,69 +743,6 @@ const TemplateEditor = ({
         <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
         <Button type='button' disabled={!form.name.trim()} onClick={() => onSave(form)}>Save</Button>
       </div>
-
-      <VariablePickerDialog
-        open={pickerOpen}
-        onClose={() => setPickerOpen(false)}
-        onPickFlat={(variableId) => {
-          addSegment({ id: createSegmentId(), type: 'flatVariable', variableId })
-          setPickerOpen(false)
-        }}
-        onPickTags={() => {
-          setPickerOpen(false)
-          setEditingTagsSegmentId(null)
-          setTagsDialogOpen(true)
-        }}
-        onPickBlock={(variableId) => {
-          setPickerOpen(false)
-          setEditingBlockSegmentId(null)
-          setPendingBlockVariable(variableId)
-        }}
-      />
-
-      <BlockVariableConfigDialog
-        open={pendingBlockVariable !== null}
-        variableId={pendingBlockVariable}
-        initialConfig={currentEditingBlockConfig}
-        onCancel={() => { setPendingBlockVariable(null); setEditingBlockSegmentId(null) }}
-        onSave={(config) => {
-          if (pendingBlockVariable === null) return
-          if (editingBlockSegmentId !== null) {
-            setForm((previous) => ({
-              ...previous,
-              segments: previous.segments.map((segment) =>
-                segment.id === editingBlockSegmentId && segment.type === 'blockVariable' ? { ...segment, config } : segment,
-              ),
-            }))
-          } else {
-            addSegment({ id: createSegmentId(), type: 'blockVariable', variableId: pendingBlockVariable, config })
-          }
-          setPendingBlockVariable(null)
-          setEditingBlockSegmentId(null)
-        }}
-      />
-
-      <TagsVariableConfigDialog
-        open={tagsDialogOpen}
-        initialConfig={currentEditingTagsConfig}
-        tags={tags}
-        groups={groups}
-        onCancel={() => { setTagsDialogOpen(false); setEditingTagsSegmentId(null) }}
-        onSave={(config) => {
-          if (editingTagsSegmentId !== null) {
-            setForm((previous) => ({
-              ...previous,
-              segments: previous.segments.map((segment) =>
-                segment.id === editingTagsSegmentId && segment.type === 'tagsVariable' ? { ...segment, config } : segment,
-              ),
-            }))
-          } else {
-            addSegment({ id: createSegmentId(), type: 'tagsVariable', config })
-          }
-          setTagsDialogOpen(false)
-          setEditingTagsSegmentId(null)
-        }}
-      />
     </div>
   )
 }
@@ -605,7 +760,6 @@ export const ManageTemplatesScreen = ({
 }) => {
   const [editingTemplateId, setEditingTemplateId] = useState<number | 'new' | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ReportTemplate | null>(null)
-  const tagsById = useMemo(() => new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag])), [tags])
   const ordered = useMemo(() => [...templates].sort((a, b) => a.sortOrder - b.sortOrder), [templates])
 
   const editingTemplate = editingTemplateId === 'new' || editingTemplateId === null
@@ -616,19 +770,38 @@ export const ManageTemplatesScreen = ({
     const name = form.name.trim()
     if (!name) return
     if (editingTemplateId !== 'new' && editingTemplateId !== null) {
-      await db.reportTemplates.update(editingTemplateId, { name, segments: form.segments })
+      await db.reportTemplates.update(editingTemplateId, { name, patternText: form.patternText, variables: form.variables })
     } else {
       const nextSortOrder = templates.length > 0 ? Math.max(...templates.map((template) => template.sortOrder)) + 1 : 0
-      await db.reportTemplates.add({ name, segments: form.segments, sortOrder: nextSortOrder, createdAt: new Date().toISOString() })
+      await db.reportTemplates.add({ name, patternText: form.patternText, variables: form.variables, sortOrder: nextSortOrder, createdAt: new Date().toISOString() })
     }
     setEditingTemplateId(null)
   }
 
   const duplicateTemplate = async (template: ReportTemplate) => {
     const nextSortOrder = templates.length > 0 ? Math.max(...templates.map((t) => t.sortOrder)) + 1 : 0
+    // Regenerate every variable id (and rewrite the pattern's tokens to match) so the duplicate's
+    // chips are fully independent of the original's — editing one can never affect the other.
+    const idMap = new Map<string, string>()
+    const nextVariables: Record<string, TemplateVariableInstance> = {}
+    Object.entries(template.variables).forEach(([oldId, instance]) => {
+      const newId = createVariableId()
+      idMap.set(oldId, newId)
+      nextVariables[newId] = instance
+    })
+    const nextPatternText = tokenizePatternText(template.patternText)
+      .map((part) => {
+        if (part.type === 'text') return part.text
+        if (part.type === 'lineBreak') return '\n'
+        const newId = idMap.get(part.id)
+        return newId ? buildVariableToken(newId) : ''
+      })
+      .join('')
+
     const newId = await db.reportTemplates.add({
       name: `${template.name} (Copy)`,
-      segments: template.segments.map((segment) => ({ ...segment, id: createSegmentId() })),
+      patternText: nextPatternText,
+      variables: nextVariables,
       sortOrder: nextSortOrder,
       createdAt: new Date().toISOString(),
     })
@@ -719,7 +892,6 @@ export const ManageTemplatesScreen = ({
             initial={editingTemplate ? templateToForm(editingTemplate) : blankForm()}
             tags={tags}
             groups={groups}
-            tagsById={tagsById}
             onCancel={() => setEditingTemplateId(null)}
             onSave={(form) => void saveTemplate(form)}
           />

@@ -6,9 +6,12 @@ import { seedDefaultCustomActions } from './features/customActions/customActionC
 import { splitCombinedRoomValue } from './lib/roomSplit'
 import { buildDefaultReportTemplates } from './features/templates/templateDefaults'
 import type {
+  BlockVariableConfig,
+  BlockVariableId,
   CustomAction,
   CustomActionRun,
   DailyUpdate,
+  FlatVariableId,
   LabEntry,
   MedicationEntry,
   OrderEntry,
@@ -19,6 +22,8 @@ import type {
   TagDefinition,
   TagEvent,
   TagGroupDefinition,
+  TagsVariableConfig,
+  TemplateVariableInstance,
   VitalEntry,
 } from './types'
 
@@ -639,6 +644,72 @@ db.version(16).stores({
   // install gets, since an existing database never had any.
   const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
   await reportTemplateTable.bulkAdd(buildDefaultReportTemplates(new Date().toISOString()))
+})
+
+type LegacyTemplateSegment =
+  | { id: string; type: 'text'; text: string }
+  | { id: string; type: 'lineBreak' }
+  | { id: string; type: 'flatVariable'; variableId: string }
+  | { id: string; type: 'blockVariable'; variableId: string; config: unknown }
+  | { id: string; type: 'tagsVariable'; config: unknown }
+
+db.version(17).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Replaces the Format Pattern's array-of-segments shape with a single freeform text string
+  // carrying `{{var:<id>}}` placeholder tokens, so the editor can be a real type-anywhere text
+  // field (with inline variable "chips") instead of a list of discrete, reorderable rows. Each
+  // segment's own id is reused verbatim as its token id, so no data is renumbered — just
+  // reshaped: text/lineBreak segments become literal characters, variable segments become a
+  // token plus an entry in the new `variables` map.
+  const reportTemplateTable = tx.table<ReportTemplate & { segments?: LegacyTemplateSegment[] }, number>('reportTemplates')
+  const legacyRows = await reportTemplateTable.toArray()
+
+  for (const row of legacyRows) {
+    if (row.id === undefined || !Array.isArray(row.segments)) continue
+
+    const variables: Record<string, TemplateVariableInstance> = {}
+    const parts: string[] = []
+    for (const segment of row.segments) {
+      if (segment.type === 'text') {
+        parts.push(segment.text)
+      } else if (segment.type === 'lineBreak') {
+        parts.push('\n')
+      } else if (segment.type === 'flatVariable') {
+        variables[segment.id] = { kind: 'flat', variableId: segment.variableId as FlatVariableId }
+        parts.push(`{{var:${segment.id}}}`)
+      } else if (segment.type === 'blockVariable') {
+        variables[segment.id] = {
+          kind: 'block',
+          variableId: segment.variableId as BlockVariableId,
+          config: segment.config as BlockVariableConfig,
+        }
+        parts.push(`{{var:${segment.id}}}`)
+      } else if (segment.type === 'tagsVariable') {
+        variables[segment.id] = { kind: 'tags', config: segment.config as TagsVariableConfig }
+        parts.push(`{{var:${segment.id}}}`)
+      }
+    }
+
+    await reportTemplateTable.update(row.id, {
+      patternText: parts.join(''),
+      variables,
+    })
+  }
 })
 
 export { db }

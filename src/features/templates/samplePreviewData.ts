@@ -1,4 +1,4 @@
-import { buildCurrentDateTimeText, createSegmentId, type TemplateRenderContext } from './templateEngine'
+import { buildCurrentDateTimeText, createVariableId, type TemplateRenderContext } from './templateEngine'
 import type { DailyUpdate, LabEntry, OrderEntry, Patient, VitalEntry } from '@/types'
 
 /** Synthetic patient used only for the template editor's live preview — deliberately decoupled
@@ -56,7 +56,7 @@ const SAMPLE_DAILY_UPDATES: DailyUpdate[] = [
     id: -1,
     patientId: -999,
     date: '2026-01-02',
-    problems: [{ id: createSegmentId(), title: 'Sample problem', notes: 'Sample notes for preview', completed: false }],
+    problems: [{ id: createVariableId(), title: 'Sample problem', notes: 'Sample notes for preview', completed: false }],
     assessment: '',
     plans: '',
     checklist: [{ text: 'Sample checklist item', completed: false }],

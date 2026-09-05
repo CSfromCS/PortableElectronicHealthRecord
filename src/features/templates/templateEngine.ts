@@ -16,7 +16,7 @@ import type {
   TagDefinition,
   TagGroupDefinition,
   TagsVariableConfig,
-  TemplateSegment,
+  TemplateVariableInstance,
   VitalEntry,
 } from '@/types'
 
@@ -56,9 +56,44 @@ export const PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE: Patient = {
   tagIds: [],
 }
 
-export const createSegmentId = (): string => {
+export const createVariableId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-  return `seg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return `var-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** Matches a `{{var:<id>}}` placeholder token embedded in `ReportTemplate.patternText` — same
+ * "special syntax embedded in plain text" approach as this app's existing @-mention text fields
+ * (see photoMentions.tsx), just with its own delimiter so it can't collide with literal `@text`. */
+const VARIABLE_TOKEN_REGEX = /\{\{var:([a-zA-Z0-9_-]+)\}\}/g
+
+export const buildVariableToken = (id: string): string => `{{var:${id}}}`
+
+export type PatternPart =
+  | { type: 'text'; text: string }
+  | { type: 'lineBreak' }
+  | { type: 'variableRef'; id: string }
+
+/** Splits raw `patternText` into an ordered list of literal-text runs, line breaks (each `\n`),
+ * and variable references (by id, not yet resolved to a value or a display label) — the one parser
+ * shared by both the render engine (id -> resolved value) and the editor (id -> chip label). */
+export const tokenizePatternText = (patternText: string): PatternPart[] => {
+  const parts: PatternPart[] = []
+  const lines = patternText.split('\n')
+
+  lines.forEach((line, lineIndex) => {
+    if (lineIndex > 0) parts.push({ type: 'lineBreak' })
+
+    let lastIndex = 0
+    for (const match of line.matchAll(VARIABLE_TOKEN_REGEX)) {
+      const index = match.index ?? 0
+      if (index > lastIndex) parts.push({ type: 'text', text: line.slice(lastIndex, index) })
+      parts.push({ type: 'variableRef', id: match[1] })
+      lastIndex = index + match[0].length
+    }
+    if (lastIndex < line.length) parts.push({ type: 'text', text: line.slice(lastIndex) })
+  })
+
+  return parts
 }
 
 export const DEFAULT_BLOCK_VARIABLE_CONFIG: BlockVariableConfig = {
@@ -282,24 +317,28 @@ type ResolvedSegment =
   | { kind: 'lineBreak' }
   | { kind: 'value'; text: string; blank: boolean }
 
-const resolveSegmentValue = (segment: TemplateSegment, patient: Patient, ctx: TemplateRenderContext): ResolvedSegment => {
-  switch (segment.type) {
-    case 'text': return { kind: 'text', text: segment.text }
-    case 'lineBreak': return { kind: 'lineBreak' }
-    case 'flatVariable': {
-      const text = resolveFlatVariable(segment.variableId, patient, ctx)
-      return { kind: 'value', text, blank: text.trim() === '' }
-    }
-    case 'blockVariable': {
-      const text = resolveBlockVariable(segment.variableId, segment.config, patient, ctx)
-      return { kind: 'value', text, blank: text.trim() === '' }
-    }
-    case 'tagsVariable': {
-      const text = resolveTagsVariable(segment.config, patient, ctx)
-      return { kind: 'value', text, blank: text.trim() === '' }
-    }
-    default: return { kind: 'text', text: '' }
-  }
+const resolveVariableInstance = (instance: TemplateVariableInstance, patient: Patient, ctx: TemplateRenderContext): string => {
+  if (instance.kind === 'flat') return resolveFlatVariable(instance.variableId, patient, ctx)
+  if (instance.kind === 'block') return resolveBlockVariable(instance.variableId, instance.config, patient, ctx)
+  return resolveTagsVariable(instance.config, patient, ctx)
+}
+
+const resolvePatternPart = (
+  part: PatternPart,
+  variables: Record<string, TemplateVariableInstance>,
+  patient: Patient,
+  ctx: TemplateRenderContext,
+): ResolvedSegment => {
+  if (part.type === 'text') return { kind: 'text', text: part.text }
+  if (part.type === 'lineBreak') return { kind: 'lineBreak' }
+
+  const instance = variables[part.id]
+  // A stale/missing variable id (shouldn't normally happen — the editor is the only thing that
+  // writes tokens) degrades to literal token text rather than silently vanishing.
+  if (!instance) return { kind: 'text', text: buildVariableToken(part.id) }
+
+  const text = resolveVariableInstance(instance, patient, ctx)
+  return { kind: 'value', text, blank: text.trim() === '' }
 }
 
 /** Point 3 of issue #82: a blank variable collapses itself AND any literal text immediately
@@ -346,7 +385,8 @@ const renderResolvedSegments = (resolved: ResolvedSegment[]): string => {
 }
 
 export const renderTemplateForPatient = (template: ReportTemplate, patient: Patient, ctx: TemplateRenderContext): string => {
-  const resolved = template.segments.map((segment) => resolveSegmentValue(segment, patient, ctx))
+  const parts = tokenizePatternText(template.patternText)
+  const resolved = parts.map((part) => resolvePatternPart(part, template.variables, patient, ctx))
   return renderResolvedSegments(collapseBlanks(resolved))
 }
 
@@ -360,6 +400,12 @@ const PATIENT_DEPENDENT_FLAT_VARIABLES = new Set<FlatVariableId>([
 
 export type TemplateRepeatMode = 'per-patient' | 'prints-once'
 
+const isPatientDependentInstance = (instance: TemplateVariableInstance): boolean => {
+  if (instance.kind === 'block') return true
+  if (instance.kind === 'tags') return true
+  return PATIENT_DEPENDENT_FLAT_VARIABLES.has(instance.variableId)
+}
+
 /**
  * Point 2 (Template Repeat Mode) of issue #82, simplified for this PR: Template variables (and
  * therefore their per-patient/multi-patient distinction) are deferred to a follow-up, so this
@@ -369,14 +415,33 @@ export type TemplateRepeatMode = 'per-patient' | 'prints-once'
  * whenever the Format Pattern changes; never set it manually.
  */
 export const classifyTemplateRepeatMode = (template: ReportTemplate): TemplateRepeatMode => {
-  const hasPatientDependentSegment = template.segments.some((segment) => {
-    if (segment.type === 'blockVariable') return true
-    if (segment.type === 'tagsVariable') return true
-    if (segment.type === 'flatVariable') return PATIENT_DEPENDENT_FLAT_VARIABLES.has(segment.variableId)
-    return false
+  const usedIds = new Set<string>()
+  for (const match of template.patternText.matchAll(VARIABLE_TOKEN_REGEX)) usedIds.add(match[1])
+
+  const hasPatientDependentVariable = [...usedIds].some((id) => {
+    const instance = template.variables[id]
+    return instance !== undefined && isPatientDependentInstance(instance)
   })
-  return hasPatientDependentSegment ? 'per-patient' : 'prints-once'
+  return hasPatientDependentVariable ? 'per-patient' : 'prints-once'
 }
+
+/** Human-readable label for a variable chip/summary — used by the editor and the variable picker. */
+export const describeVariableInstance = (instance: TemplateVariableInstance): string => {
+  if (instance.kind === 'flat') return FLAT_VARIABLE_LABELS[instance.variableId]
+  if (instance.kind === 'block') return `${BLOCK_VARIABLE_LABELS[instance.variableId]} — ${describeBlockConfig(instance.config)}`
+  return describeTagsConfig(instance.config)
+}
+
+export const describeBlockConfig = (config: BlockVariableConfig): string => {
+  if (config.rangeMode === 'latest') return 'Latest'
+  if (config.rangeMode === 'numberOfEntries') return `Last ${config.entryCount} entries`
+  if (config.relativeMode === 'sinceAdmission') return 'Since Admission Date'
+  if (config.relativeMode === 'lastNDays') return `Last ${config.lastNDays} days`
+  return `${config.fixedDateFrom || '…'} to ${config.fixedDateTo || '…'}`
+}
+
+export const describeTagsConfig = (config: TagsVariableConfig): string =>
+  config.includeAll ? 'Tags (all)' : `Tags (${config.tagIds.length + config.groupIds.length} selected)`
 
 export const FLAT_VARIABLE_LABELS: Record<FlatVariableId, string> = {
   roomNumber: 'Room Number',

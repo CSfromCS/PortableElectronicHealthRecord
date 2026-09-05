@@ -309,19 +309,27 @@ export interface TagsVariableConfig {
   emojiRendering: 'emoji' | 'name'
 }
 
-export type TemplateSegment =
-  | { id: string; type: 'text'; text: string }
-  | { id: string; type: 'lineBreak' }
-  | { id: string; type: 'flatVariable'; variableId: FlatVariableId }
-  | { id: string; type: 'blockVariable'; variableId: BlockVariableId; config: BlockVariableConfig }
-  | { id: string; type: 'tagsVariable'; config: TagsVariableConfig }
+/** What a single `{{var:<id>}}` token in `ReportTemplate.patternText` resolves to — looked up by
+ * the id embedded in the token, not by position, so editing the surrounding text never disturbs a
+ * variable's own settings. */
+export type TemplateVariableInstance =
+  | { kind: 'flat'; variableId: FlatVariableId }
+  | { kind: 'block'; variableId: BlockVariableId; config: BlockVariableConfig }
+  | { kind: 'tags'; config: TagsVariableConfig }
 
-/** A user-defined, savable report format (issue #82). `segments` is the single source of truth for
- * both content and spacing — there is no separate field list plus separator setting. */
+/**
+ * A user-defined, savable report format (issue #82). `patternText` is the single source of truth
+ * for both content and spacing — literal text and line breaks (`\n`) typed directly, the same as
+ * any other free-text field in this app, with a variable placeholder marked inline as
+ * `{{var:<id>}}` wherever the user inserted one via "Add Variable". `variables` holds that
+ * placeholder's actual settings, keyed by the same id — there is no separate field-list-plus-
+ * separator setting; the pattern text itself controls both content and spacing.
+ */
 export interface ReportTemplate {
   id?: number
   name: string
-  segments: TemplateSegment[]
+  patternText: string
+  variables: Record<string, TemplateVariableInstance>
   sortOrder: number
   createdAt: string
 }
