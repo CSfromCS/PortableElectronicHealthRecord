@@ -17,14 +17,18 @@ import {
   getEffectiveAdmitDate,
   isWithinDateTimeWindow,
   parseNumericInput,
+  resolveEffectiveTime,
   toDateTimeStamp,
 } from '@/lib/dateTime'
+import { composeDiagnosisText } from '@/features/patients/serviceDiagnosis'
+import { formatAgeSex, formatFullName, joinNonBlank } from '@/lib/patientIdentity'
 import type {
   LabEntry,
   MedicationEntry,
   OrderEntry,
   Patient,
   ProblemBlock,
+  TagDefinition,
   VitalEntry,
 } from '@/types'
 
@@ -36,7 +40,10 @@ type ReportWindow = {
 }
 
 type ProfileSummaryInput = {
-  diagnosis: string
+  admissionDiagnosisUnassigned: string
+  admissionDiagnosisByService: Record<number, string>
+  dischargeDiagnosisUnassigned: string
+  dischargeDiagnosisByService: Record<number, string>
   database: string
 }
 
@@ -49,7 +56,7 @@ type DailySummaryInput = {
 
 const labTemplatesById = new Map(LAB_TEMPLATES.map((template) => [template.id, template] as const))
 
-const formatPatientHeader = (patient: Patient) => `${patient.roomNumber} - ${patient.lastName.toUpperCase()}, ${patient.firstName}`
+const formatPatientHeader = (patient: Patient) => joinNonBlank([patient.roomNumber, formatFullName(patient)], ' - ')
 
 const formatStructuredMedication = (entry: MedicationEntry) => {
   const base = [entry.medication, entry.dose, entry.route, entry.frequency].filter(Boolean).join(' ')
@@ -264,6 +271,7 @@ export const toCensusEntry = (
   labEntries: LabEntry[],
   orderEntries: OrderEntry[],
   tagDisplayStrings: string[] = [],
+  tagsById: Map<number, TagDefinition> = new Map(),
 ) => {
   const activeStructuredMeds = medicationEntries
     .filter((entry) => entry.status === 'active')
@@ -286,10 +294,12 @@ export const toCensusEntry = (
     .filter(Boolean)
     .join('; ')
 
+  const diagnosis = composeDiagnosisText(patient, patient.admissionDiagnosisUnassigned, patient.admissionDiagnosisByService, tagsById)
+
   return [
-    `${patient.roomNumber} ${patient.lastName}, ${patient.firstName} ${patient.age}/${patient.sex}`,
+    joinNonBlank([patient.roomNumber, formatFullName(patient), formatAgeSex(patient)], ' '),
     tagDisplayStrings.length > 0 ? `Tags: ${tagDisplayStrings.join(', ')}` : '',
-    patient.diagnosis,
+    diagnosis,
     `Labs: ${labsCombined || '-'}`,
     `Meds: ${medsCombined || '-'}`,
     `Orders: ${activeOrders || '-'}`,
@@ -341,7 +351,7 @@ export const toSelectedPatientCensusReport = (
       if (a.orderTime !== b.orderTime) return a.orderTime.localeCompare(b.orderTime)
       return a.createdAt.localeCompare(b.createdAt)
     })
-  const diagnosis = diagnosisText.trim() || patient.diagnosis.trim() || '-'
+  const diagnosis = diagnosisText.trim() || '-'
   const vitalsLines = scopedVitals.map((entry) => {
     const base = `${formatDateMMDD(entry.date)} ${formatClockCompact(entry.time)} ${entry.bp.trim()} ${entry.hr.trim()} ${entry.rr.trim()} ${entry.temp.trim()} ${entry.spo2.trim()}`
     return entry.note.trim() ? `${base} ${entry.note.trim()}` : base
@@ -354,8 +364,8 @@ export const toSelectedPatientCensusReport = (
   const vitalsWindowLabel = `Vitals (From ${formatDateMMDDYYYY(vitalsWindow.dateFrom)}, ${formatClock(vitalsWindow.timeFrom)}, Until ${formatDateMMDDYYYY(vitalsWindow.dateTo)}, ${formatClock(vitalsWindow.timeTo)})`
 
   return [
-    `${patient.roomNumber} – ${patient.lastName.toUpperCase()}, ${patient.firstName}`,
-    `${patient.age} / ${patient.sex}`,
+    joinNonBlank([patient.roomNumber, formatFullName(patient)], ' – '),
+    formatAgeSex(patient),
     diagnosis,
     '',
     'Labs',
@@ -372,24 +382,29 @@ export const toSelectedPatientCensusReport = (
 export const toProfileSummary = (
   patient: Patient,
   profile: ProfileSummaryInput,
+  tagsById: Map<number, TagDefinition>,
   tagDisplayStrings: string[] = [],
   mainServiceNames: string[] = [],
   referralServiceNames: string[] = [],
 ) => {
-  const diagnosis = profile.diagnosis.trim() || patient.diagnosis.trim() || '-'
+  const admissionDiagnosis = composeDiagnosisText(patient, profile.admissionDiagnosisUnassigned, profile.admissionDiagnosisByService, tagsById) || '-'
+  const dischargeDiagnosis = composeDiagnosisText(patient, profile.dischargeDiagnosisUnassigned, profile.dischargeDiagnosisByService, tagsById)
   const notes = (profile.database || patient.database || '').trim()
   const wardLine = patient.ward ? `Room: ${patient.roomNumber} (${patient.ward})` : `Room: ${patient.roomNumber}`
+  const admitTimeText = formatClock(resolveEffectiveTime(patient.admitTime, patient.createdAt))
+  const referralTimeText = formatClock(resolveEffectiveTime(patient.referralTime, patient.createdAt))
 
   const lines = [
     formatPatientHeader(patient),
-    `${patient.age} / ${patient.sex}`,
+    formatAgeSex(patient),
     ...(tagDisplayStrings.length > 0 ? [`Tags: ${tagDisplayStrings.join(', ')}`] : []),
     wardLine,
-    `Admission Date: ${getEffectiveAdmitDate(patient.admitDate, patient.createdAt)}`,
-    `Referral Date: ${patient.referralDate || '-'}`,
+    `Admission Date: ${getEffectiveAdmitDate(patient.admitDate, patient.createdAt)} ${admitTimeText}`,
+    `Referral Date: ${patient.referralDate ? `${patient.referralDate} ${referralTimeText}` : '-'}`,
     `Main Service: ${mainServiceNames.length > 0 ? mainServiceNames.join(', ') : '-'}`,
     `Referrals: ${referralServiceNames.length > 0 ? referralServiceNames.join(', ') : '-'}`,
-    `Dx: ${diagnosis}`,
+    `Dx: ${admissionDiagnosis}`,
+    ...(dischargeDiagnosis ? [`Discharge Dx: ${dischargeDiagnosis}`] : []),
   ]
 
   if (notes) {
@@ -512,7 +527,8 @@ export const toOrdersSummary = (patient: Patient, orderEntries: OrderEntry[], or
 }
 
 export const toMedicationsSummary = (patient: Patient, medicationEntries: MedicationEntry[]) => {
-  const lines = [`MEDICATIONS — ${patient.lastName} (${patient.roomNumber})`]
+  const patientLabel = patient.roomNumber ? joinNonBlank([patient.lastName, `(${patient.roomNumber})`], ' ') : patient.lastName
+  const lines = [joinNonBlank(['MEDICATIONS', patientLabel], ' — ')]
   const active = medicationEntries.filter((m) => m.status === 'active')
   const inactive = medicationEntries.filter((m) => m.status !== 'active')
 

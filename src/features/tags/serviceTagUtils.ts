@@ -1,5 +1,6 @@
 import { db } from '@/db'
 import type { Patient, TagDefinition, TagGroupDefinition } from '@/types'
+import { migrateUnassignedDiagnosisOnFirstService } from '@/features/patients/serviceDiagnosis'
 import { SERVICE_TAG_GROUP_NAME } from './tagConstants'
 import { findServiceTagByName } from './serviceTagParsing'
 
@@ -48,6 +49,7 @@ export const addMainServiceTagToPatient = async (patient: Patient, tag: TagDefin
   await db.patients.update(patient.id, {
     mainServiceTagIds: withUniqueId(patient.mainServiceTagIds ?? [], tag.id),
     lastModified: new Date().toISOString(),
+    ...migrateUnassignedDiagnosisOnFirstService(patient, tag.id),
   })
 }
 
@@ -64,6 +66,7 @@ export const addReferralServiceTagToPatient = async (patient: Patient, tag: TagD
   await db.patients.update(patient.id, {
     referralServiceTagIds: withUniqueId(patient.referralServiceTagIds ?? [], tag.id),
     lastModified: new Date().toISOString(),
+    ...migrateUnassignedDiagnosisOnFirstService(patient, tag.id),
   })
 }
 

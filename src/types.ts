@@ -10,19 +10,31 @@ export interface Patient {
   lastName: string
   firstName: string
   middleName?: string
-  age: number
+  /** Blank (unset) when the user hasn't entered an age, rather than defaulting to 0. */
+  age?: number
   sex: 'M' | 'F' | 'O'
   /** User-typed override only — unset (blank) by default. While unset, the UI displays (but does not persist) `createdAt`'s date. */
   admitDate: string
+  /** User-typed override only — unset (blank) by default. While unset, the UI displays (but does not persist) `createdAt`'s time. */
+  admitTime: string
   /** User-typed override only — unset (blank) by default. While unset, the UI displays (but does not persist) `createdAt`'s date. Only shown in the UI once a "Referral" tag is applied to the patient. */
   referralDate: string
+  /** User-typed override only — unset (blank) by default. While unset, the UI displays (but does not persist) `createdAt`'s time. Only shown in the UI once a "Referral" tag is applied to the patient. */
+  referralTime: string
   /** User-typed override only — unset by default. While unset, the UI displays (but does not persist) the date the patient's current Terminal-flagged tag was applied, computed from Tag Event history. Only shown in the UI while a terminal tag is currently attached. */
   dischargeDate?: string
+  /** User-typed override only — unset by default. While unset, the UI displays (but does not persist) the time the patient's current Terminal-flagged tag was applied, computed from Tag Event history. Only shown in the UI while a terminal tag is currently attached. */
+  dischargeTime?: string
   /** References to TagDefinition rows in the "Service" tag group. Kept separate from the general `tagIds` because the same service tag pool is split into Main vs Referral roles per patient. */
   mainServiceTagIds: number[]
   referralServiceTagIds: number[]
   attendingPhysician: string
-  diagnosis: string
+  /** Diagnosis text with no service tag assigned to it — the only diagnosis field shown while the patient has zero Main/Referral services. Once at least one service exists, the per-service fields below take over and this holds whatever text predates the patient's first-ever service (see `admissionDiagnosisByService`). */
+  admissionDiagnosisUnassigned: string
+  /** One line per assigned service (Main then Referral, in the order each was added), keyed by that service TagDefinition's id — renders as e.g. "IM: AKI secondary to postrenal obstructive uropathy". A service's entry is kept even after the service tag is removed from the patient, so it reappears if the same service is re-added. */
+  admissionDiagnosisByService: Record<number, string>
+  dischargeDiagnosisUnassigned: string
+  dischargeDiagnosisByService: Record<number, string>
   clinicalSummary: string
   /** Unstructured scratch pad — merges the legacy Chief Complaint / HPI / PMH / PE / Clerk notes fields into a single free-text area (Database tab). */
   database: string

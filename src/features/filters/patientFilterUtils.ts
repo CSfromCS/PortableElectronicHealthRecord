@@ -1,4 +1,4 @@
-import { toLocalISODate, toLocalTime, isWithinDateTimeWindow, getEffectiveAdmitDate, formatDateMMDD, formatClock } from '@/lib/dateTime'
+import { toLocalISODate, toLocalTime, isWithinDateTimeWindow, getEffectiveAdmitDate, resolveEffectiveDate, resolveEffectiveTime, formatDateMMDD, formatClock } from '@/lib/dateTime'
 import { getAppliedPatientTags } from '@/features/tags/tagUtils'
 import type { Patient, TagDefinition, TagEvent } from '@/types'
 
@@ -150,29 +150,52 @@ export const buildPatientPoolContext = (tagsById: Map<number, TagDefinition>, ta
 const matchesActive = (patient: Patient, context: PatientPoolContext): boolean =>
   getAppliedPatientTags(patient, context.tagsById).every((tag) => !tag.terminal)
 
+/** Admitted is a pure field-based check — every patient always has an effective Admission
+ * Date+Time (falling back to when the profile was created), so unlike Referred/Discharged it
+ * needs no "does this even apply to this patient" precondition. */
 const matchesAdmitted = (patient: Patient, window: DateTimeWindow | null): boolean => {
   if (!window) return true
-  const admitDate = getEffectiveAdmitDate(patient.admitDate, patient.createdAt)
-  return admitDate >= window.dateFrom && admitDate <= window.dateTo
+  const effectiveDate = getEffectiveAdmitDate(patient.admitDate, patient.createdAt)
+  const effectiveTime = resolveEffectiveTime(patient.admitTime, patient.createdAt)
+  return isWithinDateTimeWindow(effectiveDate, effectiveTime, window.dateFrom, window.dateTo, window.timeFrom, window.timeTo)
 }
 
+/** Discharged still requires a Terminal-flagged tag currently applied — unlike Admitted/Referred,
+ * "discharged" isn't something every patient eventually has, so a stale/defaulted date+time alone
+ * can't imply it. When a window is set, narrows further using Discharge Date+Time (falling back
+ * to the currently-applied terminal tag's most recent "added" event when either field is blank —
+ * the same source Discharge Date/Time's own UI default already reads from). */
 const matchesDischarged = (patient: Patient, context: PatientPoolContext, window: DateTimeWindow | null): boolean => {
   if (patient.id === undefined) return false
   const appliedTerminalTags = getAppliedPatientTags(patient, context.tagsById).filter((tag) => tag.terminal)
   if (appliedTerminalTags.length === 0) return false
   if (!window) return true
 
-  return appliedTerminalTags.some((tag) => {
-    if (tag.id === undefined) return false
-    const latest = latestTagEvent(patient.id as number, tag.id, context.tagEvents)
-    return latest !== null && latest.action === 'added' && isTimestampWithinWindow(latest.at, window)
-  })
+  const latestTerminalEventAt = appliedTerminalTags.reduce<string | null>((latest, tag) => {
+    if (tag.id === undefined) return latest
+    const event = latestTagEvent(patient.id as number, tag.id, context.tagEvents)
+    if (event === null || event.action !== 'added') return latest
+    return latest === null || event.at > latest ? event.at : latest
+  }, null)
+  const fallbackAt = latestTerminalEventAt ?? patient.createdAt
+
+  const effectiveDate = resolveEffectiveDate(patient.dischargeDate ?? '', fallbackAt)
+  const effectiveTime = resolveEffectiveTime(patient.dischargeTime ?? '', fallbackAt)
+  return isWithinDateTimeWindow(effectiveDate, effectiveTime, window.dateFrom, window.dateTo, window.timeFrom, window.timeTo)
 }
 
+/** Referred requires the Referral tag currently applied — same reasoning as Discharged above:
+ * Referral Date/Time always resolves to SOME effective value (falling back to profile creation
+ * time), so without this precondition every patient would spuriously match once that fallback
+ * happened to land inside the window. Narrows using Referral Date+Time when a window is set. */
 const matchesReferred = (patient: Patient, context: PatientPoolContext, window: DateTimeWindow | null): boolean => {
   if (patient.id === undefined || context.referralTagId === null) return false
-  if (!window) return (patient.tagIds ?? []).includes(context.referralTagId)
-  return wasTagEventAddedWithinWindow(patient.id, context.referralTagId, context.tagEvents, window)
+  if (!(patient.tagIds ?? []).includes(context.referralTagId)) return false
+  if (!window) return true
+
+  const effectiveDate = resolveEffectiveDate(patient.referralDate, patient.createdAt)
+  const effectiveTime = resolveEffectiveTime(patient.referralTime, patient.createdAt)
+  return isWithinDateTimeWindow(effectiveDate, effectiveTime, window.dateFrom, window.dateTo, window.timeFrom, window.timeTo)
 }
 
 const matchesMgh = (patient: Patient, context: PatientPoolContext, window: DateTimeWindow | null): boolean => {

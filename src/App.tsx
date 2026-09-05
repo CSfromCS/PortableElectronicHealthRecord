@@ -78,6 +78,12 @@ import {
   toSelectedPatientsVitalsSummary,
   toVitalsLogSummary,
 } from './features/reporting/reportBuilders'
+import { formatAgeSex, formatFullName, formatRoomWard, joinNonBlank } from './lib/patientIdentity'
+import {
+  composeDiagnosisText,
+  migrateUnassignedDiagnosisOnFirstService,
+} from './features/patients/serviceDiagnosis'
+import { ServiceDiagnosisFields } from './features/patients/ServiceDiagnosisFields'
 import {
   ABG_ACTUAL_FIO2_KEY,
   ABG_DESIRED_FIO2_KEY,
@@ -236,9 +242,15 @@ type ProfileFormState = {
   age: string
   sex: 'M' | 'F' | 'O'
   admitDate: string
+  admitTime: string
   referralDate: string
+  referralTime: string
   dischargeDate: string
-  diagnosis: string
+  dischargeTime: string
+  admissionDiagnosisUnassigned: string
+  admissionDiagnosisByService: Record<number, string>
+  dischargeDiagnosisUnassigned: string
+  dischargeDiagnosisByService: Record<number, string>
   clinicalSummary: string
   database: string
   plans: string
@@ -256,9 +268,15 @@ const initialProfileForm: ProfileFormState = {
   age: '',
   sex: 'M',
   admitDate: '',
+  admitTime: '',
   referralDate: '',
+  referralTime: '',
   dischargeDate: '',
-  diagnosis: '',
+  dischargeTime: '',
+  admissionDiagnosisUnassigned: '',
+  admissionDiagnosisByService: {},
+  dischargeDiagnosisUnassigned: '',
+  dischargeDiagnosisByService: {},
   clinicalSummary: '',
   database: '',
   plans: '',
@@ -629,6 +647,10 @@ function App() {
   // can't retroactively change the collapse default for a segment the user is already looking
   // at. Resets naturally on a fresh app open (new component instance).
   const tagsCollapseDefaultSeedRef = useRef<Map<number, boolean>>(new Map())
+  // Same sticky-per-session collapse mechanism as Tags above, for the Room/Ward/Name/Age/Sex
+  // demographics header.
+  const [demographicsEditOverrideByPatientId, setDemographicsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
+  const demographicsCollapseDefaultSeedRef = useRef<Map<number, boolean>>(new Map())
   const [searchQuery, setSearchQuery] = useState('')
   const [isAddPatientCollapsed, setIsAddPatientCollapsed] = useState(() => loadAddPatientCollapsed())
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
@@ -684,6 +706,7 @@ function App() {
     return () => window.clearInterval(interval)
   }, [])
   const [profileForm, setProfileForm] = useState<ProfileFormState>(initialProfileForm)
+  const [diagnosisSubTab, setDiagnosisSubTab] = useState<'admission' | 'discharge'>('admission')
   const [dailyDate, setDailyDate] = useState(() => toLocalISODate())
   const [masterChecklistDate, setMasterChecklistDate] = useState(() => toLocalISODate())
   const [dailyUpdateForm, setDailyUpdateForm] = useState<DailyUpdateFormState>(initialDailyUpdateForm)
@@ -957,18 +980,41 @@ function App() {
 
   // Profile tab edits an existing patient, so service tag changes persist immediately (same
   // immediate-write pattern as the general Tags picker), rather than staging through profileForm.
+  // Adding a patient's very first-ever service also migrates any "unassigned" diagnosis text into
+  // that service's own field (addMainServiceTagToPatient/addReferralServiceTagToPatient already do
+  // this at the DB level) — this mirrors the same migration into the live `profileForm` draft, so
+  // the still-open Diagnosis editor doesn't show stale text until the patient is reselected.
+  const applyDiagnosisMigrationToForm = (patient: Patient, newServiceTagId: number) => {
+    const formPatch = migrateUnassignedDiagnosisOnFirstService(
+      {
+        mainServiceTagIds: patient.mainServiceTagIds,
+        referralServiceTagIds: patient.referralServiceTagIds,
+        admissionDiagnosisUnassigned: profileForm.admissionDiagnosisUnassigned,
+        admissionDiagnosisByService: profileForm.admissionDiagnosisByService,
+        dischargeDiagnosisUnassigned: profileForm.dischargeDiagnosisUnassigned,
+        dischargeDiagnosisByService: profileForm.dischargeDiagnosisByService,
+      },
+      newServiceTagId,
+    )
+    if (formPatch) setProfileForm((previous) => ({ ...previous, ...formPatch }))
+  }
+
   const makePatientServiceTagHandlers = (
     patient: Patient,
     addFn: (patient: Patient, tag: TagDefinition) => Promise<void>,
     removeFn: (patient: Patient, tag: TagDefinition) => Promise<void>,
   ) => ({
-    onAdd: (tag: TagDefinition) => void addFn(patient, tag),
+    onAdd: (tag: TagDefinition) => {
+      void addFn(patient, tag)
+      if (tag.id !== undefined) applyDiagnosisMigrationToForm(patient, tag.id)
+    },
     onRemove: (tag: TagDefinition) => void removeFn(patient, tag),
     onCreate: (name: string) => {
       void (async () => {
         const groupId = await ensureServiceGroupId(tagGroups ?? [])
         const tag = await getOrCreateServiceTag(name, serviceTags, groupId)
         await addFn(patient, tag)
+        if (tag.id !== undefined) applyDiagnosisMigrationToForm(patient, tag.id)
       })()
     },
   })
@@ -1315,24 +1361,30 @@ function App() {
     [selectedPatient, tagsById, tagGroups],
   )
 
-  // Discharge Date's default: the most recent "added" Tag Event for any Terminal-flagged tag the
-  // patient currently carries, falling back to today when no such event was ever logged. Purely
+  // Discharge Date/Time's default: the most recent "added" Tag Event for any Terminal-flagged tag
+  // the patient currently carries, falling back to now when no such event was ever logged. Purely
   // computed — never persisted unless the user types an override.
-  const defaultDischargeDateIso = useMemo(() => {
+  const defaultDischargeAt = useMemo(() => {
     const terminalTagIds = new Set(appliedPatientTags.filter((tag) => tag.terminal).map((tag) => tag.id))
-    if (terminalTagIds.size === 0) return toLocalISODate()
+    if (terminalTagIds.size === 0) return new Date().toISOString()
 
     const addedEvents = (patientTagEvents ?? []).filter((event) => event.action === 'added' && terminalTagIds.has(event.tagId))
-    if (addedEvents.length === 0) return toLocalISODate()
+    if (addedEvents.length === 0) return new Date().toISOString()
 
     const latestEvent = addedEvents.reduce((latest, event) => (event.at > latest.at ? event : latest))
-    return toLocalISODate(new Date(latestEvent.at))
+    return latestEvent.at
   }, [appliedPatientTags, patientTagEvents])
+  const defaultDischargeDateIso = useMemo(() => toLocalISODate(new Date(defaultDischargeAt)), [defaultDischargeAt])
+  const defaultDischargeTimeHhmm = useMemo(() => toLocalTime(new Date(defaultDischargeAt)), [defaultDischargeAt])
 
-  // Admission Date & Referral Date's default: the date the profile was created. Purely computed —
-  // never persisted unless the user types an override.
+  // Admission Date/Time & Referral Date/Time's default: when the profile was created. Purely
+  // computed — never persisted unless the user types an override.
   const defaultCreatedDateIso = useMemo(
     () => (selectedPatient ? toLocalISODate(new Date(selectedPatient.createdAt)) : null),
+    [selectedPatient],
+  )
+  const defaultCreatedTimeHhmm = useMemo(
+    () => (selectedPatient ? toLocalTime(new Date(selectedPatient.createdAt)) : null),
     [selectedPatient],
   )
 
@@ -1360,6 +1412,37 @@ function App() {
     return !tagsCollapseDefaultSeedRef.current.get(patientId)
   }, [appliedPatientTags, selectedPatient, tagsEditOverrideByPatientId])
 
+  // Same collapse mechanism as isEditingTags above, applied to Room/Ward/Name/Age/Sex: collapsed
+  // by default the first time a patient with at least one of those fields already filled in is
+  // viewed this session (which in practice is every real patient, since Last Name is required to
+  // create one); expanded by default only while every one of those fields is genuinely blank.
+  const hasAnyDemographicsFilled = useMemo(
+    () => Boolean(
+      profileForm.roomNumber.trim()
+      || profileForm.ward.trim()
+      || profileForm.lastName.trim()
+      || profileForm.firstName.trim()
+      || profileForm.age.trim()
+      || profileForm.sex,
+    ),
+    [profileForm.roomNumber, profileForm.ward, profileForm.lastName, profileForm.firstName, profileForm.age, profileForm.sex],
+  )
+  const isEditingDemographics = useMemo(() => {
+    if (selectedPatient?.id === undefined) return true
+    const patientId = selectedPatient.id
+
+    if (!demographicsCollapseDefaultSeedRef.current.has(patientId)) {
+      demographicsCollapseDefaultSeedRef.current.set(patientId, hasAnyDemographicsFilled)
+    }
+
+    if (!hasAnyDemographicsFilled) return true
+
+    const override = demographicsEditOverrideByPatientId.get(patientId)
+    if (override !== undefined) return override
+
+    return !demographicsCollapseDefaultSeedRef.current.get(patientId)
+  }, [hasAnyDemographicsFilled, selectedPatient, demographicsEditOverrideByPatientId])
+
   const activePatients = useMemo(() => (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)), [patients, tagsById])
 
   const reportingSelectablePatients = useMemo(() => {
@@ -1376,7 +1459,7 @@ function App() {
     { id: GENERAL_CHECKLIST_PATIENT_ID, label: GENERAL_CHECKLIST_LABEL },
     ...reportingSelectablePatients
       .filter((patient): patient is Patient & { id: number } => patient.id !== undefined)
-      .map((patient) => ({ id: patient.id, label: `${patient.roomNumber} — ${patient.lastName}, ${patient.firstName}` })),
+      .map((patient) => ({ id: patient.id, label: joinNonBlank([patient.roomNumber, formatFullName(patient)], ' — ') })),
   ], [reportingSelectablePatients])
 
   // Issue #81 Patient Pool facet: unlike the quick-add list above (always active-only), the
@@ -1583,12 +1666,12 @@ function App() {
   const isAbgLabTemplate = selectedLabTemplate.id === UST_ABG_TEMPLATE_ID
 
   const abgNormalAaDo2 = useMemo(() => {
-    if (!selectedPatient) return null
+    if (!selectedPatient || selectedPatient.age === undefined) return null
     return getNormalAaDo2(selectedPatient.age)
   }, [selectedPatient])
 
   const abgNormalPfRatio = useMemo(() => {
-    if (!selectedPatient) return null
+    if (!selectedPatient || selectedPatient.age === undefined) return null
     return getNormalPfRatio(selectedPatient.age)
   }, [selectedPatient])
 
@@ -1722,7 +1805,7 @@ function App() {
     sortedPatients.forEach((patient) => {
       if (patient.id === undefined) return
       const patientId = patient.id
-      const patientIdentifier = `${patient.roomNumber} — ${patient.lastName.toUpperCase()}`
+      const patientIdentifier = joinNonBlank([patient.roomNumber, patient.lastName.toUpperCase()], ' — ')
 
       items.push(...buildMasterChecklistItemsForSource(
         patientId,
@@ -2202,7 +2285,7 @@ function App() {
     event.preventDefault()
     if (!form.lastName.trim()) return
     const parsedAge = Number.parseInt(form.age, 10)
-    const age = Number.isFinite(parsedAge) ? parsedAge : 0
+    const age = Number.isFinite(parsedAge) ? parsedAge : undefined
 
     const now = new Date().toISOString()
     const patientPayload: Omit<Patient, 'id'> = {
@@ -2214,9 +2297,14 @@ function App() {
       lastName: form.lastName.trim(),
       age,
       sex: form.sex,
-      diagnosis: '',
+      admissionDiagnosisUnassigned: '',
+      admissionDiagnosisByService: {},
+      dischargeDiagnosisUnassigned: '',
+      dischargeDiagnosisByService: {},
       admitDate: '',
+      admitTime: '',
       referralDate: '',
+      referralTime: '',
       mainServiceTagIds: pendingMainServiceTagIds,
       referralServiceTagIds: [],
       attendingPhysician: '',
@@ -2355,8 +2443,10 @@ function App() {
     async () => {
       if (selectedPatientId === null) return false
 
-      const age = Number.parseInt(profileForm.age, 10)
-      const ageIsValid = Number.isFinite(age)
+      const ageTrimmed = profileForm.age.trim()
+      const parsedAge = Number.parseInt(profileForm.age, 10)
+      const ageIsValid = Number.isFinite(parsedAge)
+      const ageIsGarbage = ageTrimmed !== '' && !ageIsValid
 
       setIsSaving(true)
 
@@ -2370,12 +2460,20 @@ function App() {
           roomLegacyRaw: wardTrimmed ? undefined : profileForm.roomLegacyRaw,
           firstName: profileForm.firstName.trim(),
           lastName: profileForm.lastName.trim(),
-          ...(ageIsValid ? { age } : {}),
+          // Blank clears age (rather than 0) — only unparseable-but-non-blank text is rejected
+          // outright, leaving the previously saved age untouched until fixed.
+          ...(ageTrimmed === '' ? { age: undefined } : ageIsValid ? { age: parsedAge } : {}),
           sex: profileForm.sex,
           admitDate: profileForm.admitDate,
+          admitTime: profileForm.admitTime,
           referralDate: profileForm.referralDate,
+          referralTime: profileForm.referralTime,
           dischargeDate: profileForm.dischargeDate || undefined,
-          diagnosis: profileForm.diagnosis,
+          dischargeTime: profileForm.dischargeTime || undefined,
+          admissionDiagnosisUnassigned: profileForm.admissionDiagnosisUnassigned,
+          admissionDiagnosisByService: profileForm.admissionDiagnosisByService,
+          dischargeDiagnosisUnassigned: profileForm.dischargeDiagnosisUnassigned,
+          dischargeDiagnosisByService: profileForm.dischargeDiagnosisByService,
           clinicalSummary: profileForm.clinicalSummary,
           database: profileForm.database,
           plans: profileForm.plans,
@@ -2386,7 +2484,7 @@ function App() {
 
         setLastSavedAt(new Date().toISOString())
         setProfileDirty(false)
-        if (!ageIsValid) {
+        if (ageIsGarbage) {
           setNotice('Age not saved until valid.')
         }
         return true
@@ -2418,12 +2516,18 @@ function App() {
       roomLegacyRaw: patient.roomLegacyRaw,
       firstName: patient.firstName,
       lastName: patient.lastName,
-      age: patient.age.toString(),
+      age: patient.age !== undefined ? patient.age.toString() : '',
       sex: patient.sex,
       admitDate: patient.admitDate,
+      admitTime: patient.admitTime ?? '',
       referralDate: patient.referralDate ?? patient.admitDate,
+      referralTime: patient.referralTime ?? '',
       dischargeDate: patient.dischargeDate ?? '',
-      diagnosis: patient.diagnosis,
+      dischargeTime: patient.dischargeTime ?? '',
+      admissionDiagnosisUnassigned: patient.admissionDiagnosisUnassigned ?? '',
+      admissionDiagnosisByService: patient.admissionDiagnosisByService ?? {},
+      dischargeDiagnosisUnassigned: patient.dischargeDiagnosisUnassigned ?? '',
+      dischargeDiagnosisByService: patient.dischargeDiagnosisByService ?? {},
       clinicalSummary: patient.clinicalSummary ?? '',
       database: patient.database ?? '',
       plans: patient.plans,
@@ -4846,11 +4950,16 @@ function App() {
         age: 57,
         sex: 'M',
         admitDate: today,
+        admitTime: '',
         referralDate: today,
+        referralTime: '',
         mainServiceTagIds: [],
         referralServiceTagIds: [],
         attendingPhysician: 'Dr. Maria C. Garcia',
-        diagnosis: 'Community-acquired pneumonia (RLL), improving',
+        admissionDiagnosisUnassigned: 'Community-acquired pneumonia (RLL), improving',
+        admissionDiagnosisByService: {},
+        dischargeDiagnosisUnassigned: '',
+        dischargeDiagnosisByService: {},
         clinicalSummary: 'CAP improving on empiric antibiotics with stable hemodynamics and improving respiratory symptoms. Continue monitoring trends and prepare for oral step-down when afebrile and clinically stable.',
         database: [
           'Chief Complaint:\n5 days cough, fever, and dyspnea',
@@ -5129,6 +5238,7 @@ function App() {
               buildText: () => toProfileSummary(
                 selectedPatient,
                 profileForm,
+                tagsById,
                 getVisiblePatientTags(selectedPatient, tagsById, tagGroups ?? []).map(renderTagDisplayText),
                 resolveServiceTagNames(selectedPatient.mainServiceTagIds, tagsById),
                 resolveServiceTagNames(selectedPatient.referralServiceTagIds, tagsById),
@@ -5183,7 +5293,7 @@ function App() {
               buildText: () =>
                 toSelectedPatientCensusReport(
                   selectedPatient,
-                  profileForm.diagnosis,
+                  composeDiagnosisText(selectedPatient, profileForm.admissionDiagnosisUnassigned, profileForm.admissionDiagnosisByService, tagsById),
                   patientVitals ?? [],
                   selectedPatientStructuredLabs,
                   selectedPatientLabReportIds,
@@ -5234,6 +5344,7 @@ function App() {
                       structuredLabsByPatient.get(patient.id ?? -1) ?? [],
                       structuredOrdersByPatient.get(patient.id ?? -1) ?? [],
                       getVisiblePatientTags(patient, tagsById, tagGroups ?? []).map(renderTagDisplayText),
+                      tagsById,
                     ),
                   )
                   .join('\n\n'),
@@ -5244,7 +5355,7 @@ function App() {
     : []
 
   const focusedPatientNavLabel = selectedPatient
-    ? `${selectedPatient.roomNumber} - ${selectedPatient.lastName}`
+    ? joinNonBlank([selectedPatient.roomNumber, selectedPatient.lastName], ' - ')
     : 'Patient'
   const canShowFocusedPatientNavButton = selectedPatient ? isPatientActive(selectedPatient, tagsById) : false
   const masterChecklistGroupedByPatient = useMemo(() => {
@@ -5585,7 +5696,7 @@ function App() {
                         )}>
                           {patient.roomNumber}
                         </span>
-                        <span className='truncate font-semibold text-espresso'>{patient.lastName}, {patient.firstName}</span>
+                        <span className='truncate font-semibold text-espresso'>{formatFullName(patient)}</span>
                       </p>
                       <p className='flex items-center flex-wrap gap-x-1 gap-y-0.5 text-xs text-clay mt-0.5'>
                         {patient.ward ? (
@@ -5594,7 +5705,7 @@ function App() {
                             <span>·</span>
                           </>
                         ) : null}
-                        <span>{patient.age}/{patient.sex}</span>
+                        <span>{formatAgeSex(patient)}</span>
                         {hasVisibleServiceTags || !hasAnyServiceTags ? (
                           <>
                             <span>·</span>
@@ -5609,11 +5720,11 @@ function App() {
                           </>
                         ) : null}
                       </p>
-                      {patient.diagnosis && (
+                      {composeDiagnosisText(patient, patient.admissionDiagnosisUnassigned, patient.admissionDiagnosisByService, tagsById) ? (
                         <p className='text-xs text-espresso/50 truncate mt-0.5'>
-                          {patient.diagnosis.split('\n')[0]}
+                          {composeDiagnosisText(patient, patient.admissionDiagnosisUnassigned, patient.admissionDiagnosisByService, tagsById).split('\n')[0]}
                         </p>
-                      )}
+                      ) : null}
                     </div>
                     <div className='flex flex-col items-end gap-1.5 shrink-0'>
                       <div className='flex items-center gap-1'>
@@ -5778,7 +5889,7 @@ function App() {
                 {patientSwipePreviewPatient ? (
                   <div className='flex items-center gap-1.5 rounded-full bg-espresso text-warm-ivory px-3 py-1.5 text-sm font-semibold shadow-lg'>
                     {patientSwipeDirection === 'prev' ? <ChevronLeft className='h-4 w-4 shrink-0' /> : null}
-                    <span className='whitespace-nowrap'>{patientSwipePreviewPatient.roomNumber} - {patientSwipePreviewPatient.lastName}, {patientSwipePreviewPatient.firstName}</span>
+                    <span className='whitespace-nowrap'>{joinNonBlank([patientSwipePreviewPatient.roomNumber, formatFullName(patientSwipePreviewPatient)], ' - ')}</span>
                     {patientSwipeDirection === 'next' ? <ChevronRight className='h-4 w-4 shrink-0' /> : null}
                   </div>
                 ) : null}
@@ -5817,7 +5928,7 @@ function App() {
 
                         return (
                           <SelectItem key={patient.id} value={patient.id.toString()}>
-                            {patient.roomNumber} - {patient.lastName}, {patient.firstName}
+                            {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' - ')}
                           </SelectItem>
                         )
                       })}
@@ -5834,130 +5945,142 @@ function App() {
 
                 <TabsContent value='profile'>
                   <div className='space-y-3'>
-                    <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-room' className={fieldLabelClassName(Boolean(profileForm.roomNumber.trim()))}>Room Number</Label>
-                        <TapToEditField
-                          ariaLabel='Room Number'
-                          emptyText='Tap to add a room number'
-                          value={profileForm.roomNumber}
-                          onCommit={(nextValue) => updateProfileField('roomNumber', nextValue)}
-                          renderEditor={({ value, onChange }) => (
-                            <AutoGrowTextField id='profile-room' value={value} onChange={onChange} />
-                          )}
-                        />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-ward' className={fieldLabelClassName(Boolean(profileForm.ward.trim()))}>Ward/Location</Label>
-                        <TapToEditField
-                          ariaLabel='Ward/Location'
-                          emptyText='Tap to add a ward/location'
-                          value={profileForm.ward}
-                          onCommit={(nextValue) => updateProfileField('ward', nextValue)}
-                          renderEditor={({ value, onChange }) => (
-                            <AutoGrowTextField id='profile-ward' value={value} onChange={onChange} />
-                          )}
-                        />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-lastname' className={fieldLabelClassName(Boolean(profileForm.lastName.trim()))}>Last name</Label>
-                        <TapToEditField
-                          ariaLabel='Last name'
-                          emptyText='Tap to add a last name'
-                          value={profileForm.lastName}
-                          onCommit={(nextValue) => updateProfileField('lastName', nextValue.toUpperCase())}
-                          renderEditor={({ value, onChange }) => (
-                            <AutoGrowTextField id='profile-lastname' value={value} onChange={(nextValue) => onChange(nextValue.toUpperCase())} />
-                          )}
-                        />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-firstname' className={fieldLabelClassName(Boolean(profileForm.firstName.trim()))}>First name</Label>
-                        <TapToEditField
-                          ariaLabel='First name'
-                          emptyText='Tap to add a first name'
-                          value={profileForm.firstName}
-                          onCommit={(nextValue) => updateProfileField('firstName', nextValue)}
-                          renderEditor={({ value, onChange }) => (
-                            <AutoGrowTextField id='profile-firstname' value={value} onChange={onChange} />
-                          )}
-                        />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-age' className={fieldLabelClassName(Boolean(profileForm.age.trim()))}>Age</Label>
-                        <TapToEditField
-                          ariaLabel='Age'
-                          emptyText='Tap to add an age'
-                          value={profileForm.age}
-                          onCommit={(nextValue) => updateProfileField('age', nextValue)}
-                          renderEditor={({ value, onChange }) => (
-                            <AutoGrowTextField id='profile-age' value={value} onChange={onChange} />
-                          )}
-                        />
-                      </div>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-sex' className={fieldLabelClassName(Boolean(profileForm.sex))}>Sex</Label>
-                        <Select
-                          value={profileForm.sex}
-                          onValueChange={(v) => updateProfileField('sex', v as 'M' | 'F' | 'O')}
+                    <div className='space-y-1.5'>
+                      {isEditingDemographics ? (
+                        <>
+                          <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
+                            <div className='space-y-1'>
+                              <Label htmlFor='profile-room' className={fieldLabelClassName(Boolean(profileForm.roomNumber.trim()))}>Room Number</Label>
+                              <TapToEditField
+                                ariaLabel='Room Number'
+                                emptyText='Tap to add a room number'
+                                value={profileForm.roomNumber}
+                                onCommit={(nextValue) => updateProfileField('roomNumber', nextValue)}
+                                renderEditor={({ value, onChange }) => (
+                                  <AutoGrowTextField id='profile-room' value={value} onChange={onChange} />
+                                )}
+                              />
+                            </div>
+                            <div className='space-y-1'>
+                              <Label htmlFor='profile-ward' className={fieldLabelClassName(Boolean(profileForm.ward.trim()))}>Ward/Location</Label>
+                              <TapToEditField
+                                ariaLabel='Ward/Location'
+                                emptyText='Tap to add a ward/location'
+                                value={profileForm.ward}
+                                onCommit={(nextValue) => updateProfileField('ward', nextValue)}
+                                renderEditor={({ value, onChange }) => (
+                                  <AutoGrowTextField id='profile-ward' value={value} onChange={onChange} />
+                                )}
+                              />
+                            </div>
+                            <div className='space-y-1'>
+                              <Label htmlFor='profile-lastname' className={fieldLabelClassName(Boolean(profileForm.lastName.trim()))}>Last name</Label>
+                              <TapToEditField
+                                ariaLabel='Last name'
+                                emptyText='Tap to add a last name'
+                                value={profileForm.lastName}
+                                onCommit={(nextValue) => updateProfileField('lastName', nextValue.toUpperCase())}
+                                renderEditor={({ value, onChange }) => (
+                                  <AutoGrowTextField id='profile-lastname' value={value} onChange={(nextValue) => onChange(nextValue.toUpperCase())} />
+                                )}
+                              />
+                            </div>
+                            <div className='space-y-1'>
+                              <Label htmlFor='profile-firstname' className={fieldLabelClassName(Boolean(profileForm.firstName.trim()))}>First name</Label>
+                              <TapToEditField
+                                ariaLabel='First name'
+                                emptyText='Tap to add a first name'
+                                value={profileForm.firstName}
+                                onCommit={(nextValue) => updateProfileField('firstName', nextValue)}
+                                renderEditor={({ value, onChange }) => (
+                                  <AutoGrowTextField id='profile-firstname' value={value} onChange={onChange} />
+                                )}
+                              />
+                            </div>
+                            <div className='space-y-1'>
+                              <Label htmlFor='profile-age' className={fieldLabelClassName(Boolean(profileForm.age.trim()))}>Age</Label>
+                              <TapToEditField
+                                ariaLabel='Age'
+                                emptyText='Tap to add an age'
+                                value={profileForm.age}
+                                onCommit={(nextValue) => updateProfileField('age', nextValue)}
+                                renderEditor={({ value, onChange }) => (
+                                  <AutoGrowTextField id='profile-age' value={value} onChange={onChange} />
+                                )}
+                              />
+                            </div>
+                            <div className='space-y-1'>
+                              <Label htmlFor='profile-sex' className={fieldLabelClassName(Boolean(profileForm.sex))}>Sex</Label>
+                              <Select
+                                value={profileForm.sex}
+                                onValueChange={(v) => updateProfileField('sex', v as 'M' | 'F' | 'O')}
+                              >
+                                <SelectTrigger
+                                  id='profile-sex'
+                                  className='h-auto rounded-lg border border-transparent bg-transparent px-3 py-2 text-[15px] shadow-none transition-colors hover:border-clay/25 hover:bg-white/60 focus:ring-2 focus:ring-ring focus:ring-offset-2'
+                                >
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value='M'>M</SelectItem>
+                                  <SelectItem value='F'>F</SelectItem>
+                                  <SelectItem value='O'>O</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                          {hasAnyDemographicsFilled ? (
+                            <div className='flex justify-end'>
+                              <Button
+                                type='button'
+                                variant='ghost'
+                                className='h-6 gap-1 px-2 text-xs text-clay'
+                                aria-label='Done editing patient details'
+                                onClick={() => {
+                                  const patientId = selectedPatient.id
+                                  if (patientId === undefined) return
+                                  setDemographicsEditOverrideByPatientId((previous) => {
+                                    const next = new Map(previous)
+                                    next.set(patientId, !isEditingDemographics)
+                                    return next
+                                  })
+                                }}
+                              >
+                                <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                                Done
+                              </Button>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <button
+                          type='button'
+                          className='flex w-full items-start justify-between gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/60'
+                          aria-label='Edit patient details'
+                          onClick={() => {
+                            const patientId = selectedPatient.id
+                            if (patientId === undefined) return
+                            setDemographicsEditOverrideByPatientId((previous) => {
+                              const next = new Map(previous)
+                              next.set(patientId, !isEditingDemographics)
+                              return next
+                            })
+                          }}
                         >
-                          <SelectTrigger
-                            id='profile-sex'
-                            className='h-auto rounded-lg border border-transparent bg-transparent px-3 py-2 text-[15px] shadow-none transition-colors hover:border-clay/25 hover:bg-white/60 focus:ring-2 focus:ring-ring focus:ring-offset-2'
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value='M'>M</SelectItem>
-                            <SelectItem value='F'>F</SelectItem>
-                            <SelectItem value='O'>O</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
+                          <div className='min-w-0'>
+                            <p className='truncate text-base font-semibold text-espresso'>
+                              {joinNonBlank([formatRoomWard(profileForm), formatFullName(profileForm)], ' — ')}
+                            </p>
+                            <p className='text-xs text-clay mt-0.5'>{joinNonBlank([profileForm.age.trim(), profileForm.sex], ' / ')}</p>
+                          </div>
+                          <Pencil className='h-3.5 w-3.5 shrink-0 text-clay mt-1' aria-hidden='true' />
+                        </button>
+                      )}
                     </div>
                     {profileForm.roomLegacyRaw ? (
                       <p className='text-xs text-action-danger'>
                         Unresolved combined room value: "{profileForm.roomLegacyRaw}" — split it into Room Number and Ward/Location above to clear this note.
                       </p>
-                    ) : null}
-                    <div className='grid grid-cols-2 gap-2'>
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-admitdate'>Admission Date</Label>
-                        <FlexibleDateInput
-                          id='profile-admitdate'
-                          ariaLabel='Admission Date'
-                          value={profileForm.admitDate}
-                          onChange={(isoDate) => updateProfileField('admitDate', isoDate)}
-                          defaultIso={defaultCreatedDateIso}
-                          emitEmptyOnClear
-                        />
-                      </div>
-                      {hasReferralTag ? (
-                        <div className='space-y-1'>
-                          <Label htmlFor='profile-referraldate'>Referral Date</Label>
-                          <FlexibleDateInput
-                            id='profile-referraldate'
-                            ariaLabel='Referral Date'
-                            value={profileForm.referralDate}
-                            onChange={(isoDate) => updateProfileField('referralDate', isoDate)}
-                            defaultIso={defaultCreatedDateIso}
-                            emitEmptyOnClear
-                          />
-                        </div>
-                      ) : null}
-                    </div>
-                    {!isPatientActive(selectedPatient, tagsById) ? (
-                      <div className='space-y-1'>
-                        <Label htmlFor='profile-dischargedate'>Discharge Date</Label>
-                        <FlexibleDateInput
-                          id='profile-dischargedate'
-                          ariaLabel='Discharge Date'
-                          value={profileForm.dischargeDate}
-                          onChange={(isoDate) => updateProfileField('dischargeDate', isoDate)}
-                          defaultIso={defaultDischargeDateIso}
-                          emitEmptyOnClear
-                        />
-                      </div>
                     ) : null}
                     <div className='space-y-1.5'>
                       {isEditingTags ? (
@@ -6029,8 +6152,8 @@ function App() {
                         </div>
                       )}
                     </div>
-                    <div className='space-y-1'>
-                      <Label>Main Service</Label>
+                    <div className='space-y-0.5'>
+                      <Label className={fieldLabelClassName(selectedPatient.mainServiceTagIds.length > 0) ?? 'text-sm'}>Main Service</Label>
                       {selectedPatient ? (
                         <ServiceTagMultiSelect
                           ariaLabel='Main Service'
@@ -6038,12 +6161,13 @@ function App() {
                           role='main'
                           selectedTags={resolveServiceTags(selectedPatient.mainServiceTagIds, tagsById)}
                           availableTags={serviceTags}
+                          inputClassName='h-8 rounded-lg border border-transparent bg-transparent px-2 py-1 shadow-none transition-colors hover:border-clay/25 hover:bg-white/60'
                           {...makePatientServiceTagHandlers(selectedPatient, addMainServiceTagToPatient, removeMainServiceTagFromPatient)}
                         />
                       ) : null}
                     </div>
-                    <div className='space-y-1'>
-                      <Label>Referrals</Label>
+                    <div className='space-y-0.5'>
+                      <Label className={fieldLabelClassName(selectedPatient.referralServiceTagIds.length > 0) ?? 'text-sm'}>Referrals</Label>
                       {selectedPatient ? (
                         <ServiceTagMultiSelect
                           ariaLabel='Referrals'
@@ -6051,33 +6175,124 @@ function App() {
                           role='referral'
                           selectedTags={resolveServiceTags(selectedPatient.referralServiceTagIds, tagsById)}
                           availableTags={serviceTags}
+                          inputClassName='h-8 rounded-lg border border-transparent bg-transparent px-2 py-1 shadow-none transition-colors hover:border-clay/25 hover:bg-white/60'
                           {...makePatientServiceTagHandlers(selectedPatient, addReferralServiceTagToPatient, removeReferralServiceTagFromPatient)}
                         />
                       ) : null}
                     </div>
-                    <div className='space-y-1'>
-                      <Label htmlFor='profile-diagnosis' className={fieldLabelClassName(Boolean(profileForm.diagnosis.trim()))}>Diagnosis</Label>
-                      <TapToEditField
-                        ariaLabel='Diagnosis'
-                        emptyText='Tap to add a diagnosis'
-                        value={profileForm.diagnosis}
-                        onCommit={(nextValue) => updateProfileField('diagnosis', nextValue)}
-                        renderView={(text) => (
-                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
-                        )}
-                        renderEditor={({ value, onChange }) => (
-                          <PhotoMentionField
-                            ariaLabel='Diagnosis'
-                            placeholder='Diagnosis'
-                            className='min-h-24'
-                            value={value}
-                            onChange={onChange}
-                            attachments={mentionableAttachments}
+                    <div className='space-y-1.5'>
+                      <Tabs value={diagnosisSubTab} onValueChange={(v) => setDiagnosisSubTab(v as 'admission' | 'discharge')}>
+                        <TabsList>
+                          <TabsTrigger value='admission'>Admission Diagnosis</TabsTrigger>
+                          <TabsTrigger value='discharge'>Discharge Diagnosis</TabsTrigger>
+                        </TabsList>
+                        <TabsContent value='admission'>
+                          <ServiceDiagnosisFields
+                            patient={selectedPatient}
+                            tagsById={tagsById}
+                            unassigned={profileForm.admissionDiagnosisUnassigned}
+                            byService={profileForm.admissionDiagnosisByService}
+                            onChangeUnassigned={(text) => updateProfileField('admissionDiagnosisUnassigned', text)}
+                            onChangeService={(serviceId, text) => updateProfileField('admissionDiagnosisByService', { ...profileForm.admissionDiagnosisByService, [serviceId]: text })}
+                            label='Admission Diagnosis'
+                            mentionableAttachments={mentionableAttachments}
                             attachmentByTitle={mentionableAttachmentByTitle}
                             onOpenPhotoById={openPhotoById}
                           />
-                        )}
-                      />
+                        </TabsContent>
+                        <TabsContent value='discharge'>
+                          <ServiceDiagnosisFields
+                            patient={selectedPatient}
+                            tagsById={tagsById}
+                            unassigned={profileForm.dischargeDiagnosisUnassigned}
+                            byService={profileForm.dischargeDiagnosisByService}
+                            onChangeUnassigned={(text) => updateProfileField('dischargeDiagnosisUnassigned', text)}
+                            onChangeService={(serviceId, text) => updateProfileField('dischargeDiagnosisByService', { ...profileForm.dischargeDiagnosisByService, [serviceId]: text })}
+                            label='Discharge Diagnosis'
+                            mentionableAttachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        </TabsContent>
+                      </Tabs>
+                    </div>
+                    <div className='space-y-2'>
+                      <div className='grid grid-cols-2 gap-2'>
+                        <div className='space-y-1'>
+                          <Label htmlFor='profile-admitdate'>Admission Date</Label>
+                          <FlexibleDateInput
+                            id='profile-admitdate'
+                            ariaLabel='Admission Date'
+                            value={profileForm.admitDate}
+                            onChange={(isoDate) => updateProfileField('admitDate', isoDate)}
+                            defaultIso={defaultCreatedDateIso}
+                            emitEmptyOnClear
+                          />
+                        </div>
+                        <div className='space-y-1'>
+                          <Label htmlFor='profile-admittime'>Admission Time</Label>
+                          <FlexibleTimeInput
+                            id='profile-admittime'
+                            ariaLabel='Admission Time'
+                            value={profileForm.admitTime}
+                            onChange={(hhmm) => updateProfileField('admitTime', hhmm)}
+                            defaultHhmm={defaultCreatedTimeHhmm}
+                            emitEmptyOnClear
+                          />
+                        </div>
+                      </div>
+                      {hasReferralTag ? (
+                        <div className='grid grid-cols-2 gap-2'>
+                          <div className='space-y-1'>
+                            <Label htmlFor='profile-referraldate'>Referral Date</Label>
+                            <FlexibleDateInput
+                              id='profile-referraldate'
+                              ariaLabel='Referral Date'
+                              value={profileForm.referralDate}
+                              onChange={(isoDate) => updateProfileField('referralDate', isoDate)}
+                              defaultIso={defaultCreatedDateIso}
+                              emitEmptyOnClear
+                            />
+                          </div>
+                          <div className='space-y-1'>
+                            <Label htmlFor='profile-referraltime'>Referral Time</Label>
+                            <FlexibleTimeInput
+                              id='profile-referraltime'
+                              ariaLabel='Referral Time'
+                              value={profileForm.referralTime}
+                              onChange={(hhmm) => updateProfileField('referralTime', hhmm)}
+                              defaultHhmm={defaultCreatedTimeHhmm}
+                              emitEmptyOnClear
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                      {!isPatientActive(selectedPatient, tagsById) ? (
+                        <div className='grid grid-cols-2 gap-2'>
+                          <div className='space-y-1'>
+                            <Label htmlFor='profile-dischargedate'>Discharge Date</Label>
+                            <FlexibleDateInput
+                              id='profile-dischargedate'
+                              ariaLabel='Discharge Date'
+                              value={profileForm.dischargeDate}
+                              onChange={(isoDate) => updateProfileField('dischargeDate', isoDate)}
+                              defaultIso={defaultDischargeDateIso}
+                              emitEmptyOnClear
+                            />
+                          </div>
+                          <div className='space-y-1'>
+                            <Label htmlFor='profile-dischargetime'>Discharge Time</Label>
+                            <FlexibleTimeInput
+                              id='profile-dischargetime'
+                              ariaLabel='Discharge Time'
+                              value={profileForm.dischargeTime}
+                              onChange={(hhmm) => updateProfileField('dischargeTime', hhmm)}
+                              defaultHhmm={defaultDischargeTimeHhmm}
+                              emitEmptyOnClear
+                            />
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                     <div className='space-y-1'>
                       <Label htmlFor='profile-clinicalsummary' className={fieldLabelClassName(Boolean(profileForm.clinicalSummary.trim()))}>Clinical Summary</Label>
@@ -6813,7 +7028,9 @@ function App() {
                                 <p>Desired FiO2 target PaO2 is fixed at 60 mmHg.</p>
                                 {selectedPatient ? (
                                   <p>
-                                    Age {selectedPatient.age}: A-aDO2 NV ≈ {abgNormalAaDo2} mmHg; P/F ratio NV ≈ {abgNormalPfRatio}
+                                    {selectedPatient.age !== undefined
+                                      ? `Age ${selectedPatient.age}: A-aDO2 NV ≈ ${abgNormalAaDo2} mmHg; P/F ratio NV ≈ ${abgNormalPfRatio}`
+                                      : 'Age not set — oxygenation index normals unavailable.'}
                                   </p>
                                 ) : null}
                               </div>
@@ -7282,7 +7499,7 @@ function App() {
                                         variant={isSelected ? 'default' : 'secondary'}
                                         onClick={() => toggleCensusPatientSelection(patientId)}
                                       >
-                                        {patient.roomNumber} — {patient.lastName}, {patient.firstName}
+                                        {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' — ')}
                                       </Button>
                                     )
                                   })}
@@ -7309,11 +7526,11 @@ function App() {
                                           {...censusPatientDrag.getItemProps(patientId)}
                                         >
                                           <DragHandle
-                                            label={`Drag to reorder ${patient.lastName}, ${patient.firstName}`}
+                                            label={`Drag to reorder ${formatFullName(patient)}`}
                                             dragProps={censusPatientDrag.getHandleProps(patientId)}
                                           />
                                           <p className='flex-1 text-sm text-espresso'>
-                                            {index + 1}. {patient.roomNumber} — {patient.lastName}, {patient.firstName}
+                                            {index + 1}. {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' — ')}
                                           </p>
                                         </div>
                                       )
@@ -8035,7 +8252,7 @@ function App() {
                             {formatPhotoCategory(coverPhoto.category)} • {formatBytes(group.totalByteSize)}
                           </p>
                           <p className='text-[11px] text-clay truncate'>
-                            {linkedPatient ? `${linkedPatient.roomNumber} — ${linkedPatient.lastName}, ${linkedPatient.firstName}` : 'Orphan (no linked patient)'}
+                            {linkedPatient ? joinNonBlank([linkedPatient.roomNumber, formatFullName(linkedPatient)], ' — ') : 'Orphan (no linked patient)'}
                           </p>
                           <Button size='sm' variant='destructive' className='w-full' onClick={() => requestDeleteConfirmation({
                             title: 'Delete photo set?',
@@ -8102,7 +8319,7 @@ function App() {
                           <div className='space-y-2'>
                             <p className='text-xs text-espresso'>
                               {linkedPatient
-                                ? `Current patient: ${linkedPatient.roomNumber} — ${linkedPatient.lastName}, ${linkedPatient.firstName}`
+                                ? `Current patient: ${joinNonBlank([linkedPatient.roomNumber, formatFullName(linkedPatient)], ' — ')}`
                                 : `Current patient link missing (patientId ${attachment.patientId})`}
                             </p>
                             <div className='grid grid-cols-1 sm:grid-cols-[1fr_auto_auto_auto] gap-2 items-end'>
@@ -8121,7 +8338,7 @@ function App() {
                                       .filter((patient): patient is Patient & { id: number } => patient.id !== undefined)
                                       .map((patient) => (
                                         <SelectItem key={`reassign-${attachment.id}-${patient.id}`} value={`${patient.id}`}>
-                                          {patient.roomNumber} — {patient.lastName}, {patient.firstName}
+                                          {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' — ')}
                                         </SelectItem>
                                       ))}
                                   </SelectContent>

@@ -9,11 +9,22 @@ export const toLocalTime = (date = new Date()) => {
   return `${hours}:${minutes}`
 }
 
+/** Resolves a blank-by-default date field to `fallbackAt`'s local date when unset — the general
+ * form of Admission/Referral/Discharge Date's shared "blank shows a computed default" behavior,
+ * for anything that needs an actual value to match/sort/report by, not just display. */
+export const resolveEffectiveDate = (dateOverride: string, fallbackAt: string): string =>
+  dateOverride || toLocalISODate(new Date(fallbackAt))
+
+/** Time counterpart to `resolveEffectiveDate` — resolves a blank-by-default time field to
+ * `fallbackAt`'s local time when unset. */
+export const resolveEffectiveTime = (timeOverride: string, fallbackAt: string): string =>
+  timeOverride || toLocalTime(new Date(fallbackAt))
+
 /** Admission Date is blank until the user overrides it, defaulting (display-only) to the profile's
  * creation date — this resolves that same default for anything that needs an actual value to
  * sort/report by, not just display. */
 export const getEffectiveAdmitDate = (admitDate: string, createdAt: string): string =>
-  admitDate || toLocalISODate(new Date(createdAt))
+  resolveEffectiveDate(admitDate, createdAt)
 
 export const parseNumericInput = (value: string | undefined): number | null => {
   const sanitized = (value ?? '').trim().replaceAll(',', '').replaceAll('%', '')
