@@ -556,4 +556,61 @@ db.version(14).stores({
   await customActionTable.toCollection().modify({ scope: 'patient' })
 })
 
+db.version(15).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+}).upgrade(async (tx) => {
+  // Adds Admission/Referral/Discharge Time (paired with their existing dates, same
+  // blank-shows-a-computed-default behavior), and replaces the single free-text `diagnosis` field
+  // with per-service Admission/Discharge Diagnosis. Existing diagnosis text is carried into
+  // Admission Diagnosis: under the patient's first Main service if one is assigned, else their
+  // first Referral service, else as an "unassigned" line (shown only while the patient has no
+  // services at all). Discharge Diagnosis starts empty for every existing patient — the old field
+  // never distinguished an admission diagnosis from a discharge one.
+  const patientTable = tx.table<Patient, number>('patients')
+  const legacyPatients = await patientTable.toArray()
+
+  for (const patient of legacyPatients) {
+    if (patient.id === undefined) continue
+    const legacy = patient as Patient & { diagnosis?: string }
+    const oldDiagnosis = (legacy.diagnosis ?? '').trim()
+
+    let admissionDiagnosisUnassigned = ''
+    let admissionDiagnosisByService: Record<number, string> = {}
+    if (oldDiagnosis) {
+      if (legacy.mainServiceTagIds.length > 0) {
+        admissionDiagnosisByService = { [legacy.mainServiceTagIds[0]]: oldDiagnosis }
+      } else if (legacy.referralServiceTagIds.length > 0) {
+        admissionDiagnosisByService = { [legacy.referralServiceTagIds[0]]: oldDiagnosis }
+      } else {
+        admissionDiagnosisUnassigned = oldDiagnosis
+      }
+    }
+
+    delete legacy.diagnosis
+    await patientTable.put({
+      ...legacy,
+      admitTime: '',
+      referralTime: '',
+      dischargeTime: '',
+      admissionDiagnosisUnassigned,
+      admissionDiagnosisByService,
+      dischargeDiagnosisUnassigned: '',
+      dischargeDiagnosisByService: {},
+    })
+  }
+})
+
 export { db }

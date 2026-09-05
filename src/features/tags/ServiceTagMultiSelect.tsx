@@ -15,6 +15,9 @@ type ServiceTagMultiSelectProps = {
   onAdd: (tag: TagDefinition) => void
   onRemove: (tag: TagDefinition) => void
   onCreate: (name: string) => void
+  /** Overrides the input's default bordered-box look — e.g. the Profile tab passes a seamless,
+   * hover-only-border style to match its other lightweight fields and take up less visual space. */
+  inputClassName?: string
 }
 
 export const ServiceTagMultiSelect = ({
@@ -26,6 +29,7 @@ export const ServiceTagMultiSelect = ({
   onAdd,
   onRemove,
   onCreate,
+  inputClassName,
 }: ServiceTagMultiSelectProps) => {
   const roleMarker: TagChipRoleMarker = role === 'main' ? 'M' : 'R'
   const [query, setQuery] = useState('')
@@ -74,7 +78,7 @@ export const ServiceTagMultiSelect = ({
   }
 
   return (
-    <div className='space-y-1.5'>
+    <div className='space-y-1'>
       {selectedTags.length > 0 ? (
         <div className='flex flex-wrap gap-1.5'>
           {selectedTags.map((tag) => (
@@ -107,6 +111,7 @@ export const ServiceTagMultiSelect = ({
           onFocus={() => setIsOpen(true)}
           onBlur={() => window.setTimeout(() => setIsOpen(false), 120)}
           onKeyDown={handleKeyDown}
+          className={inputClassName}
         />
         {isOpen && (suggestions.length > 0 || canCreate) ? (
           <div className='absolute left-0 right-0 z-20 mt-1 rounded-lg border border-clay/25 bg-white/97 shadow-lg shadow-espresso/8 backdrop-blur-sm overflow-hidden'>
