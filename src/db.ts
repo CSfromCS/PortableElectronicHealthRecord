@@ -4,13 +4,15 @@ import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } fr
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
 import { seedDefaultCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
-import { buildDefaultReportTemplates } from './features/templates/templateDefaults'
+import { buildDefaultDateTimeFormats, buildDefaultReportTemplates, buildLockedLabsTemplate } from './features/templates/templateDefaults'
+import { buildDefaultBlockVariableConfig } from './features/templates/templateEngine'
 import type {
   BlockVariableConfig,
   BlockVariableId,
   CustomAction,
   CustomActionRun,
   DailyUpdate,
+  DateTimeFormatDefinition,
   FlatVariableId,
   LabEntry,
   MedicationEntry,
@@ -43,6 +45,7 @@ const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
   customActions: EntityTable<CustomAction, 'id'>
   customActionRuns: EntityTable<CustomActionRun, 'id'>
   reportTemplates: EntityTable<ReportTemplate, 'id'>
+  dateTimeFormats: EntityTable<DateTimeFormatDefinition, 'id'>
 }
 
 db.version(1).stores({
@@ -170,7 +173,10 @@ db.on('populate', async () => {
     (tag) => db.tagDefinitions.add(tag) as Promise<number>,
   )
   await seedDefaultCustomActions(tagIdByName, (action) => db.customActions.add(action) as Promise<number>)
-  await db.reportTemplates.bulkAdd(buildDefaultReportTemplates(new Date().toISOString()))
+  const now = new Date().toISOString()
+  await db.reportTemplates.bulkAdd(buildDefaultReportTemplates(now))
+  await db.reportTemplates.add(buildLockedLabsTemplate(now, 2))
+  await db.dateTimeFormats.bulkAdd(buildDefaultDateTimeFormats(now))
 })
 
 db.version(5).stores({
@@ -710,6 +716,59 @@ db.version(17).stores({
       variables,
     })
   }
+})
+
+db.version(18).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Adds user-configurable per-entry formatting to Vitals/Orders/Problems/Checklist Block
+  // variables (entry pattern + separators, plus a date-group header toggle/separator for
+  // Problems/Checklist), and a savable Date/Time Format library selectable from any date/time
+  // variable. Existing Block variable configs only ever had the range-mode fields below, so merge
+  // in that record type's default entry pattern (which exactly reproduces the previous hardcoded
+  // formatting) while preserving whatever range mode the user already chose. Also introduces the
+  // built-in, locked "Labs" template — Labs' comparison-mode formatting is algorithmic rather than
+  // field-composable, so it's seeded once here rather than left for the user to reconstruct.
+  const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
+  const dateTimeFormatTable = tx.table<DateTimeFormatDefinition, number>('dateTimeFormats')
+  const now = new Date().toISOString()
+
+  const existingTemplates = await reportTemplateTable.toArray()
+  for (const template of existingTemplates) {
+    if (template.id === undefined) continue
+    let changed = false
+    const nextVariables: Record<string, TemplateVariableInstance> = { ...template.variables }
+    for (const [variableId, instance] of Object.entries(nextVariables)) {
+      if (instance.kind !== 'block') continue
+      const legacyConfig = instance.config as Partial<BlockVariableConfig>
+      if (legacyConfig.entryPatternText !== undefined) continue
+      nextVariables[variableId] = {
+        ...instance,
+        config: { ...buildDefaultBlockVariableConfig(instance.variableId), ...legacyConfig },
+      }
+      changed = true
+    }
+    if (changed) await reportTemplateTable.update(template.id, { variables: nextVariables })
+  }
+
+  const maxSortOrder = existingTemplates.length > 0 ? Math.max(...existingTemplates.map((template) => template.sortOrder)) : -1
+  await reportTemplateTable.add(buildLockedLabsTemplate(now, maxSortOrder + 1))
+  await dateTimeFormatTable.bulkAdd(buildDefaultDateTimeFormats(now))
 })
 
 export { db }

@@ -34,7 +34,7 @@ export const formatStructuredMedication = (entry: MedicationEntry) => {
   return withNote
 }
 
-const formatOrderStatus = (status: OrderEntry['status']) => {
+export const formatOrderStatus = (status: OrderEntry['status']) => {
   if (status === 'carriedOut') return 'carried out'
   return status
 }

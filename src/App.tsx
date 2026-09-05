@@ -74,6 +74,7 @@ import {
 } from './features/patients/serviceDiagnosis'
 import { ServiceDiagnosisFields } from './features/patients/ServiceDiagnosisFields'
 import { ManageTemplatesScreen } from './features/templates/ManageTemplatesScreen'
+import { ManageDateTimeFormatsScreen } from './features/templates/ManageDateTimeFormatsScreen'
 import {
   PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE,
   buildCurrentDateTimeText,
@@ -146,7 +147,7 @@ import {
   type SyncVersion,
 } from './features/sync/syncService'
 import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText } from 'lucide-react'
-import type { CustomAction, CustomActionCondition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
+import type { CustomAction, CustomActionCondition, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
 import {
@@ -408,6 +409,7 @@ type BackupPayload = {
   tagDefinitions?: TagDefinition[]
   tagEvents?: TagEvent[]
   reportTemplates?: ReportTemplate[]
+  dateTimeFormats?: DateTimeFormatDefinition[]
 }
 
 const initialDailyUpdateForm: DailyUpdateFormState = {
@@ -515,7 +517,8 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
   const validTagDefinitions = candidate.tagDefinitions === undefined || Array.isArray(candidate.tagDefinitions)
   const validTagEvents = candidate.tagEvents === undefined || Array.isArray(candidate.tagEvents)
   const validReportTemplates = candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates)
-  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates
+  const validDateTimeFormats = candidate.dateTimeFormats === undefined || Array.isArray(candidate.dateTimeFormats)
+  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates && validDateTimeFormats
 }
 
 const isConflictSyncResult = (result: SyncNowResult): result is ConflictResult => {
@@ -622,7 +625,7 @@ function App() {
   const patientLongPressFiredRef = useRef(false)
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [pendingMainServiceTagIds, setPendingMainServiceTagIds] = useState<number[]>([])
-  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'reporting' | 'settings' | 'manageTags' | 'tabSettings' | 'manageCustomActions' | 'manageTemplates'>('patients')
+  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'reporting' | 'settings' | 'manageTags' | 'tabSettings' | 'manageCustomActions' | 'manageTemplates' | 'manageDateTimeFormats'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
   // Snapshot, per patient, of whether tags were already applied the first time this patient's
@@ -908,6 +911,8 @@ function App() {
   const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
   const customActions = useLiveQuery(() => db.customActions.toArray(), [])
   const reportTemplates = useLiveQuery(() => db.reportTemplates.toArray(), [])
+  const dateTimeFormats = useLiveQuery(() => db.dateTimeFormats.toArray(), [])
+  const dateTimeFormatsById = useMemo(() => new Map((dateTimeFormats ?? []).map((format) => [String(format.id), format])), [dateTimeFormats])
   const manualCustomActions = useMemo(
     () => (customActions ?? []).filter((action) => (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
     [customActions],
@@ -3930,6 +3935,7 @@ function App() {
         ordersByPatient: structuredOrdersByPatient,
         medicationsByPatient: structuredMedsByPatient,
         dailyUpdatesByPatient: dailyUpdatesByPatientAllDates,
+        dateTimeFormatsById,
         ...buildCurrentDateTimeText(),
       }
       const text = reportRepeatMode === 'prints-once'
@@ -4741,6 +4747,7 @@ function App() {
       tagDefinitions: await db.tagDefinitions.toArray(),
       tagEvents: await db.tagEvents.toArray(),
       reportTemplates: await db.reportTemplates.toArray(),
+      dateTimeFormats: await db.dateTimeFormats.toArray(),
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -4768,7 +4775,7 @@ function App() {
 
       await db.transaction(
         'rw',
-        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates],
+        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates, db.dateTimeFormats],
         async () => {
         await db.labs.clear()
         await db.medications.clear()
@@ -4780,6 +4787,7 @@ function App() {
         await db.tagDefinitions.clear()
         await db.tagEvents.clear()
         await db.reportTemplates.clear()
+        await db.dateTimeFormats.clear()
         if (parsed.patients.length > 0) {
           await db.patients.bulkPut(parsed.patients.map((patient) => ensurePatientLastModified(patient)))
         }
@@ -4809,6 +4817,9 @@ function App() {
         }
         if ((parsed.reportTemplates ?? []).length > 0) {
           await db.reportTemplates.bulkPut(parsed.reportTemplates ?? [])
+        }
+        if ((parsed.dateTimeFormats ?? []).length > 0) {
+          await db.dateTimeFormats.bulkPut(parsed.dateTimeFormats ?? [])
         }
       },
       )
@@ -5319,7 +5330,7 @@ function App() {
                 </Button>
               ) : null}
               <Button variant={view === 'checklist' ? 'default' : 'ghost'} size='sm' onClick={() => setView('checklist')}>Checklist</Button>
-              <Button variant={view === 'reporting' || view === 'manageTemplates' ? 'default' : 'ghost'} size='sm' onClick={() => setView('reporting')}>Reports</Button>
+              <Button variant={view === 'reporting' || view === 'manageTemplates' || view === 'manageDateTimeFormats' ? 'default' : 'ghost'} size='sm' onClick={() => setView('reporting')}>Reports</Button>
               <Button variant={view === 'settings' || view === 'manageTags' || view === 'tabSettings' || view === 'manageCustomActions' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
             </div>
           </div>
@@ -5354,7 +5365,14 @@ function App() {
             templates={reportTemplates ?? []}
             tags={tagDefinitions ?? []}
             groups={tagGroups ?? []}
+            dateTimeFormats={dateTimeFormats ?? []}
+            onManageDateTimeFormats={() => setView('manageDateTimeFormats')}
             onBack={() => setView('reporting')}
+          />
+        ) : view === 'manageDateTimeFormats' ? (
+          <ManageDateTimeFormatsScreen
+            formats={dateTimeFormats ?? []}
+            onBack={() => setView('manageTemplates')}
           />
         ) : view !== 'settings' ? (
           <>
@@ -8475,7 +8493,7 @@ function App() {
             <button
               className={cn(
                 'flex flex-1 flex-col items-center gap-0.5 px-2 py-1.5 text-xs font-semibold rounded-xl transition-all duration-200',
-                view === 'reporting' || view === 'manageTemplates'
+                view === 'reporting' || view === 'manageTemplates' || view === 'manageDateTimeFormats'
                   ? 'text-action-primary bg-action-primary/10'
                   : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
               )}

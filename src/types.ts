@@ -279,6 +279,18 @@ export type BlockVariableRangeMode = 'latest' | 'dateRange' | 'numberOfEntries'
 
 export type RelativeDateRangeMode = 'fixed' | 'sinceAdmission' | 'lastNDays'
 
+/** Vitals entry-level fields — meaningful only inside a Vitals Block variable's own
+ * `entryPatternText`/`entryFieldIds`, never inserted directly into a template's Format Pattern. */
+export type VitalsEntryFieldId = 'entryDate' | 'entryTime' | 'bp' | 'hr' | 'rr' | 'temp' | 'spo2' | 'note'
+export type OrdersEntryFieldId = 'entryDate' | 'entryTime' | 'service' | 'orderText' | 'status' | 'note'
+/** `resolvedMarker` renders as " (resolved)" once completed, "" otherwise — a fixed literal, not a
+ * user-configurable glyph pair (unlike Checklist's checkbox), since "resolved" isn't a visual toggle. */
+export type ProblemsEntryFieldId = 'problemIndex' | 'problemTitle' | 'problemNotes' | 'resolvedMarker'
+export type ChecklistEntryFieldId = 'checkbox' | 'itemText'
+
+/** How multiple entries (or, for Problems/Checklist, multiple date-groups) join together. */
+export type BlockJoinMode = 'lineBreak' | 'blankLine' | 'space' | 'custom'
+
 /** Set once when a Block variable is placed into a template and saved as part of that specific
  * placeholder — never re-prompted at generation time. */
 export interface BlockVariableConfig {
@@ -293,6 +305,29 @@ export interface BlockVariableConfig {
   fixedDateTo: string
   /** Only meaningful when relativeMode === 'lastNDays'. */
   lastNDays: number
+  /** How a single matched entry renders — a mini Format Pattern (same `{{var:<id>}}` token syntax
+   * as the top-level pattern) scoped to this record type's own fields, keyed into `entryFieldIds`
+   * rather than a full `TemplateVariableInstance` map since entry-level fields carry no config of
+   * their own. Not used by 'labs', whose formatting is algorithmic (see `buildLabReportBlocks`)
+   * rather than field-composable. */
+  entryPatternText: string
+  entryFieldIds: Record<string, string>
+  entrySeparator: BlockJoinMode
+  /** Only meaningful when entrySeparator === 'custom'. */
+  customEntrySeparator: string
+  /** Problems/Checklist only: whether each date-group is preceded by a date header line. */
+  showGroupHeader: boolean
+  /** Problems/Checklist only: which saved Date/Time Format renders that header — unset uses the
+   * built-in MM-DD-YYYY default. */
+  groupHeaderDateFormatId?: string
+  /** Problems/Checklist only: how consecutive date-groups join. */
+  groupSeparator: BlockJoinMode
+  customGroupSeparator: string
+  /** Checklist only: the glyph the "Checkbox" entry field resolves to for a checked/unchecked item
+   * — e.g. "x"/" " (default, reproducing the classic `[x]`/`[ ]`) or "✅"/"⭕". No effect unless the
+   * entry pattern actually includes the Checkbox field. */
+  checkedGlyph: string
+  uncheckedGlyph: string
 }
 
 /** Tags is a Flat variable (single inline placement) but — uniquely among Flat variables — carries
@@ -313,7 +348,7 @@ export interface TagsVariableConfig {
  * the id embedded in the token, not by position, so editing the surrounding text never disturbs a
  * variable's own settings. */
 export type TemplateVariableInstance =
-  | { kind: 'flat'; variableId: FlatVariableId }
+  | { kind: 'flat'; variableId: FlatVariableId; /** Only meaningful for a date/time-typed FlatVariableId (admitDate/referralDate/dischargeDate/currentDate/currentTime). Unset uses that field's own built-in default formatting. */ dateTimeFormatId?: string }
   | { kind: 'block'; variableId: BlockVariableId; config: BlockVariableConfig }
   | { kind: 'tags'; config: TagsVariableConfig }
 
@@ -330,6 +365,33 @@ export interface ReportTemplate {
   name: string
   patternText: string
   variables: Record<string, TemplateVariableInstance>
+  sortOrder: number
+  createdAt: string
+  /** True only for the built-in "Labs" template, whose if/then comparison-mode formatting isn't
+   * field-composable — hides Edit/Delete in Manage Templates. The user can still choose whether to
+   * include it in a generated report, exactly like any other template. */
+  locked?: boolean
+}
+
+/** A named, savable date/time display format (e.g. "MMM D, YYYY") — selectable wherever a
+ * date/time-typed template variable is configured. Mirrors `ReportTemplate`'s own patternText +
+ * variables shape (same `{{var:<id>}}` token syntax), just against a much smaller, configless
+ * component catalog — every component resolves the same way regardless of where it's used, so
+ * there's no per-instance config to store beyond which component it is. */
+export type DateTimeComponentId =
+  | 'year4' | 'year2'
+  | 'monthNum2' | 'monthAbbrev' | 'monthFull'
+  | 'day2' | 'dayNoLeadingZero'
+  | 'weekdayAbbrev' | 'weekdayFull'
+  | 'hour24' | 'hour12' | 'hour12NoLeadingZero'
+  | 'minute2'
+  | 'meridiemUpper' | 'meridiemLower'
+
+export interface DateTimeFormatDefinition {
+  id?: number
+  name: string
+  patternText: string
+  componentIds: Record<string, DateTimeComponentId>
   sortOrder: number
   createdAt: string
 }

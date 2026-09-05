@@ -1,5 +1,5 @@
 import { buildCurrentDateTimeText, createVariableId, type TemplateRenderContext } from './templateEngine'
-import type { DailyUpdate, LabEntry, OrderEntry, Patient, VitalEntry } from '@/types'
+import type { DailyUpdate, DateTimeFormatDefinition, LabEntry, OrderEntry, Patient, VitalEntry } from '@/types'
 
 /** Synthetic patient used only for the template editor's live preview — deliberately decoupled
  * from whatever real patient (if any) is open, so previewing a template never risks surfacing a
@@ -64,7 +64,7 @@ const SAMPLE_DAILY_UPDATES: DailyUpdate[] = [
   },
 ]
 
-export const buildSamplePreviewContext = (): TemplateRenderContext => ({
+export const buildSamplePreviewContext = (dateTimeFormatsById: Map<string, DateTimeFormatDefinition> = new Map()): TemplateRenderContext => ({
   tagsById: new Map(),
   tagGroups: [],
   vitalsByPatient: new Map([[-999, SAMPLE_VITALS]]),
@@ -72,5 +72,6 @@ export const buildSamplePreviewContext = (): TemplateRenderContext => ({
   ordersByPatient: new Map([[-999, SAMPLE_ORDERS]]),
   medicationsByPatient: new Map(),
   dailyUpdatesByPatient: new Map([[-999, SAMPLE_DAILY_UPDATES]]),
+  dateTimeFormatsById,
   ...buildCurrentDateTimeText(),
 })
