@@ -228,10 +228,18 @@ const BlockVariableConfigDialog = ({
                     className='flex-1 text-xs'
                     onClick={() => setConfig((previous) => ({ ...previous, rangeMode: mode }))}
                   >
-                    {mode === 'latest' ? 'Latest' : mode === 'numberOfEntries' ? 'Number of Entries' : 'Date Range'}
+                    {mode === 'latest' ? 'Most Recent' : mode === 'numberOfEntries' ? 'Number of Entries' : 'Date Range'}
                   </Button>
                 ))}
               </div>
+
+              {config.rangeMode === 'latest' ? (
+                <p className='text-xs text-clay'>
+                  {isGrouped
+                    ? `Shows only the ${BLOCK_VARIABLE_LABELS[variableId]} entries from the single most recent day they were last saved — not the full history.`
+                    : `Shows only the single most recent ${BLOCK_VARIABLE_LABELS[variableId]} entry on file, by date and time — not the full history.`}
+                </p>
+              ) : null}
 
               {config.rangeMode === 'numberOfEntries' ? (
                 <div className='space-y-1'>

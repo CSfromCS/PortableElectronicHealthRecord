@@ -759,7 +759,7 @@ export const describeVariableInstance = (instance: TemplateVariableInstance): st
 }
 
 export const describeBlockConfig = (config: BlockVariableConfig): string => {
-  if (config.rangeMode === 'latest') return 'Latest'
+  if (config.rangeMode === 'latest') return 'Most Recent'
   if (config.rangeMode === 'numberOfEntries') return `Last ${config.entryCount} entries`
   if (config.relativeMode === 'sinceAdmission') return 'Since Admission Date'
   if (config.relativeMode === 'lastNDays') return `Last ${config.lastNDays} days`
