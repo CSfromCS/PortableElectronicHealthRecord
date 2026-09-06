@@ -395,6 +395,29 @@ export type TemplateVariableInstance =
   | { kind: 'flat'; variableId: FlatVariableId; /** Only meaningful for a date/time-typed FlatVariableId (admitDate/referralDate/dischargeDate/currentDate/currentTime). Unset uses that field's own built-in default formatting. */ dateTimeFormatId?: string }
   | { kind: 'block'; variableId: BlockVariableId; config: BlockVariableConfig }
   | { kind: 'tags'; config: TagsVariableConfig }
+  | { kind: 'censusSummary'; config: CensusSummaryConfig }
+
+/** One line per tag in `tagGroupId` (e.g. "CD: 0 new admissions, 2 new referrals (SANTOS,
+ * MARIMAR), 1 discharged (RIZAL)"), covering every patient currently carrying that tag who was
+ * newly admitted/referred/discharged within the lookback window — reuses the same Admitted/
+ * Referred/Discharged detection already built for the Patient Filter's Special/Timebound facet.
+ * A whole-run aggregate, not a per-patient value, so (like Current Date/Time) it's only offered in
+ * a template's Header/Footer, never the per-patient Format Pattern. */
+export interface CensusSummaryConfig {
+  /** Which Tag Group's tags to break the summary down by, in that group's canonical tag order. */
+  tagGroupId: number | null
+  /** Hours to look back from the moment the report is generated (not frozen at save time, unlike
+   * Fixed Dates — a shift summary should always mean "the last N hours from now"). */
+  lookbackHours: number
+  /** How each tag's line renders — a mini Format Pattern scoped to this variable's own fields
+   * (groupLabel, admittedPhrase, referredPhrase, dischargedPhrase — each phrase already bakes in
+   * its own count/pluralization and optional patient-names parenthetical, so it's never blank),
+   * same `{{var:<id>}}` token mechanism as everywhere else. */
+  entryPatternText: string
+  entryFieldIds: Record<string, string>
+  entrySeparator: BlockJoinMode
+  customEntrySeparator: string
+}
 
 /**
  * A user-defined, savable report format (issue #82). `patternText` is the single source of truth

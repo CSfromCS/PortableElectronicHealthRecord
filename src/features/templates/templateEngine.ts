@@ -1,7 +1,8 @@
+import { type DateTimeWindow, type PatientPoolContext, matchesPatientPool } from '@/features/filters/patientFilterUtils'
 import { composeDiagnosisText } from '@/features/patients/serviceDiagnosis'
 import { buildLabReportBlockPieces, formatOrderStatus } from '@/features/reporting/reportBuilders'
 import { resolveServiceTagNames } from '@/features/tags/serviceTagUtils'
-import { getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
+import { bucketTagsByGroup, getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
 import {
   formatClock,
   formatClockCompact,
@@ -16,6 +17,7 @@ import type {
   BlockJoinMode,
   BlockVariableConfig,
   BlockVariableId,
+  CensusSummaryConfig,
   ChecklistEntryFieldId,
   DailyUpdate,
   DateTimeComponentId,
@@ -336,6 +338,28 @@ export const ENTRY_FIELD_LABELS_BY_BLOCK: Record<BlockVariableId, Record<string,
   labs: {},
 }
 
+/** Census Summary's own entry-level fields — one line per tag in the chosen Tag Group, used only
+ * inside that variable's own `entryPatternText`/`entryFieldIds`. Each `*Phrase` field bakes its
+ * count, pluralized unit word, and (when non-zero) a parenthetical name list all into one value —
+ * e.g. "0 new admissions" or "1 new admission (MARIA)" — rather than splitting count and names
+ * into separate chips. That's deliberate: the blank-collapse rule every other pattern uses to drop
+ * an empty parenthetical would, here, also eat the fixed ", " separators between phrases whenever
+ * one phrase's name list happened to be blank — collapsing "0 new admissions, 2 new referrals" down
+ * to "0 new admissions2 new referrals". Keeping the whole phrase as a single, never-blank value
+ * sidesteps that entirely. */
+export type CensusSummaryEntryFieldId = 'groupLabel' | 'admittedPhrase' | 'referredPhrase' | 'dischargedPhrase'
+
+export const CENSUS_SUMMARY_ENTRY_FIELD_ORDER: CensusSummaryEntryFieldId[] = [
+  'groupLabel', 'admittedPhrase', 'referredPhrase', 'dischargedPhrase',
+]
+
+export const CENSUS_SUMMARY_ENTRY_FIELD_LABELS: Record<CensusSummaryEntryFieldId, string> = {
+  groupLabel: 'Group Label',
+  admittedPhrase: 'New Admissions',
+  referredPhrase: 'New Referrals',
+  dischargedPhrase: 'Discharged',
+}
+
 /** Entry-level fields whose value is a date/time (so a Date/Time Format can be chosen for that
  * specific chip, via `BlockVariableConfig.entryFieldDateTimeFormats`). */
 const DATE_TIME_ENTRY_FIELD_IDS_BY_BLOCK: Record<BlockVariableId, Set<string>> = {
@@ -505,6 +529,28 @@ export const buildDefaultBlockVariableConfig = (variableId: BlockVariableId): Bl
   labsDateDisplayMode: 'perEntry',
 })
 
+/** Defaults to the "Category" Tag Group when one exists (matching this app's own default CD/PD
+ * tags), else the first available group — the user can always change it. 12-hour lookback matches
+ * the Patient Filter's own default window for the same Admitted/Referred/Discharged criteria. */
+export const buildDefaultCensusSummaryConfig = (groups: TagGroupDefinition[]): CensusSummaryConfig => {
+  const defaultGroup = groups.find((group) => group.name.trim().toLowerCase() === 'category') ?? groups[0]
+  const entryFieldIds: Record<string, string> = {}
+  const token = (fieldId: CensusSummaryEntryFieldId): string => {
+    const id = createVariableId()
+    entryFieldIds[id] = fieldId
+    return buildVariableToken(id)
+  }
+  const entryPatternText = `${token('groupLabel')}: ${token('admittedPhrase')}, ${token('referredPhrase')}, ${token('dischargedPhrase')}`
+  return {
+    tagGroupId: defaultGroup?.id ?? null,
+    lookbackHours: 12,
+    entryPatternText,
+    entryFieldIds,
+    entrySeparator: 'blankLine',
+    customEntrySeparator: '',
+  }
+}
+
 export const DEFAULT_TAGS_VARIABLE_CONFIG: TagsVariableConfig = {
   includeAll: true,
   tagIds: [],
@@ -526,6 +572,13 @@ export type TemplateRenderContext = {
    * still be re-rendered through a user-chosen Date/Time Format instead of the built-in default. */
   nowDate: Date
   dateTimeFormatsById: Map<string, DateTimeFormatDefinition>
+  /** Every patient in the roster (not just whichever ones are selected for the per-patient body) —
+   * a Census Summary variable scans all of them, since it's reporting on census changes generally,
+   * independent of which patients happen to be checked for the main per-patient section. */
+  allPatients: Patient[]
+  /** Same Admitted/Referred/Discharged detection already built for the Patient Filter's
+   * Special/Timebound facet — reused as-is by Census Summary's per-tag classification. */
+  poolContext: PatientPoolContext
 }
 
 /** Current Date/Time are captured once at the start of report generation — every patient's line
@@ -800,6 +853,61 @@ const resolveMedicationsBlock = (config: BlockVariableConfig, patient: Patient, 
   return lines.join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
 }
 
+const pluralize = (count: number, singular: string, plural: string): string => (count === 1 ? singular : plural)
+
+/** "0 new admissions" / "1 new admission (MARIA)" / "2 new admissions (SANTOS, MARIMAR)" — count,
+ * pluralized unit, and (only when non-zero) a parenthetical name list, all as one value. */
+const buildCensusPhrase = (count: number, singular: string, plural: string, patients: Patient[]): string => {
+  const summary = `${count} ${pluralize(count, singular, plural)}`
+  const names = patients.map((patient) => patient.lastName).filter(Boolean).join(', ')
+  return names ? `${summary} (${names})` : summary
+}
+
+const resolveCensusSummaryEntryField = (
+  fieldId: string,
+  group: { label: string; admitted: Patient[]; referred: Patient[]; discharged: Patient[] },
+): string => {
+  switch (fieldId as CensusSummaryEntryFieldId) {
+    case 'groupLabel': return group.label
+    case 'admittedPhrase': return buildCensusPhrase(group.admitted.length, 'new admission', 'new admissions', group.admitted)
+    case 'referredPhrase': return buildCensusPhrase(group.referred.length, 'new referral', 'new referrals', group.referred)
+    case 'dischargedPhrase': return buildCensusPhrase(group.discharged.length, 'discharged', 'discharged', group.discharged)
+    default: return ''
+  }
+}
+
+/** One line per tag in the configured Tag Group — each line covers every patient currently
+ * carrying that tag, classified by whether they were newly admitted/referred/discharged within
+ * the lookback window (reusing the exact same detection as the Patient Filter's Special/Timebound
+ * facet, via `matchesPatientPool`). Not a per-patient value — scans `ctx.allPatients` directly. */
+const resolveCensusSummary = (config: CensusSummaryConfig, ctx: TemplateRenderContext): string => {
+  if (config.tagGroupId === null) return ''
+  const bucket = bucketTagsByGroup([...ctx.tagsById.values()], ctx.tagGroups).find((candidate) => candidate.groupId === config.tagGroupId)
+  if (!bucket) return ''
+
+  const windowStart = new Date(ctx.nowDate.getTime() - Math.max(0, config.lookbackHours) * 3_600_000)
+  const window: DateTimeWindow = {
+    dateFrom: toLocalISODate(windowStart),
+    timeFrom: toLocalTime(windowStart),
+    dateTo: toLocalISODate(ctx.nowDate),
+    timeTo: toLocalTime(ctx.nowDate),
+  }
+
+  const lines = bucket.tags.map((tag) => {
+    if (tag.id === undefined) return ''
+    const tagId = tag.id
+    const patientsWithTag = ctx.allPatients.filter((patient) => (patient.tagIds ?? []).includes(tagId))
+    const group = {
+      label: tag.name,
+      admitted: patientsWithTag.filter((patient) => matchesPatientPool(patient, ['admitted'], window, ctx.poolContext)),
+      referred: patientsWithTag.filter((patient) => matchesPatientPool(patient, ['referred'], window, ctx.poolContext)),
+      discharged: patientsWithTag.filter((patient) => matchesPatientPool(patient, ['discharged'], window, ctx.poolContext)),
+    }
+    return renderEntryPattern(config.entryPatternText, config.entryFieldIds, {}, (fieldId) => resolveCensusSummaryEntryField(fieldId, group))
+  })
+  return lines.join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
+}
+
 const resolveBlockVariable = (
   variableId: BlockVariableId,
   config: BlockVariableConfig,
@@ -822,6 +930,7 @@ const resolveBlockVariable = (
 const resolveVariableInstance = (instance: TemplateVariableInstance, patient: Patient, ctx: TemplateRenderContext): string => {
   if (instance.kind === 'flat') return resolveFlatVariable(instance.variableId, instance.dateTimeFormatId, patient, ctx)
   if (instance.kind === 'block') return resolveBlockVariable(instance.variableId, instance.config, patient, ctx)
+  if (instance.kind === 'censusSummary') return resolveCensusSummary(instance.config, ctx)
   return resolveTagsVariable(instance.config, patient, ctx)
 }
 
@@ -865,6 +974,9 @@ export type TemplateRepeatMode = 'per-patient' | 'prints-once'
 const isPatientDependentInstance = (instance: TemplateVariableInstance): boolean => {
   if (instance.kind === 'block') return true
   if (instance.kind === 'tags') return true
+  // Census Summary is a whole-run aggregate (scans every patient, not "the" patient), same as
+  // Current Date/Time — it never makes a template Per-Patient on its own.
+  if (instance.kind === 'censusSummary') return false
   return PATIENT_DEPENDENT_FLAT_VARIABLES.has(instance.variableId)
 }
 
@@ -888,11 +1000,15 @@ export const classifyTemplateRepeatMode = (template: Pick<ReportTemplate, 'patte
 }
 
 /** Human-readable label for a variable chip/summary — used by the editor and the variable picker. */
-export const describeVariableInstance = (instance: TemplateVariableInstance): string => {
+export const describeVariableInstance = (instance: TemplateVariableInstance, groups: TagGroupDefinition[] = []): string => {
   if (instance.kind === 'flat') return FLAT_VARIABLE_LABELS[instance.variableId]
   if (instance.kind === 'block') {
     const detail = instance.variableId === 'medications' ? describeMedicationsConfig(instance.config) : describeBlockConfig(instance.config)
     return `${BLOCK_VARIABLE_LABELS[instance.variableId]} — ${detail}`
+  }
+  if (instance.kind === 'censusSummary') {
+    const groupName = groups.find((group) => group.id === instance.config.tagGroupId)?.name ?? '…'
+    return `Census Summary — ${groupName}, last ${instance.config.lookbackHours}h`
   }
   return describeTagsConfig(instance.config)
 }

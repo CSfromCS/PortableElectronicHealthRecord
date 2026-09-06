@@ -1,5 +1,6 @@
+import { buildPatientPoolContext } from '@/features/filters/patientFilterUtils'
 import { buildCurrentDateTimeText, createVariableId, type TemplateRenderContext } from './templateEngine'
-import type { DailyUpdate, DateTimeFormatDefinition, LabEntry, OrderEntry, Patient, VitalEntry } from '@/types'
+import type { DailyUpdate, DateTimeFormatDefinition, LabEntry, OrderEntry, Patient, TagDefinition, TagGroupDefinition, VitalEntry } from '@/types'
 
 /** Synthetic patient used only for the template editor's live preview — deliberately decoupled
  * from whatever real patient (if any) is open, so previewing a template never risks surfacing a
@@ -64,14 +65,28 @@ const SAMPLE_DAILY_UPDATES: DailyUpdate[] = [
   },
 ]
 
-export const buildSamplePreviewContext = (dateTimeFormatsById: Map<string, DateTimeFormatDefinition> = new Map()): TemplateRenderContext => ({
-  tagsById: new Map(),
-  tagGroups: [],
+/**
+ * `tagsById`/`tagGroups` default to empty (decoupled from real data, like everything else here),
+ * but the Manage Templates editor passes the app's REAL tag/group definitions through so a Census
+ * Summary variable's chosen Tag Group can actually be found and labeled in the preview — tag/group
+ * *definitions* aren't patient data, so this doesn't compromise the "never surface a real
+ * patient's data" guarantee above. The sample patient carries no tags, so every count still comes
+ * back zero either way; only the group/tag labels become real.
+ */
+export const buildSamplePreviewContext = (
+  dateTimeFormatsById: Map<string, DateTimeFormatDefinition> = new Map(),
+  tagsById: Map<number, TagDefinition> = new Map(),
+  tagGroups: TagGroupDefinition[] = [],
+): TemplateRenderContext => ({
+  tagsById,
+  tagGroups,
   vitalsByPatient: new Map([[-999, SAMPLE_VITALS]]),
   labsByPatient: new Map([[-999, SAMPLE_LABS]]),
   ordersByPatient: new Map([[-999, SAMPLE_ORDERS]]),
   medicationsByPatient: new Map(),
   dailyUpdatesByPatient: new Map([[-999, SAMPLE_DAILY_UPDATES]]),
   dateTimeFormatsById,
+  allPatients: [SAMPLE_PREVIEW_PATIENT],
+  poolContext: buildPatientPoolContext(tagsById, []),
   ...buildCurrentDateTimeText(),
 })

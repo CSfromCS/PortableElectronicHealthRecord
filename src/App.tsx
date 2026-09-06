@@ -3937,6 +3937,8 @@ function App() {
         medicationsByPatient: structuredMedsByPatient,
         dailyUpdatesByPatient: dailyUpdatesByPatientAllDates,
         dateTimeFormatsById,
+        allPatients: patients ?? [],
+        poolContext: patientPoolContext,
         ...buildCurrentDateTimeText(),
       }
       const bodyText = reportRepeatMode === 'prints-once'

@@ -21,6 +21,7 @@ import type {
   BlockVariableConfig,
   BlockVariableId,
   BlockVariableRangeMode,
+  CensusSummaryConfig,
   DateTimeFormatDefinition,
   FlatVariableId,
   LabsDateDisplayMode,
@@ -36,12 +37,15 @@ import { ChipTextEditor, type ChipCatalogEntry } from './ChipTextEditor'
 import {
   BLOCK_JOIN_MODE_LABELS,
   BLOCK_VARIABLE_LABELS,
+  CENSUS_SUMMARY_ENTRY_FIELD_LABELS,
+  CENSUS_SUMMARY_ENTRY_FIELD_ORDER,
   DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS,
   DEFAULT_TAGS_VARIABLE_CONFIG,
   ENTRY_FIELD_LABELS_BY_BLOCK,
   ENTRY_FIELD_ORDER_BY_BLOCK,
   FLAT_VARIABLE_LABELS,
   buildDefaultBlockVariableConfig,
+  buildDefaultCensusSummaryConfig,
   buildVariableToken,
   classifyTemplateRepeatMode,
   createVariableId,
@@ -208,6 +212,104 @@ const DateTimeFormatPickerDialog = ({
         <div className='flex justify-end gap-2 pt-2'>
           <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
           <Button type='button' onClick={() => onSave(selected === NO_FORMAT_VALUE ? undefined : selected)}>Save</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const CENSUS_SUMMARY_ENTRY_CATALOG: ChipCatalogEntry[] = CENSUS_SUMMARY_ENTRY_FIELD_ORDER.map((fieldId) => ({
+  id: fieldId,
+  label: CENSUS_SUMMARY_ENTRY_FIELD_LABELS[fieldId],
+}))
+
+/** Census Summary settings: which Tag Group to break the summary down by (one line per tag in the
+ * group), how far back to look for newly admitted/referred/discharged patients, and how each
+ * tag's line renders. Only ever reachable from a Header/Footer's restricted variable picker — a
+ * whole-run aggregate, not a per-patient value. */
+const CensusSummaryConfigDialog = ({
+  open,
+  initialConfig,
+  groups,
+  onCancel,
+  onSave,
+}: {
+  open: boolean
+  initialConfig: CensusSummaryConfig
+  groups: TagGroupDefinition[]
+  onCancel: () => void
+  onSave: (config: CensusSummaryConfig) => void
+}) => {
+  const [config, setConfig] = useState<CensusSummaryConfig>(initialConfig)
+
+  useEffect(() => {
+    if (open) setConfig(initialConfig)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset the draft only when the dialog (re)opens
+  }, [open])
+
+  if (!open) return null
+
+  const orderedGroups = [...groups].sort((a, b) => a.sortOrder - b.sortOrder)
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
+      <DialogContent className='max-w-md' onCloseAutoFocus={(event) => event.preventDefault()}>
+        <DialogHeader>
+          <DialogTitle>Census Summary settings</DialogTitle>
+        </DialogHeader>
+        <ScrollArea className='max-h-[65vh] pr-3'>
+          <div className='space-y-4'>
+            <div className='space-y-1'>
+              <Label className='text-xs'>Break down by Tag Group</Label>
+              <Select
+                value={config.tagGroupId !== null ? String(config.tagGroupId) : ''}
+                onValueChange={(value) => setConfig((previous) => ({ ...previous, tagGroupId: value ? Number.parseInt(value, 10) : null }))}
+              >
+                <SelectTrigger><SelectValue placeholder='Choose a tag group' /></SelectTrigger>
+                <SelectContent>
+                  {orderedGroups.map((group) => (
+                    <SelectItem key={group.id} value={String(group.id)}>{group.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className='text-xs text-clay'>One line per tag in the group — e.g. "Category" (CD, PD) produces a CD line and a PD line, each covering patients currently carrying that tag.</p>
+            </div>
+
+            <div className='space-y-1'>
+              <Label className='text-xs'>Look back this many hours</Label>
+              <Input
+                type='number'
+                min={1}
+                value={config.lookbackHours}
+                onChange={(event) => setConfig((previous) => ({ ...previous, lookbackHours: Math.max(1, Number.parseInt(event.target.value, 10) || 1) }))}
+              />
+              <p className='text-xs text-clay'>Measured back from the moment the report is generated, not frozen at save time — a 12-hour window always means "the last 12 hours," whenever this is actually used.</p>
+            </div>
+
+            <div className='border-t border-clay/15 pt-3 space-y-1.5'>
+              <Label className='text-xs'>How each tag's line renders</Label>
+              <ChipTextEditor
+                initialPatternText={config.entryPatternText}
+                initialFieldIds={config.entryFieldIds}
+                catalog={CENSUS_SUMMARY_ENTRY_CATALOG}
+                addButtonLabel='Add Field'
+                pickerTitle='Add Census Summary field'
+                onChange={(entryPatternText, entryFieldIds) => setConfig((previous) => ({ ...previous, entryPatternText, entryFieldIds }))}
+              />
+            </div>
+
+            <JoinModePicker
+              label='Between tags'
+              mode={config.entrySeparator}
+              custom={config.customEntrySeparator}
+              onModeChange={(entrySeparator) => setConfig((previous) => ({ ...previous, entrySeparator }))}
+              onCustomChange={(customEntrySeparator) => setConfig((previous) => ({ ...previous, customEntrySeparator }))}
+            />
+          </div>
+        </ScrollArea>
+        <div className='flex justify-end gap-2 pt-2'>
+          <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
+          <Button type='button' disabled={config.tagGroupId === null} onClick={() => onSave(config)}>Save</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -722,6 +824,7 @@ const VariablePickerDialog = ({
   onPickFlat,
   onPickTags,
   onPickBlock,
+  onPickCensusSummary,
   restrictToCurrentDateTime = false,
 }: {
   open: boolean
@@ -729,9 +832,10 @@ const VariablePickerDialog = ({
   onPickFlat: (variableId: FlatVariableId) => void
   onPickTags: () => void
   onPickBlock: (variableId: BlockVariableId) => void
+  onPickCensusSummary?: () => void
   /** Header/Footer content prints once per run, not per patient, so only Current Date/Current
-   * Time (plus whatever literal text is typed) make sense there — every other variable reads from
-   * a specific patient and is left out of the picker entirely in this mode. */
+   * Time, Census Summary (plus whatever literal text is typed) make sense there — every other
+   * variable reads from a specific patient and is left out of the picker entirely in this mode. */
   restrictToCurrentDateTime?: boolean
 }) => (
   <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -752,6 +856,15 @@ const VariablePickerDialog = ({
                 {FLAT_VARIABLE_LABELS[variableId]}
               </button>
             ))}
+            {onPickCensusSummary ? (
+              <button
+                type='button'
+                className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                onClick={onPickCensusSummary}
+              >
+                Census Summary
+              </button>
+            ) : null}
           </div>
         </ScrollArea>
       ) : (
@@ -811,12 +924,12 @@ const VariablePickerDialog = ({
 
 const CHIP_CLASS = 'inline-flex items-center rounded-full bg-action-primary/15 px-2 py-0.5 text-xs font-semibold text-action-primary align-baseline mx-0.5 cursor-pointer select-none whitespace-nowrap'
 
-const buildChipElement = (id: string, instance: TemplateVariableInstance): HTMLSpanElement => {
+const buildChipElement = (id: string, instance: TemplateVariableInstance, groups: TagGroupDefinition[] = []): HTMLSpanElement => {
   const chip = document.createElement('span')
   chip.contentEditable = 'false'
   chip.dataset.variableId = id
   chip.className = CHIP_CLASS
-  chip.textContent = describeVariableInstance(instance)
+  chip.textContent = describeVariableInstance(instance, groups)
   return chip
 }
 
@@ -854,6 +967,7 @@ const FormatPatternEditor = ({
   const [pendingBlockVariable, setPendingBlockVariable] = useState<BlockVariableId | null>(null)
   const [tagsDialogOpen, setTagsDialogOpen] = useState(false)
   const [pendingDateTimeFlatId, setPendingDateTimeFlatId] = useState<FlatVariableId | null>(null)
+  const [censusSummaryDialogOpen, setCensusSummaryDialogOpen] = useState(false)
   /** Non-null while the config dialog is editing an EXISTING chip (clicked in the editor) rather
    * than about to insert a brand-new one from the picker. */
   const [reconfiguringId, setReconfiguringId] = useState<string | null>(null)
@@ -872,7 +986,7 @@ const FormatPatternEditor = ({
         container.appendChild(document.createElement('br'))
       } else {
         const instance = initialVariables[part.id]
-        if (instance) container.appendChild(buildChipElement(part.id, instance))
+        if (instance) container.appendChild(buildChipElement(part.id, instance, groups))
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately runs once per mount only; see comment above
@@ -1015,6 +1129,9 @@ const FormatPatternEditor = ({
     } else if (instance.kind === 'flat' && DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS.has(instance.variableId)) {
       setReconfiguringId(id)
       setPendingDateTimeFlatId(instance.variableId)
+    } else if (instance.kind === 'censusSummary') {
+      setReconfiguringId(id)
+      setCensusSummaryDialogOpen(true)
     }
   }
 
@@ -1022,7 +1139,7 @@ const FormatPatternEditor = ({
     const container = containerRef.current
     if (!container) return
     const id = createVariableId()
-    const chip = buildChipElement(id, instance)
+    const chip = buildChipElement(id, instance, groups)
     variablesRef.current = { ...variablesRef.current, [id]: instance }
 
     let range = savedRangeRef.current
@@ -1058,7 +1175,7 @@ const FormatPatternEditor = ({
   const updateExistingChip = (id: string, instance: TemplateVariableInstance) => {
     variablesRef.current = { ...variablesRef.current, [id]: instance }
     const chipEl = containerRef.current?.querySelector<HTMLElement>(`[data-variable-id="${id}"]`)
-    if (chipEl) chipEl.textContent = describeVariableInstance(instance)
+    if (chipEl) chipEl.textContent = describeVariableInstance(instance, groups)
     emitChange()
   }
 
@@ -1080,6 +1197,14 @@ const FormatPatternEditor = ({
     if (reconfiguringId === null) return undefined
     const instance = variablesRef.current[reconfiguringId]
     return instance?.kind === 'flat' ? instance.dateTimeFormatId : undefined
+  })()
+
+  const currentCensusSummaryConfig = (() => {
+    if (reconfiguringId !== null) {
+      const instance = variablesRef.current[reconfiguringId]
+      if (instance?.kind === 'censusSummary') return instance.config
+    }
+    return buildDefaultCensusSummaryConfig(groups)
   })()
 
   return (
@@ -1105,7 +1230,7 @@ const FormatPatternEditor = ({
       </div>
       <p className='text-xs text-clay'>
         {variableScope === 'currentDateTimeOnly'
-          ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time — this prints once per run, so no patient-specific variable is available here.'
+          ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time or Census Summary — this prints once per run, so no patient-specific variable is available here. Click an inserted Census Summary block to change its settings.'
           : 'Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags block — or a date/time variable — to change its settings.'}
       </p>
 
@@ -1132,6 +1257,11 @@ const FormatPatternEditor = ({
           setReconfiguringId(null)
           setPendingBlockVariable(variableId)
         }}
+        onPickCensusSummary={variableScope === 'currentDateTimeOnly' ? () => {
+          setPickerOpen(false)
+          setReconfiguringId(null)
+          setCensusSummaryDialogOpen(true)
+        } : undefined}
       />
 
       <BlockVariableConfigDialog
@@ -1189,6 +1319,23 @@ const FormatPatternEditor = ({
           setReconfiguringId(null)
         }}
       />
+
+      <CensusSummaryConfigDialog
+        open={censusSummaryDialogOpen}
+        initialConfig={currentCensusSummaryConfig}
+        groups={groups}
+        onCancel={() => { setCensusSummaryDialogOpen(false); setReconfiguringId(null) }}
+        onSave={(config) => {
+          const instance: TemplateVariableInstance = { kind: 'censusSummary', config }
+          if (reconfiguringId !== null) {
+            updateExistingChip(reconfiguringId, instance)
+          } else {
+            insertInstanceAtSavedRange(instance)
+          }
+          setCensusSummaryDialogOpen(false)
+          setReconfiguringId(null)
+        }}
+      />
     </div>
   )
 }
@@ -1211,6 +1358,7 @@ const TemplateEditor = ({
   const [form, setForm] = useState<TemplateFormState>(initial)
 
   const dateTimeFormatsById = useMemo(() => new Map(dateTimeFormats.map((format) => [String(format.id), format])), [dateTimeFormats])
+  const tagsById = useMemo(() => new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag])), [tags])
 
   const repeatMode = useMemo(
     () => classifyTemplateRepeatMode({ patternText: form.patternText, variables: form.variables }),
@@ -1218,12 +1366,14 @@ const TemplateEditor = ({
   )
 
   const preview = useMemo(() => {
-    const ctx = buildSamplePreviewContext(dateTimeFormatsById)
+    // Real tag/group definitions (not real PATIENT data) so a Census Summary variable's chosen
+    // Tag Group actually resolves in the preview — see buildSamplePreviewContext's own comment.
+    const ctx = buildSamplePreviewContext(dateTimeFormatsById, tagsById, groups)
     const headerText = form.headerPatternText ? renderTemplateForPatient({ patternText: form.headerPatternText, variables: form.headerVariables }, SAMPLE_PREVIEW_PATIENT, ctx) : ''
     const bodyText = renderTemplateForPatient({ patternText: form.patternText, variables: form.variables }, SAMPLE_PREVIEW_PATIENT, ctx)
     const footerText = form.footerPatternText ? renderTemplateForPatient({ patternText: form.footerPatternText, variables: form.footerVariables }, SAMPLE_PREVIEW_PATIENT, ctx) : ''
     return [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
-  }, [form.headerPatternText, form.headerVariables, form.patternText, form.variables, form.footerPatternText, form.footerVariables, dateTimeFormatsById])
+  }, [form.headerPatternText, form.headerVariables, form.patternText, form.variables, form.footerPatternText, form.footerVariables, dateTimeFormatsById, tagsById, groups])
 
   return (
     <div className='space-y-4'>
