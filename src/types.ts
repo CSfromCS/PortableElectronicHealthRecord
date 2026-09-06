@@ -245,3 +245,232 @@ export interface PhotoAttachment {
   imageBlob: Blob
   createdAt: string
 }
+
+/** Single-value fields with no date dimension — inserted inline as plain text at a Format Pattern
+ * placeholder. `admissionDiagnosis`/`dischargeDiagnosis` split what issue #82 originally specified
+ * as one "Diagnosis" variable, matching the per-service Admission/Discharge Diagnosis model this
+ * app actually has (see Patient.admissionDiagnosisByService et al.). `currentDate`/`currentTime`
+ * don't come from patient data at all — they're captured once at the start of report generation. */
+export type FlatVariableId =
+  | 'roomNumber'
+  | 'ward'
+  | 'lastName'
+  | 'firstName'
+  | 'middleName'
+  | 'age'
+  | 'sex'
+  | 'mainService'
+  | 'referralService'
+  | 'admissionDiagnosis'
+  | 'dischargeDiagnosis'
+  | 'clinicalSummary'
+  | 'admitDate'
+  | 'admitTime'
+  | 'referralDate'
+  | 'referralTime'
+  | 'dischargeDate'
+  | 'dischargeTime'
+  | 'database'
+  | 'currentDate'
+  | 'currentTime'
+
+/** Fields with a date dimension — multiple dated entries over the admission — inserted as a
+ * (potentially multi-line) formatted block per `BlockVariableConfig`. Medications is here (rather
+ * than a Flat variable) because it's multi-entry too, even though entries carry no date/time of
+ * their own — see the medications-only config fields below for how it's scoped instead. */
+export type BlockVariableId = 'vitals' | 'labs' | 'problems' | 'checklist' | 'orders' | 'medications'
+
+/** 'latest' was removed as a distinct mode — it was exactly equivalent to 'numberOfEntries' with
+ * entryCount 1 (or, for date-grouped record types, the single most recent day), so existing rows
+ * migrate to that instead of keeping a redundant option in the UI. */
+export type BlockVariableRangeMode = 'dateRange' | 'numberOfEntries'
+
+export type RelativeDateRangeMode = 'fixed' | 'sinceAdmission' | 'lastNDays'
+
+/** Vitals entry-level fields — meaningful only inside a Vitals Block variable's own
+ * `entryPatternText`/`entryFieldIds`, never inserted directly into a template's Format Pattern. */
+export type VitalsEntryFieldId = 'entryDate' | 'entryTime' | 'bp' | 'hr' | 'rr' | 'temp' | 'spo2' | 'note'
+export type OrdersEntryFieldId = 'entryDate' | 'entryTime' | 'service' | 'orderText' | 'status' | 'note'
+/** `resolvedMarker` resolves to `resolvedGlyph`/`unresolvedGlyph` on the config, same pattern as
+ * Checklist's Checkbox field — e.g. " (resolved)"/"" (default) or "✅"/"⭕". */
+export type ProblemsEntryFieldId = 'problemIndex' | 'problemTitle' | 'problemNotes' | 'resolvedMarker'
+export type ChecklistEntryFieldId = 'checkbox' | 'itemText'
+/** `statusMarker` is a fixed literal (" (discontinued)" / " (completed)" / "" for active) — unlike
+ * Checklist/Problems' two-state markers, Medications has three statuses, so a simple glyph pair
+ * doesn't fit; not user-configurable for now. */
+export type MedicationsEntryFieldId = 'medication' | 'dose' | 'route' | 'frequency' | 'note' | 'statusMarker'
+
+/** How multiple entries (or, for Problems/Checklist/Labs, multiple date-groups) join together. */
+export type BlockJoinMode = 'lineBreak' | 'blankLine' | 'space' | 'custom'
+
+/** Labs only: how the date is displayed across multiple result blocks — each block shows its own
+ * date (matches every other record type's default), no date at all, or one date header shared by
+ * every same-day block (mirrors Problems/Checklist's date-group header). */
+export type LabsDateDisplayMode = 'perEntry' | 'none' | 'groupedByDate'
+
+/** Set once when a Block variable is placed into a template and saved as part of that specific
+ * placeholder — never re-prompted at generation time. */
+export interface BlockVariableConfig {
+  rangeMode: BlockVariableRangeMode
+  /** Only meaningful when rangeMode === 'numberOfEntries'. Feeding exactly 2 into Labs reuses the
+   * existing 2-entry comparison-mode formatting unchanged. */
+  entryCount: number
+  /** Only meaningful when rangeMode === 'dateRange'. */
+  relativeMode: RelativeDateRangeMode
+  /** Only meaningful when relativeMode === 'fixed'. Unlike every other date field in this app,
+   * blank is not a valid saved state for `fixedDateFrom`/`fixedTimeFrom` — the settings UI requires
+   * the user to type a start before it'll save. `fixedDateTo`/`fixedTimeTo` DO default when left
+   * blank, but that default is resolved once and baked into the saved config at save time (not
+   * recomputed at generation time), so a template's output stays stable across later uses
+   * regardless of when it's actually generated. */
+  fixedDateFrom: string
+  fixedTimeFrom: string
+  fixedDateTo: string
+  fixedTimeTo: string
+  /** Only meaningful when relativeMode === 'lastNDays'. */
+  lastNDays: number
+  /** How a single matched entry renders — a mini Format Pattern (same `{{var:<id>}}` token syntax
+   * as the top-level pattern) scoped to this record type's own fields, keyed into `entryFieldIds`
+   * rather than a full `TemplateVariableInstance` map since entry-level fields carry no config of
+   * their own beyond an optional Date/Time Format (see `entryFieldDateTimeFormats`). Not used by
+   * 'labs', whose formatting is algorithmic (see `buildLabReportBlocks`) rather than
+   * field-composable. */
+  entryPatternText: string
+  entryFieldIds: Record<string, string>
+  /** Per-chip Date/Time Format override, keyed by the same chip id as `entryFieldIds` — only
+   * meaningful for a chip whose fieldId is date/time-typed (Vitals/Orders' Entry Date/Entry Time).
+   * Unset uses that field's own built-in default formatting. */
+  entryFieldDateTimeFormats: Record<string, string>
+  entrySeparator: BlockJoinMode
+  /** Only meaningful when entrySeparator === 'custom'. */
+  customEntrySeparator: string
+  /** Problems/Checklist only: whether each date-group is preceded by a date header line. */
+  showGroupHeader: boolean
+  /** Problems/Checklist/Labs only: which saved Date/Time Format renders the date — the shared
+   * date-group header for Problems/Checklist and Labs' 'groupedByDate' mode, or each individual
+   * result's own date line for Labs' 'perEntry' mode. Unset uses that context's built-in default. */
+  groupHeaderDateFormatId?: string
+  /** Problems/Checklist only: how consecutive date-groups join. */
+  groupSeparator: BlockJoinMode
+  customGroupSeparator: string
+  /** Checklist only: the glyph the "Checkbox" entry field resolves to for a checked/unchecked item
+   * — e.g. "x"/" " (default, reproducing the classic `[x]`/`[ ]`) or "✅"/"⭕". No effect unless the
+   * entry pattern actually includes the Checkbox field. */
+  checkedGlyph: string
+  uncheckedGlyph: string
+  /** Problems only: same idea as checkedGlyph/uncheckedGlyph, for the "Resolved Marker" field. */
+  resolvedGlyph: string
+  unresolvedGlyph: string
+  /** Medications only: which statuses to include — MedicationEntry carries no date, so there's no
+   * range mode to filter by; this is the equivalent axis. */
+  includeActiveMedications: boolean
+  includeDiscontinuedMedications: boolean
+  includeCompletedMedications: boolean
+  /** Medications only: whether/where the freeform Medications-tab text (`Patient.medications`,
+   * not a MedicationEntry) appears relative to the structured entries. */
+  includeMedicationNotes: boolean
+  medicationNotesPosition: 'before' | 'after'
+  /** Labs only. */
+  labsDateDisplayMode: LabsDateDisplayMode
+}
+
+/** Tags is a Flat variable (single inline placement) but — uniquely among Flat variables — carries
+ * its own per-placeholder settings, so it gets its own segment type instead of being lumped in
+ * with the configless FlatVariableId list. */
+export interface TagsVariableConfig {
+  /** True includes every tag currently visible on the patient card at that placement (Issue 1's
+   * `visibleOnPatientCard`), ignoring tagIds/groupIds below. */
+  includeAll: boolean
+  tagIds: number[]
+  groupIds: number[]
+  /** Text-with-Color tags always render as their plain name regardless of this setting — only
+   * Emoji-type tags are affected. */
+  emojiRendering: 'emoji' | 'name'
+}
+
+/** What a single `{{var:<id>}}` token in `ReportTemplate.patternText` resolves to — looked up by
+ * the id embedded in the token, not by position, so editing the surrounding text never disturbs a
+ * variable's own settings. */
+export type TemplateVariableInstance =
+  | { kind: 'flat'; variableId: FlatVariableId; /** Only meaningful for a date/time-typed FlatVariableId (admitDate/referralDate/dischargeDate/currentDate/currentTime). Unset uses that field's own built-in default formatting. */ dateTimeFormatId?: string }
+  | { kind: 'block'; variableId: BlockVariableId; config: BlockVariableConfig }
+  | { kind: 'tags'; config: TagsVariableConfig }
+  | { kind: 'censusSummary'; config: CensusSummaryConfig }
+
+/** One line per tag in `tagGroupId` (e.g. "CD: 0 new admissions, 2 new referrals (SANTOS,
+ * MARIMAR), 1 discharged (RIZAL)"), covering every patient currently carrying that tag who was
+ * newly admitted/referred/discharged within the lookback window — reuses the same Admitted/
+ * Referred/Discharged detection already built for the Patient Filter's Special/Timebound facet.
+ * A whole-run aggregate, not a per-patient value, so (like Current Date/Time) it's only offered in
+ * a template's Header/Footer, never the per-patient Format Pattern. */
+export interface CensusSummaryConfig {
+  /** Which Tag Group's tags to break the summary down by, in that group's canonical tag order. */
+  tagGroupId: number | null
+  /** Hours to look back from the moment the report is generated (not frozen at save time, unlike
+   * Fixed Dates — a shift summary should always mean "the last N hours from now"). */
+  lookbackHours: number
+  /** How each tag's line renders — a mini Format Pattern scoped to this variable's own fields
+   * (groupLabel, admittedPhrase, referredPhrase, dischargedPhrase — each phrase already bakes in
+   * its own count/pluralization and optional patient-names parenthetical, so it's never blank),
+   * same `{{var:<id>}}` token mechanism as everywhere else. */
+  entryPatternText: string
+  entryFieldIds: Record<string, string>
+  entrySeparator: BlockJoinMode
+  customEntrySeparator: string
+}
+
+/**
+ * A user-defined, savable report format (issue #82). `patternText` is the single source of truth
+ * for both content and spacing — literal text and line breaks (`\n`) typed directly, the same as
+ * any other free-text field in this app, with a variable placeholder marked inline as
+ * `{{var:<id>}}` wherever the user inserted one via "Add Variable". `variables` holds that
+ * placeholder's actual settings, keyed by the same id — there is no separate field-list-plus-
+ * separator setting; the pattern text itself controls both content and spacing.
+ */
+export interface ReportTemplate {
+  id?: number
+  name: string
+  patternText: string
+  variables: Record<string, TemplateVariableInstance>
+  sortOrder: number
+  createdAt: string
+  /** True only for the built-in "Labs" template, whose if/then comparison-mode formatting isn't
+   * field-composable — hides Edit/Delete in Manage Templates. The user can still choose whether to
+   * include it in a generated report, exactly like any other template. */
+  locked?: boolean
+  /** How separate patients' generated blocks join together for a Per-Patient template — meaningless
+   * for Prints Once, which only ever produces one block regardless of how many patients are selected. */
+  patientSeparator: BlockJoinMode
+  customPatientSeparator: string
+  /** Prints exactly once, before the entire generated output (never per patient) — literal text
+   * plus, optionally, Current Date/Current Time chips only. No patient-dependent variable is ever
+   * offered here, since this content isn't associated with any one patient. */
+  headerPatternText: string
+  headerVariables: Record<string, TemplateVariableInstance>
+  /** Same as the header, but printed once at the very end. */
+  footerPatternText: string
+  footerVariables: Record<string, TemplateVariableInstance>
+}
+
+/** A named, savable date/time display format (e.g. "MMM D, YYYY") — selectable wherever a
+ * date/time-typed template variable is configured. Mirrors `ReportTemplate`'s own patternText +
+ * variables shape (same `{{var:<id>}}` token syntax), just against a much smaller, configless
+ * component catalog — every component resolves the same way regardless of where it's used, so
+ * there's no per-instance config to store beyond which component it is. */
+export type DateTimeComponentId =
+  | 'year4' | 'year2'
+  | 'monthNum2' | 'monthAbbrev' | 'monthFull'
+  | 'day2' | 'dayNoLeadingZero'
+  | 'weekdayAbbrev' | 'weekdayFull'
+  | 'hour24' | 'hour12' | 'hour12NoLeadingZero'
+  | 'minute2'
+  | 'meridiemUpper' | 'meridiemLower'
+
+export interface DateTimeFormatDefinition {
+  id?: number
+  name: string
+  patternText: string
+  componentIds: Record<string, DateTimeComponentId>
+  sortOrder: number
+  createdAt: string
+}
