@@ -771,4 +771,68 @@ db.version(18).stores({
   await dateTimeFormatTable.bulkAdd(buildDefaultDateTimeFormats(now))
 })
 
+db.version(19).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Three changes: (1) Medications becomes a Block variable (per-entry formatting like
+  // Vitals/Orders, plus a toggle for the freeform Medications-tab text) instead of a single Flat
+  // variable — an existing `{kind:'flat', variableId:'medications'}` upgrades in place to a Block
+  // instance under the SAME token id, so the surrounding patternText needs no rewriting. (2) The
+  // Block variable range mode 'latest' is removed — it was exactly equivalent to 'numberOfEntries'
+  // with entryCount 1, so existing configs using it convert to that. (3) Every Block config gets
+  // this version's new fields (entryFieldDateTimeFormats, resolvedGlyph/unresolvedGlyph, the
+  // Medications status/notes toggles, labsDateDisplayMode) via the same
+  // merge-onto-current-defaults approach the v18 migration used, preserving whatever the user
+  // already had for every pre-existing field.
+  const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
+  const existingTemplates = await reportTemplateTable.toArray()
+
+  for (const template of existingTemplates) {
+    if (template.id === undefined) continue
+    let changed = false
+    const nextVariables: Record<string, TemplateVariableInstance> = { ...template.variables }
+
+    for (const [tokenId, instance] of Object.entries(nextVariables)) {
+      if (instance.kind === 'flat' && (instance.variableId as string) === 'medications') {
+        nextVariables[tokenId] = { kind: 'block', variableId: 'medications', config: buildDefaultBlockVariableConfig('medications') }
+        changed = true
+        continue
+      }
+      if (instance.kind !== 'block') continue
+
+      const legacyConfig = instance.config as Partial<BlockVariableConfig>
+      const rawRangeMode = (instance.config as { rangeMode?: unknown }).rangeMode
+      const defaults = buildDefaultBlockVariableConfig(instance.variableId)
+      const isLegacyLatest = rawRangeMode === 'latest'
+      nextVariables[tokenId] = {
+        ...instance,
+        config: {
+          ...defaults,
+          ...legacyConfig,
+          rangeMode: isLegacyLatest ? 'numberOfEntries' : legacyConfig.rangeMode ?? defaults.rangeMode,
+          entryCount: isLegacyLatest ? 1 : legacyConfig.entryCount ?? defaults.entryCount,
+        },
+      }
+      changed = true
+    }
+
+    if (changed) await reportTemplateTable.update(template.id, { variables: nextVariables })
+  }
+})
+
 export { db }

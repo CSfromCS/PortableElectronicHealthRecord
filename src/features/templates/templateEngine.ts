@@ -1,8 +1,17 @@
 import { composeDiagnosisText } from '@/features/patients/serviceDiagnosis'
-import { buildLabReportBlocks, formatOrderStatus, formatStructuredMedication } from '@/features/reporting/reportBuilders'
+import { buildLabReportBlockPieces, formatOrderStatus } from '@/features/reporting/reportBuilders'
 import { resolveServiceTagNames } from '@/features/tags/serviceTagUtils'
 import { getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
-import { formatClockCompact, formatDateMMDD, formatDateMMDDYYYY, getEffectiveAdmitDate, toLocalISODate } from '@/lib/dateTime'
+import {
+  formatClock,
+  formatClockCompact,
+  formatDateMMDD,
+  formatDateMMDDYYYY,
+  getEffectiveAdmitDate,
+  isWithinDateTimeWindow,
+  toLocalISODate,
+  toLocalTime,
+} from '@/lib/dateTime'
 import type {
   BlockJoinMode,
   BlockVariableConfig,
@@ -14,6 +23,7 @@ import type {
   FlatVariableId,
   LabEntry,
   MedicationEntry,
+  MedicationsEntryFieldId,
   OrderEntry,
   OrdersEntryFieldId,
   Patient,
@@ -294,12 +304,14 @@ export const VITALS_ENTRY_FIELD_ORDER: VitalsEntryFieldId[] = ['entryDate', 'ent
 export const ORDERS_ENTRY_FIELD_ORDER: OrdersEntryFieldId[] = ['entryDate', 'entryTime', 'service', 'orderText', 'status', 'note']
 export const PROBLEMS_ENTRY_FIELD_ORDER: ProblemsEntryFieldId[] = ['problemIndex', 'problemTitle', 'problemNotes', 'resolvedMarker']
 export const CHECKLIST_ENTRY_FIELD_ORDER: ChecklistEntryFieldId[] = ['checkbox', 'itemText']
+export const MEDICATIONS_ENTRY_FIELD_ORDER: MedicationsEntryFieldId[] = ['medication', 'dose', 'route', 'frequency', 'note', 'statusMarker']
 
 export const ENTRY_FIELD_ORDER_BY_BLOCK: Record<BlockVariableId, string[]> = {
   vitals: VITALS_ENTRY_FIELD_ORDER,
   orders: ORDERS_ENTRY_FIELD_ORDER,
   problems: PROBLEMS_ENTRY_FIELD_ORDER,
   checklist: CHECKLIST_ENTRY_FIELD_ORDER,
+  medications: MEDICATIONS_ENTRY_FIELD_ORDER,
   labs: [],
 }
 
@@ -318,13 +330,30 @@ export const ENTRY_FIELD_LABELS_BY_BLOCK: Record<BlockVariableId, Record<string,
   checklist: {
     checkbox: 'Checkbox', itemText: 'Item Text',
   },
+  medications: {
+    medication: 'Medication', dose: 'Dose', route: 'Route', frequency: 'Frequency', note: 'Note', statusMarker: 'Status Marker',
+  },
   labs: {},
 }
 
-const resolveVitalsEntryField = (fieldId: string, entry: VitalEntry): string => {
+/** Entry-level fields whose value is a date/time (so a Date/Time Format can be chosen for that
+ * specific chip, via `BlockVariableConfig.entryFieldDateTimeFormats`). */
+const DATE_TIME_ENTRY_FIELD_IDS_BY_BLOCK: Record<BlockVariableId, Set<string>> = {
+  vitals: new Set(['entryDate', 'entryTime']),
+  orders: new Set(['entryDate', 'entryTime']),
+  problems: new Set(),
+  checklist: new Set(),
+  medications: new Set(),
+  labs: new Set(),
+}
+
+export const isDateTimeCapableEntryField = (blockVariableId: BlockVariableId, fieldId: string): boolean =>
+  DATE_TIME_ENTRY_FIELD_IDS_BY_BLOCK[blockVariableId]?.has(fieldId) ?? false
+
+const resolveVitalsEntryField = (fieldId: string, entry: VitalEntry, dateTimeFormatId: string | undefined, ctx: TemplateRenderContext): string => {
   switch (fieldId as VitalsEntryFieldId) {
-    case 'entryDate': return formatDateMMDD(entry.date)
-    case 'entryTime': return formatClockCompact(entry.time)
+    case 'entryDate': return renderSavedFormatOr(dateTimeFormatId, ctx, entry.date, undefined, () => formatDateMMDD(entry.date))
+    case 'entryTime': return renderSavedFormatOr(dateTimeFormatId, ctx, entry.date, entry.time, () => formatClockCompact(entry.time))
     case 'bp': return entry.bp.trim()
     case 'hr': return entry.hr.trim()
     case 'rr': return entry.rr.trim()
@@ -335,10 +364,10 @@ const resolveVitalsEntryField = (fieldId: string, entry: VitalEntry): string => 
   }
 }
 
-const resolveOrdersEntryField = (fieldId: string, entry: OrderEntry): string => {
+const resolveOrdersEntryField = (fieldId: string, entry: OrderEntry, dateTimeFormatId: string | undefined, ctx: TemplateRenderContext): string => {
   switch (fieldId as OrdersEntryFieldId) {
-    case 'entryDate': return entry.orderDate ?? ''
-    case 'entryTime': return entry.orderTime ?? ''
+    case 'entryDate': return renderSavedFormatOr(dateTimeFormatId, ctx, entry.orderDate, undefined, () => entry.orderDate ?? '')
+    case 'entryTime': return renderSavedFormatOr(dateTimeFormatId, ctx, entry.orderDate, entry.orderTime, () => entry.orderTime ?? '')
     case 'service': return (entry.service ?? '').trim()
     case 'orderText': return entry.orderText
     case 'status': return formatOrderStatus(entry.status)
@@ -347,12 +376,12 @@ const resolveOrdersEntryField = (fieldId: string, entry: OrderEntry): string => 
   }
 }
 
-const resolveProblemsEntryField = (fieldId: string, problem: ProblemBlock, index: number): string => {
+const resolveProblemsEntryField = (fieldId: string, problem: ProblemBlock, index: number, config: BlockVariableConfig): string => {
   switch (fieldId as ProblemsEntryFieldId) {
     case 'problemIndex': return String(index + 1)
     case 'problemTitle': return problem.title.trim() || 'Untitled problem'
     case 'problemNotes': return problem.notes.trim()
-    case 'resolvedMarker': return problem.completed ? ' (resolved)' : ''
+    case 'resolvedMarker': return problem.completed ? config.resolvedGlyph : config.unresolvedGlyph
     default: return ''
   }
 }
@@ -369,6 +398,18 @@ const resolveChecklistEntryField = (
   }
 }
 
+const resolveMedicationsEntryField = (fieldId: string, entry: MedicationEntry): string => {
+  switch (fieldId as MedicationsEntryFieldId) {
+    case 'medication': return entry.medication
+    case 'dose': return entry.dose
+    case 'route': return entry.route
+    case 'frequency': return entry.frequency
+    case 'note': return entry.note
+    case 'statusMarker': return entry.status === 'discontinued' ? ' (discontinued)' : entry.status === 'completed' ? ' (completed)' : ''
+    default: return ''
+  }
+}
+
 /** Renders one entry (or Checklist/Problems item) through its Block variable's own
  * `entryPatternText`, reusing the exact same tokenize/resolve/collapse pipeline as the top-level
  * Format Pattern — just against `resolveField` instead of a `TemplateVariableInstance` map. Trims
@@ -377,7 +418,8 @@ const resolveChecklistEntryField = (
 const renderEntryPattern = (
   patternText: string,
   entryFieldIds: Record<string, string>,
-  resolveField: (fieldId: string) => string,
+  entryFieldDateTimeFormats: Record<string, string>,
+  resolveField: (fieldId: string, dateTimeFormatId: string | undefined) => string,
 ): string => {
   const parts = tokenizePatternText(patternText)
   const resolved: ResolvedSegment[] = parts.map((part) => {
@@ -385,7 +427,7 @@ const renderEntryPattern = (
     if (part.type === 'lineBreak') return { kind: 'lineBreak' }
     const fieldId = entryFieldIds[part.id]
     if (!fieldId) return { kind: 'text', text: buildVariableToken(part.id) }
-    const text = resolveField(fieldId)
+    const text = resolveField(fieldId, entryFieldDateTimeFormats[part.id])
     return { kind: 'value', text, blank: text.trim() === '' }
   })
   return renderResolvedSegments(collapseBlanks(resolved)).replace(/\n+$/, '')
@@ -396,15 +438,18 @@ const renderGroupHeader = (dateISO: string, config: BlockVariableConfig, ctx: Te
 
 /** Default range-mode settings for a freshly-inserted Block variable, independent of which record
  * type it is — entry-pattern defaults (which DO depend on the record type) live in
- * `buildDefaultBlockVariableConfig` below. */
+ * `buildDefaultBlockVariableConfig` below. Defaults to a single most-recent entry (equivalent to
+ * the old, now-removed, 'latest' mode) as the least-surprising starting point. */
 export const DEFAULT_BLOCK_VARIABLE_CONFIG: Pick<
-  BlockVariableConfig, 'rangeMode' | 'entryCount' | 'relativeMode' | 'fixedDateFrom' | 'fixedDateTo' | 'lastNDays'
+  BlockVariableConfig, 'rangeMode' | 'entryCount' | 'relativeMode' | 'fixedDateFrom' | 'fixedTimeFrom' | 'fixedDateTo' | 'fixedTimeTo' | 'lastNDays'
 > = {
-  rangeMode: 'latest',
-  entryCount: 3,
+  rangeMode: 'numberOfEntries',
+  entryCount: 1,
   relativeMode: 'lastNDays',
   fixedDateFrom: '',
+  fixedTimeFrom: '',
   fixedDateTo: '',
+  fixedTimeTo: '',
   lastNDays: 7,
 }
 
@@ -431,6 +476,8 @@ const buildDefaultEntryPattern = (variableId: BlockVariableId): {
       return { entryFieldIds, entryPatternText: `${token('problemIndex')}. ${token('problemTitle')}${token('resolvedMarker')}\n${token('problemNotes')}` }
     case 'checklist':
       return { entryFieldIds, entryPatternText: `- [${token('checkbox')}] ${token('itemText')}` }
+    case 'medications':
+      return { entryFieldIds, entryPatternText: `${token('medication')} ${token('dose')} ${token('route')} ${token('frequency')} — ${token('note')}${token('statusMarker')}` }
     default:
       return { entryFieldIds: {}, entryPatternText: '' }
   }
@@ -439,6 +486,7 @@ const buildDefaultEntryPattern = (variableId: BlockVariableId): {
 export const buildDefaultBlockVariableConfig = (variableId: BlockVariableId): BlockVariableConfig => ({
   ...DEFAULT_BLOCK_VARIABLE_CONFIG,
   ...buildDefaultEntryPattern(variableId),
+  entryFieldDateTimeFormats: {},
   entrySeparator: 'lineBreak',
   customEntrySeparator: '',
   showGroupHeader: true,
@@ -447,6 +495,14 @@ export const buildDefaultBlockVariableConfig = (variableId: BlockVariableId): Bl
   customGroupSeparator: '',
   checkedGlyph: 'x',
   uncheckedGlyph: ' ',
+  resolvedGlyph: ' (resolved)',
+  unresolvedGlyph: '',
+  includeActiveMedications: true,
+  includeDiscontinuedMedications: false,
+  includeCompletedMedications: false,
+  includeMedicationNotes: true,
+  medicationNotesPosition: 'before',
+  labsDateDisplayMode: 'perEntry',
 })
 
 export const DEFAULT_TAGS_VARIABLE_CONFIG: TagsVariableConfig = {
@@ -480,14 +536,9 @@ export const buildCurrentDateTimeText = (now = new Date()): { currentDateText: s
   nowDate: now,
 })
 
-const resolveMedicationsText = (patient: Patient, entries: MedicationEntry[]): string => {
-  const activeStructured = entries.filter((entry) => entry.status === 'active').map(formatStructuredMedication).filter(Boolean)
-  return [patient.medications.trim(), ...activeStructured].filter(Boolean).join('\n')
-}
-
 /** Flat variable ids for which a `dateTimeFormatId` on the instance is meaningful. */
 export const DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS = new Set<FlatVariableId>([
-  'admitDate', 'referralDate', 'dischargeDate', 'currentDate', 'currentTime',
+  'admitDate', 'admitTime', 'referralDate', 'referralTime', 'dischargeDate', 'dischargeTime', 'currentDate', 'currentTime',
 ])
 
 const resolveFlatVariable = (
@@ -505,6 +556,7 @@ const resolveFlatVariable = (
     case 'age': return patient.age !== undefined ? String(patient.age) : ''
     case 'sex': return patient.sex
     case 'mainService': return resolveServiceTagNames(patient.mainServiceTagIds, ctx.tagsById).join(', ')
+    case 'referralService': return resolveServiceTagNames(patient.referralServiceTagIds, ctx.tagsById).join(', ')
     case 'admissionDiagnosis': return composeDiagnosisText(patient, patient.admissionDiagnosisUnassigned, patient.admissionDiagnosisByService, ctx.tagsById)
     case 'dischargeDiagnosis': return composeDiagnosisText(patient, patient.dischargeDiagnosisUnassigned, patient.dischargeDiagnosisByService, ctx.tagsById)
     case 'clinicalSummary': return patient.clinicalSummary
@@ -512,15 +564,27 @@ const resolveFlatVariable = (
       const iso = getEffectiveAdmitDate(patient.admitDate, patient.createdAt)
       return iso ? renderSavedFormatOr(dateTimeFormatId, ctx, iso, undefined, () => formatDateMMDDYYYY(iso)) : ''
     }
+    case 'admitTime': {
+      const iso = getEffectiveAdmitDate(patient.admitDate, patient.createdAt)
+      const time = patient.admitTime || toLocalTime(new Date(patient.createdAt))
+      return time ? renderSavedFormatOr(dateTimeFormatId, ctx, iso, time, () => formatClock(time)) : ''
+    }
     case 'referralDate': {
       const iso = patient.referralDate
       return iso ? renderSavedFormatOr(dateTimeFormatId, ctx, iso, undefined, () => formatDateMMDDYYYY(iso)) : ''
+    }
+    case 'referralTime': {
+      const time = patient.referralTime
+      return time ? renderSavedFormatOr(dateTimeFormatId, ctx, patient.referralDate, time, () => formatClock(time)) : ''
     }
     case 'dischargeDate': {
       const iso = patient.dischargeDate
       return iso ? renderSavedFormatOr(dateTimeFormatId, ctx, iso, undefined, () => formatDateMMDDYYYY(iso)) : ''
     }
-    case 'medications': return resolveMedicationsText(patient, ctx.medicationsByPatient.get(patient.id ?? -1) ?? [])
+    case 'dischargeTime': {
+      const time = patient.dischargeTime
+      return time ? renderSavedFormatOr(dateTimeFormatId, ctx, patient.dischargeDate ?? '', time, () => formatClock(time)) : ''
+    }
     case 'database': return patient.database
     case 'currentDate':
       return dateTimeFormatId
@@ -557,18 +621,30 @@ const resolveTagsVariable = (config: TagsVariableConfig, patient: Patient, ctx: 
     .join(' ')
 }
 
-const resolveDateRangeBounds = (config: BlockVariableConfig, admitDateEffective: string): { dateFrom: string; dateTo: string } => {
+const resolveDateRangeBounds = (config: BlockVariableConfig, admitDateEffective: string): { dateFrom: string; timeFrom: string; dateTo: string; timeTo: string } => {
   const today = toLocalISODate()
-  if (config.relativeMode === 'fixed') return { dateFrom: config.fixedDateFrom || today, dateTo: config.fixedDateTo || today }
-  if (config.relativeMode === 'sinceAdmission') return { dateFrom: admitDateEffective, dateTo: today }
+  if (config.relativeMode === 'fixed') {
+    return {
+      // The settings UI requires `fixedDateFrom`/`fixedTimeFrom` before it'll save, so this
+      // fallback only matters defensively (e.g. hand-edited/legacy data) — it never reflects an
+      // intended "unbounded start".
+      dateFrom: config.fixedDateFrom || '0001-01-01',
+      timeFrom: config.fixedTimeFrom || '00:00',
+      dateTo: config.fixedDateTo || today,
+      timeTo: config.fixedTimeTo || '23:59',
+    }
+  }
+  if (config.relativeMode === 'sinceAdmission') return { dateFrom: admitDateEffective, timeFrom: '00:00', dateTo: today, timeTo: '23:59' }
   const from = new Date()
   from.setDate(from.getDate() - Math.max(0, config.lastNDays))
-  return { dateFrom: toLocalISODate(from), dateTo: today }
+  return { dateFrom: toLocalISODate(from), timeFrom: '00:00', dateTo: today, timeTo: '23:59' }
 }
 
 /** Selects which raw entries a Block variable placeholder includes, per its saved rangeMode —
  * accessor-based so callers with differently-named date/time fields (OrderEntry's
- * orderDate/orderTime, DailyUpdate's date-only) don't need to reshape their data first. */
+ * orderDate/orderTime, DailyUpdate's date-only) don't need to reshape their data first. `hasTime`
+ * gates whether Date Range's Fixed Dates time boundaries apply at all — Problems/Checklist have no
+ * per-entry time, so their date-range filtering always stays date-only regardless of what's set. */
 const filterByRangeMode = <T,>(
   entries: T[],
   config: BlockVariableConfig,
@@ -576,6 +652,7 @@ const filterByRangeMode = <T,>(
   getDate: (entry: T) => string,
   getTime: (entry: T) => string,
   getCreatedAt: (entry: T) => string,
+  hasTime: boolean,
 ): T[] => {
   const sorted = [...entries].sort((a, b) => {
     const dateA = getDate(a)
@@ -587,28 +664,29 @@ const filterByRangeMode = <T,>(
     return getCreatedAt(b).localeCompare(getCreatedAt(a))
   })
 
-  if (config.rangeMode === 'latest') return sorted.slice(0, 1)
   if (config.rangeMode === 'numberOfEntries') return sorted.slice(0, Math.max(1, config.entryCount))
 
-  const { dateFrom, dateTo } = resolveDateRangeBounds(config, admitDateEffective)
+  const { dateFrom, timeFrom, dateTo, timeTo } = resolveDateRangeBounds(config, admitDateEffective)
   return sorted.filter((entry) => {
     const date = getDate(entry)
-    return date >= dateFrom && date <= dateTo
+    const time = getTime(entry)
+    if (!hasTime || !time) return date >= dateFrom && date <= dateTo
+    return isWithinDateTimeWindow(date, time, dateFrom, dateTo, timeFrom, timeTo)
   })
 }
 
-const resolveVitalsBlock = (config: BlockVariableConfig, entries: VitalEntry[], admitDateEffective: string): string => {
-  const scoped = filterByRangeMode(entries, config, admitDateEffective, (e) => e.date, (e) => e.time, (e) => e.createdAt)
+const resolveVitalsBlock = (config: BlockVariableConfig, entries: VitalEntry[], admitDateEffective: string, ctx: TemplateRenderContext): string => {
+  const scoped = filterByRangeMode(entries, config, admitDateEffective, (e) => e.date, (e) => e.time, (e) => e.createdAt, true)
   const lines = [...scoped]
     .sort((a, b) => (a.date !== b.date ? a.date.localeCompare(b.date) : a.time.localeCompare(b.time)))
-    .map((entry) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, (fieldId) => resolveVitalsEntryField(fieldId, entry)))
+    .map((entry) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId, formatId) => resolveVitalsEntryField(fieldId, entry, formatId, ctx)))
   return lines.join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
 }
 
-const resolveLabsBlock = (config: BlockVariableConfig, entries: LabEntry[], admitDateEffective: string): string => {
+const resolveLabsBlock = (config: BlockVariableConfig, entries: LabEntry[], admitDateEffective: string, ctx: TemplateRenderContext): string => {
   // Number of Entries / Date Range apply PER lab template independently, so "2" reliably lands 2
-  // entries of the SAME template — which is what buildLabReportBlocks' comparison mode needs —
-  // rather than the 2 most recent entries overall regardless of test type.
+  // entries of the SAME template — which is what the comparison-mode formatting needs — rather
+  // than the 2 most recent entries overall regardless of test type.
   const byTemplate = new Map<string, LabEntry[]>()
   entries.forEach((entry) => {
     const list = byTemplate.get(entry.templateId) ?? []
@@ -617,32 +695,56 @@ const resolveLabsBlock = (config: BlockVariableConfig, entries: LabEntry[], admi
   })
   const scoped: LabEntry[] = []
   byTemplate.forEach((group) => {
-    scoped.push(...filterByRangeMode(group, config, admitDateEffective, (e) => e.date, (e) => e.time ?? '', (e) => e.createdAt))
+    scoped.push(...filterByRangeMode(group, config, admitDateEffective, (e) => e.date, (e) => e.time ?? '', (e) => e.createdAt, true))
   })
-  return buildLabReportBlocks(scoped).join('\n\n')
+
+  const pieces = buildLabReportBlockPieces(scoped)
+  const entrySep = resolveJoinString(config.entrySeparator, config.customEntrySeparator)
+
+  if (config.labsDateDisplayMode === 'none') {
+    return pieces.map((piece) => [piece.label, piece.body].join('\n')).join(entrySep)
+  }
+  if (config.labsDateDisplayMode === 'groupedByDate') {
+    const byDate = new Map<string, typeof pieces>()
+    pieces.forEach((piece) => {
+      const list = byDate.get(piece.date) ?? []
+      list.push(piece)
+      byDate.set(piece.date, list)
+    })
+    const groupTexts = [...byDate.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([date, group]) => {
+        const header = renderGroupHeader(date, config, ctx)
+        const body = group
+          .map((piece) => [piece.label, piece.headerDetail, piece.body].filter(Boolean).join('\n'))
+          .join(entrySep)
+        return [header, body].join('\n')
+      })
+    return groupTexts.join(resolveJoinString(config.groupSeparator, config.customGroupSeparator))
+  }
+  // perEntry (default): each block shows its own date, exactly as this app has always shown it.
+  return pieces.map((piece) => [piece.label, piece.legacyDateLine, piece.body].join('\n')).join(entrySep)
 }
 
-const resolveOrdersBlock = (config: BlockVariableConfig, entries: OrderEntry[], admitDateEffective: string): string => {
-  const scoped = filterByRangeMode(entries, config, admitDateEffective, (e) => e.orderDate, (e) => e.orderTime ?? '', (e) => e.createdAt)
+const resolveOrdersBlock = (config: BlockVariableConfig, entries: OrderEntry[], admitDateEffective: string, ctx: TemplateRenderContext): string => {
+  const scoped = filterByRangeMode(entries, config, admitDateEffective, (e) => e.orderDate, (e) => e.orderTime ?? '', (e) => e.createdAt, true)
   const lines = [...scoped]
     .sort((a, b) => (a.orderDate !== b.orderDate ? a.orderDate.localeCompare(b.orderDate) : a.orderTime.localeCompare(b.orderTime)))
-    .map((entry) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, (fieldId) => resolveOrdersEntryField(fieldId, entry)))
+    .map((entry) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId, formatId) => resolveOrdersEntryField(fieldId, entry, formatId, ctx)))
   return lines.join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
 }
 
 /** Problems/Checklist have no per-entry time, only a per-date DailyUpdate row — each qualifying
- * row becomes its own dated group. "Latest" naturally captures the most recent SAVED row, which
- * (thanks to the app's existing carry-forward-on-load behavior) already reflects the current
- * unresolved state as of that date. */
+ * row becomes its own dated group. */
 const resolveProblemsBlock = (config: BlockVariableConfig, updates: DailyUpdate[], admitDateEffective: string, ctx: TemplateRenderContext): string => {
-  const scoped = filterByRangeMode(updates, config, admitDateEffective, (e) => e.date, () => '', (e) => e.lastUpdated)
+  const scoped = filterByRangeMode(updates, config, admitDateEffective, (e) => e.date, () => '', (e) => e.lastUpdated, false)
   const groupTexts = [...scoped]
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((update) => {
       const problems = (update.problems ?? []).filter((problem) => problem.title.trim() || problem.notes.trim())
       if (problems.length === 0) return ''
       const body = problems
-        .map((problem, index) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, (fieldId) => resolveProblemsEntryField(fieldId, problem, index)))
+        .map((problem, index) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId) => resolveProblemsEntryField(fieldId, problem, index, config)))
         .join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
       if (!config.showGroupHeader) return body
       return [renderGroupHeader(update.date, config, ctx), body].join('\n')
@@ -652,20 +754,41 @@ const resolveProblemsBlock = (config: BlockVariableConfig, updates: DailyUpdate[
 }
 
 const resolveChecklistBlock = (config: BlockVariableConfig, updates: DailyUpdate[], admitDateEffective: string, ctx: TemplateRenderContext): string => {
-  const scoped = filterByRangeMode(updates, config, admitDateEffective, (e) => e.date, () => '', (e) => e.lastUpdated)
+  const scoped = filterByRangeMode(updates, config, admitDateEffective, (e) => e.date, () => '', (e) => e.lastUpdated, false)
   const groupTexts = [...scoped]
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((update) => {
       const items = (update.checklist ?? []).filter((item) => item.text.trim())
       if (items.length === 0) return ''
       const body = items
-        .map((item) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, (fieldId) => resolveChecklistEntryField(fieldId, item, config)))
+        .map((item) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId) => resolveChecklistEntryField(fieldId, item, config)))
         .join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
       if (!config.showGroupHeader) return body
       return [renderGroupHeader(update.date, config, ctx), body].join('\n')
     })
     .filter(Boolean)
   return groupTexts.join(resolveJoinString(config.groupSeparator, config.customGroupSeparator))
+}
+
+/** MedicationEntry carries no date, so there's no range mode to filter by — `includeXMedications`
+ * (status checkboxes) is the equivalent axis, and the freeform Medications-tab text
+ * (`Patient.medications`) is folded in as an optional extra line rather than a separate variable,
+ * since it isn't itself a list of entries. */
+const resolveMedicationsBlock = (config: BlockVariableConfig, patient: Patient, entries: MedicationEntry[]): string => {
+  const included = entries.filter((entry) =>
+    (entry.status === 'active' && config.includeActiveMedications)
+    || (entry.status === 'discontinued' && config.includeDiscontinuedMedications)
+    || (entry.status === 'completed' && config.includeCompletedMedications),
+  )
+  const sorted = [...included].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+  const structuredLines = sorted
+    .map((entry) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId) => resolveMedicationsEntryField(fieldId, entry)))
+    .filter((line) => line.trim() !== '')
+  const notesLine = config.includeMedicationNotes ? patient.medications.trim() : ''
+  const lines = config.medicationNotesPosition === 'before'
+    ? [notesLine, ...structuredLines].filter(Boolean)
+    : [...structuredLines, notesLine].filter(Boolean)
+  return lines.join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
 }
 
 const resolveBlockVariable = (
@@ -677,11 +800,12 @@ const resolveBlockVariable = (
   const admitDateEffective = getEffectiveAdmitDate(patient.admitDate, patient.createdAt)
   const patientId = patient.id ?? -1
   switch (variableId) {
-    case 'vitals': return resolveVitalsBlock(config, ctx.vitalsByPatient.get(patientId) ?? [], admitDateEffective)
-    case 'labs': return resolveLabsBlock(config, ctx.labsByPatient.get(patientId) ?? [], admitDateEffective)
-    case 'orders': return resolveOrdersBlock(config, ctx.ordersByPatient.get(patientId) ?? [], admitDateEffective)
+    case 'vitals': return resolveVitalsBlock(config, ctx.vitalsByPatient.get(patientId) ?? [], admitDateEffective, ctx)
+    case 'labs': return resolveLabsBlock(config, ctx.labsByPatient.get(patientId) ?? [], admitDateEffective, ctx)
+    case 'orders': return resolveOrdersBlock(config, ctx.ordersByPatient.get(patientId) ?? [], admitDateEffective, ctx)
     case 'problems': return resolveProblemsBlock(config, ctx.dailyUpdatesByPatient.get(patientId) ?? [], admitDateEffective, ctx)
     case 'checklist': return resolveChecklistBlock(config, ctx.dailyUpdatesByPatient.get(patientId) ?? [], admitDateEffective, ctx)
+    case 'medications': return resolveMedicationsBlock(config, patient, ctx.medicationsByPatient.get(patientId) ?? [])
     default: return ''
   }
 }
@@ -720,8 +844,8 @@ export const renderTemplateForPatient = (template: ReportTemplate, patient: Pati
  * variables (Current Date/Time), which don't make a template Per-Patient on their own. */
 const PATIENT_DEPENDENT_FLAT_VARIABLES = new Set<FlatVariableId>([
   'roomNumber', 'ward', 'lastName', 'firstName', 'middleName', 'age', 'sex',
-  'mainService', 'admissionDiagnosis', 'dischargeDiagnosis', 'clinicalSummary',
-  'admitDate', 'referralDate', 'dischargeDate', 'medications', 'database',
+  'mainService', 'referralService', 'admissionDiagnosis', 'dischargeDiagnosis', 'clinicalSummary',
+  'admitDate', 'admitTime', 'referralDate', 'referralTime', 'dischargeDate', 'dischargeTime', 'database',
 ])
 
 export type TemplateRepeatMode = 'per-patient' | 'prints-once'
@@ -754,16 +878,32 @@ export const classifyTemplateRepeatMode = (template: ReportTemplate): TemplateRe
 /** Human-readable label for a variable chip/summary — used by the editor and the variable picker. */
 export const describeVariableInstance = (instance: TemplateVariableInstance): string => {
   if (instance.kind === 'flat') return FLAT_VARIABLE_LABELS[instance.variableId]
-  if (instance.kind === 'block') return `${BLOCK_VARIABLE_LABELS[instance.variableId]} — ${describeBlockConfig(instance.config)}`
+  if (instance.kind === 'block') {
+    const detail = instance.variableId === 'medications' ? describeMedicationsConfig(instance.config) : describeBlockConfig(instance.config)
+    return `${BLOCK_VARIABLE_LABELS[instance.variableId]} — ${detail}`
+  }
   return describeTagsConfig(instance.config)
 }
 
+/** Medications ignores rangeMode/entryCount entirely (MedicationEntry has no date to filter by),
+ * so its chip summary describes the status filter instead of the range-mode text every other
+ * Block variable shows. */
+const describeMedicationsConfig = (config: BlockVariableConfig): string => {
+  const statuses = [
+    config.includeActiveMedications && 'Active',
+    config.includeDiscontinuedMedications && 'Discontinued',
+    config.includeCompletedMedications && 'Completed',
+  ].filter((label): label is string => Boolean(label))
+  return statuses.length > 0 ? statuses.join(', ') : 'None selected'
+}
+
 export const describeBlockConfig = (config: BlockVariableConfig): string => {
-  if (config.rangeMode === 'latest') return 'Most Recent'
   if (config.rangeMode === 'numberOfEntries') return `Last ${config.entryCount} entries`
   if (config.relativeMode === 'sinceAdmission') return 'Since Admission Date'
   if (config.relativeMode === 'lastNDays') return `Last ${config.lastNDays} days`
-  return `${config.fixedDateFrom || '…'} to ${config.fixedDateTo || '…'}`
+  const from = [config.fixedDateFrom, config.fixedTimeFrom].filter(Boolean).join(' ') || '…'
+  const to = [config.fixedDateTo, config.fixedTimeTo].filter(Boolean).join(' ') || '…'
+  return `${from} to ${to}`
 }
 
 export const describeTagsConfig = (config: TagsVariableConfig): string =>
@@ -778,13 +918,16 @@ export const FLAT_VARIABLE_LABELS: Record<FlatVariableId, string> = {
   age: 'Age',
   sex: 'Sex',
   mainService: 'Main Service',
+  referralService: 'Referral Service',
   admissionDiagnosis: 'Admission Diagnosis',
   dischargeDiagnosis: 'Discharge Diagnosis',
   clinicalSummary: 'Clinical Summary',
   admitDate: 'Admission Date',
+  admitTime: 'Admission Time',
   referralDate: 'Referral Date',
+  referralTime: 'Referral Time',
   dischargeDate: 'Date of Discharge',
-  medications: 'Medications',
+  dischargeTime: 'Time of Discharge',
   database: 'Database',
   currentDate: 'Current Date',
   currentTime: 'Current Time',
@@ -796,4 +939,5 @@ export const BLOCK_VARIABLE_LABELS: Record<BlockVariableId, string> = {
   problems: 'Problems',
   checklist: 'Checklist',
   orders: 'Orders',
+  medications: 'Medications',
 }

@@ -260,22 +260,30 @@ export type FlatVariableId =
   | 'age'
   | 'sex'
   | 'mainService'
+  | 'referralService'
   | 'admissionDiagnosis'
   | 'dischargeDiagnosis'
   | 'clinicalSummary'
   | 'admitDate'
+  | 'admitTime'
   | 'referralDate'
+  | 'referralTime'
   | 'dischargeDate'
-  | 'medications'
+  | 'dischargeTime'
   | 'database'
   | 'currentDate'
   | 'currentTime'
 
 /** Fields with a date dimension — multiple dated entries over the admission — inserted as a
- * (potentially multi-line) formatted block per `BlockVariableConfig`. */
-export type BlockVariableId = 'vitals' | 'labs' | 'problems' | 'checklist' | 'orders'
+ * (potentially multi-line) formatted block per `BlockVariableConfig`. Medications is here (rather
+ * than a Flat variable) because it's multi-entry too, even though entries carry no date/time of
+ * their own — see the medications-only config fields below for how it's scoped instead. */
+export type BlockVariableId = 'vitals' | 'labs' | 'problems' | 'checklist' | 'orders' | 'medications'
 
-export type BlockVariableRangeMode = 'latest' | 'dateRange' | 'numberOfEntries'
+/** 'latest' was removed as a distinct mode — it was exactly equivalent to 'numberOfEntries' with
+ * entryCount 1 (or, for date-grouped record types, the single most recent day), so existing rows
+ * migrate to that instead of keeping a redundant option in the UI. */
+export type BlockVariableRangeMode = 'dateRange' | 'numberOfEntries'
 
 export type RelativeDateRangeMode = 'fixed' | 'sinceAdmission' | 'lastNDays'
 
@@ -283,13 +291,22 @@ export type RelativeDateRangeMode = 'fixed' | 'sinceAdmission' | 'lastNDays'
  * `entryPatternText`/`entryFieldIds`, never inserted directly into a template's Format Pattern. */
 export type VitalsEntryFieldId = 'entryDate' | 'entryTime' | 'bp' | 'hr' | 'rr' | 'temp' | 'spo2' | 'note'
 export type OrdersEntryFieldId = 'entryDate' | 'entryTime' | 'service' | 'orderText' | 'status' | 'note'
-/** `resolvedMarker` renders as " (resolved)" once completed, "" otherwise — a fixed literal, not a
- * user-configurable glyph pair (unlike Checklist's checkbox), since "resolved" isn't a visual toggle. */
+/** `resolvedMarker` resolves to `resolvedGlyph`/`unresolvedGlyph` on the config, same pattern as
+ * Checklist's Checkbox field — e.g. " (resolved)"/"" (default) or "✅"/"⭕". */
 export type ProblemsEntryFieldId = 'problemIndex' | 'problemTitle' | 'problemNotes' | 'resolvedMarker'
 export type ChecklistEntryFieldId = 'checkbox' | 'itemText'
+/** `statusMarker` is a fixed literal (" (discontinued)" / " (completed)" / "" for active) — unlike
+ * Checklist/Problems' two-state markers, Medications has three statuses, so a simple glyph pair
+ * doesn't fit; not user-configurable for now. */
+export type MedicationsEntryFieldId = 'medication' | 'dose' | 'route' | 'frequency' | 'note' | 'statusMarker'
 
-/** How multiple entries (or, for Problems/Checklist, multiple date-groups) join together. */
+/** How multiple entries (or, for Problems/Checklist/Labs, multiple date-groups) join together. */
 export type BlockJoinMode = 'lineBreak' | 'blankLine' | 'space' | 'custom'
+
+/** Labs only: how the date is displayed across multiple result blocks — each block shows its own
+ * date (matches every other record type's default), no date at all, or one date header shared by
+ * every same-day block (mirrors Problems/Checklist's date-group header). */
+export type LabsDateDisplayMode = 'perEntry' | 'none' | 'groupedByDate'
 
 /** Set once when a Block variable is placed into a template and saved as part of that specific
  * placeholder — never re-prompted at generation time. */
@@ -300,25 +317,37 @@ export interface BlockVariableConfig {
   entryCount: number
   /** Only meaningful when rangeMode === 'dateRange'. */
   relativeMode: RelativeDateRangeMode
-  /** Only meaningful when relativeMode === 'fixed'. */
+  /** Only meaningful when relativeMode === 'fixed'. Unlike every other date field in this app,
+   * blank is not a valid saved state for `fixedDateFrom`/`fixedTimeFrom` — the settings UI requires
+   * the user to type a start before it'll save. `fixedDateTo`/`fixedTimeTo` DO default when left
+   * blank, but that default is resolved once and baked into the saved config at save time (not
+   * recomputed at generation time), so a template's output stays stable across later uses
+   * regardless of when it's actually generated. */
   fixedDateFrom: string
+  fixedTimeFrom: string
   fixedDateTo: string
+  fixedTimeTo: string
   /** Only meaningful when relativeMode === 'lastNDays'. */
   lastNDays: number
   /** How a single matched entry renders — a mini Format Pattern (same `{{var:<id>}}` token syntax
    * as the top-level pattern) scoped to this record type's own fields, keyed into `entryFieldIds`
    * rather than a full `TemplateVariableInstance` map since entry-level fields carry no config of
-   * their own. Not used by 'labs', whose formatting is algorithmic (see `buildLabReportBlocks`)
-   * rather than field-composable. */
+   * their own beyond an optional Date/Time Format (see `entryFieldDateTimeFormats`). Not used by
+   * 'labs', whose formatting is algorithmic (see `buildLabReportBlocks`) rather than
+   * field-composable. */
   entryPatternText: string
   entryFieldIds: Record<string, string>
+  /** Per-chip Date/Time Format override, keyed by the same chip id as `entryFieldIds` — only
+   * meaningful for a chip whose fieldId is date/time-typed (Vitals/Orders' Entry Date/Entry Time).
+   * Unset uses that field's own built-in default formatting. */
+  entryFieldDateTimeFormats: Record<string, string>
   entrySeparator: BlockJoinMode
   /** Only meaningful when entrySeparator === 'custom'. */
   customEntrySeparator: string
   /** Problems/Checklist only: whether each date-group is preceded by a date header line. */
   showGroupHeader: boolean
-  /** Problems/Checklist only: which saved Date/Time Format renders that header — unset uses the
-   * built-in MM-DD-YYYY default. */
+  /** Problems/Checklist/Labs only: which saved Date/Time Format renders the date header — unset
+   * uses the built-in MM-DD-YYYY default. */
   groupHeaderDateFormatId?: string
   /** Problems/Checklist only: how consecutive date-groups join. */
   groupSeparator: BlockJoinMode
@@ -328,6 +357,20 @@ export interface BlockVariableConfig {
    * entry pattern actually includes the Checkbox field. */
   checkedGlyph: string
   uncheckedGlyph: string
+  /** Problems only: same idea as checkedGlyph/uncheckedGlyph, for the "Resolved Marker" field. */
+  resolvedGlyph: string
+  unresolvedGlyph: string
+  /** Medications only: which statuses to include — MedicationEntry carries no date, so there's no
+   * range mode to filter by; this is the equivalent axis. */
+  includeActiveMedications: boolean
+  includeDiscontinuedMedications: boolean
+  includeCompletedMedications: boolean
+  /** Medications only: whether/where the freeform Medications-tab text (`Patient.medications`,
+   * not a MedicationEntry) appears relative to the structured entries. */
+  includeMedicationNotes: boolean
+  medicationNotesPosition: 'before' | 'after'
+  /** Labs only. */
+  labsDateDisplayMode: LabsDateDisplayMode
 }
 
 /** Tags is a Flat variable (single inline placement) but — uniquely among Flat variables — carries

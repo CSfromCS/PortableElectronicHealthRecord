@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { toLocalISODate, toLocalTime } from '@/lib/dateTime'
 import { cn } from '@/lib/utils'
 import type {
   BlockJoinMode,
@@ -20,6 +21,7 @@ import type {
   BlockVariableRangeMode,
   DateTimeFormatDefinition,
   FlatVariableId,
+  LabsDateDisplayMode,
   RelativeDateRangeMode,
   ReportTemplate,
   TagDefinition,
@@ -43,12 +45,13 @@ import {
   createVariableId,
   describeBlockConfig,
   describeVariableInstance,
+  isDateTimeCapableEntryField,
   renderTemplateForPatient,
   tokenizePatternText,
 } from './templateEngine'
 import { SAMPLE_PREVIEW_PATIENT, buildSamplePreviewContext } from './samplePreviewData'
 
-const BLOCK_VARIABLE_ORDER: BlockVariableId[] = ['vitals', 'labs', 'problems', 'checklist', 'orders']
+const BLOCK_VARIABLE_ORDER: BlockVariableId[] = ['vitals', 'labs', 'problems', 'checklist', 'orders', 'medications']
 
 type PickerTab = {
   id: string
@@ -60,8 +63,8 @@ type PickerTab = {
  * rather than one long undifferentiated list. */
 const PICKER_TABS: PickerTab[] = [
   { id: 'identity', label: 'Identity', flatIds: ['roomNumber', 'ward', 'lastName', 'firstName', 'middleName', 'age', 'sex'] },
-  { id: 'clinical', label: 'Clinical', flatIds: ['mainService', 'admissionDiagnosis', 'dischargeDiagnosis', 'clinicalSummary', 'medications', 'database'] },
-  { id: 'dates', label: 'Dates', flatIds: ['admitDate', 'referralDate', 'dischargeDate', 'currentDate', 'currentTime'] },
+  { id: 'clinical', label: 'Clinical', flatIds: ['mainService', 'referralService', 'admissionDiagnosis', 'dischargeDiagnosis', 'clinicalSummary', 'database'] },
+  { id: 'dates', label: 'Dates', flatIds: ['admitDate', 'admitTime', 'referralDate', 'referralTime', 'dischargeDate', 'dischargeTime', 'currentDate', 'currentTime'] },
   { id: 'tags', label: 'Tags' },
   { id: 'records', label: 'Records' },
 ]
@@ -81,6 +84,8 @@ const templateToForm = (template: ReportTemplate): TemplateFormState => ({
 const blankForm = (): TemplateFormState => ({ name: '', patternText: '', variables: {} })
 
 const JOIN_MODE_ORDER: BlockJoinMode[] = ['lineBreak', 'blankLine', 'space', 'custom']
+
+const TEXTAREA_CLASS = 'flex min-h-[3rem] w-full rounded-md border border-input bg-white px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
 
 const JoinModePicker = ({
   label,
@@ -112,7 +117,16 @@ const JoinModePicker = ({
       ))}
     </div>
     {mode === 'custom' ? (
-      <Input value={custom} onChange={(event) => onCustomChange(event.target.value)} placeholder='e.g. ; ' />
+      <>
+        <textarea
+          rows={2}
+          className={TEXTAREA_CLASS}
+          value={custom}
+          onChange={(event) => onCustomChange(event.target.value)}
+          placeholder={'e.g. ";" or a line break plus more text'}
+        />
+        <p className='text-xs text-clay'>Press Enter here for an actual line break between entries.</p>
+      </>
     ) : null}
   </div>
 )
@@ -120,9 +134,9 @@ const JoinModePicker = ({
 const NO_FORMAT_VALUE = '__default__'
 
 /** Lets the user pick a saved Date & Time Format for one date/time-typed chip — or leave it on
- * "Default" to keep that field's own built-in formatting. Kept as its own small dialog rather than
- * folded into the flat-variable insertion flow, so choosing a format is optional and never blocks
- * inserting a date variable in the first place. */
+ * "Default" to keep that field's own built-in formatting. Used both right when a date/time
+ * variable is first inserted (so choosing a format is part of adding one, not an easy-to-miss
+ * afterthought) and again later by clicking an already-inserted chip. */
 const DateTimeFormatPickerDialog = ({
   open,
   variableId,
@@ -176,10 +190,11 @@ const DateTimeFormatPickerDialog = ({
   )
 }
 
-/** A Block variable's Latest/Date Range/Number of Entries setting, prompted right when the
- * variable is placed and saved as part of that specific placeholder (point 2 of issue #82) — plus,
- * for record types other than Labs (whose formatting is algorithmic, not field-composable), how
- * each entry (and, for Problems/Checklist, each date-group) is formatted. */
+/** A Block variable's Number of Entries/Date Range setting (Medications instead gets a
+ * status-inclusion filter — MedicationEntry carries no date), prompted right when the variable is
+ * placed and saved as part of that specific placeholder (point 2 of issue #82) — plus, for record
+ * types other than Labs (whose formatting is algorithmic, not field-composable), how each entry
+ * (and, for Problems/Checklist, each date-group) is formatted. */
 const BlockVariableConfigDialog = ({
   open,
   variableId,
@@ -196,18 +211,47 @@ const BlockVariableConfigDialog = ({
   onSave: (config: BlockVariableConfig) => void
 }) => {
   const [config, setConfig] = useState<BlockVariableConfig>(initialConfig)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (open) setConfig(initialConfig)
+    if (open) {
+      setConfig(initialConfig)
+      setSaveError(null)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset the draft only when the dialog (re)opens, not on every initialConfig identity change
   }, [open])
 
   if (!open || variableId === null) return null
 
   const entryCatalog: ChipCatalogEntry[] = (ENTRY_FIELD_ORDER_BY_BLOCK[variableId] ?? [])
-    .map((fieldId) => ({ id: fieldId, label: ENTRY_FIELD_LABELS_BY_BLOCK[variableId][fieldId] }))
-  const supportsEntryPattern = variableId !== 'labs'
+    .map((fieldId) => ({
+      id: fieldId,
+      label: ENTRY_FIELD_LABELS_BY_BLOCK[variableId][fieldId],
+      dateTimeCapable: isDateTimeCapableEntryField(variableId, fieldId),
+    }))
+  const isLabs = variableId === 'labs'
+  const isMedications = variableId === 'medications'
+  const supportsEntryPattern = !isLabs
   const isGrouped = variableId === 'problems' || variableId === 'checklist'
+
+  const handleSaveClick = () => {
+    if (!isMedications && config.rangeMode === 'dateRange' && config.relativeMode === 'fixed') {
+      if (!config.fixedDateFrom || !config.fixedTimeFrom) {
+        setSaveError('Enter a start date and time for Fixed Dates — unlike the "until" side, the start has no automatic default.')
+        return
+      }
+      if (!config.fixedDateTo || !config.fixedTimeTo) {
+        const now = new Date()
+        onSave({
+          ...config,
+          fixedDateTo: config.fixedDateTo || toLocalISODate(now),
+          fixedTimeTo: config.fixedTimeTo || toLocalTime(now),
+        })
+        return
+      }
+    }
+    onSave(config)
+  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
@@ -217,94 +261,135 @@ const BlockVariableConfigDialog = ({
         </DialogHeader>
         <ScrollArea className='max-h-[65vh] pr-3'>
           <div className='space-y-4'>
-            <div className='space-y-3'>
-              <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
-                {(['latest', 'numberOfEntries', 'dateRange'] as BlockVariableRangeMode[]).map((mode) => (
-                  <Button
-                    key={mode}
-                    type='button'
-                    size='sm'
-                    variant={config.rangeMode === mode ? 'default' : 'ghost'}
-                    className='flex-1 text-xs'
-                    onClick={() => setConfig((previous) => ({ ...previous, rangeMode: mode }))}
-                  >
-                    {mode === 'latest' ? 'Most Recent' : mode === 'numberOfEntries' ? 'Number of Entries' : 'Date Range'}
-                  </Button>
-                ))}
+            {isMedications ? (
+              <div className='space-y-1.5'>
+                <Label className='text-xs'>Include medications with status</Label>
+                <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
+                  <label className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                    <input type='checkbox' className='h-4 w-4 accent-action-primary' checked={config.includeActiveMedications} onChange={(event) => setConfig((previous) => ({ ...previous, includeActiveMedications: event.target.checked }))} />
+                    <span className='text-sm text-espresso'>Active</span>
+                  </label>
+                  <label className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                    <input type='checkbox' className='h-4 w-4 accent-action-primary' checked={config.includeDiscontinuedMedications} onChange={(event) => setConfig((previous) => ({ ...previous, includeDiscontinuedMedications: event.target.checked }))} />
+                    <span className='text-sm text-espresso'>Discontinued</span>
+                  </label>
+                  <label className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                    <input type='checkbox' className='h-4 w-4 accent-action-primary' checked={config.includeCompletedMedications} onChange={(event) => setConfig((previous) => ({ ...previous, includeCompletedMedications: event.target.checked }))} />
+                    <span className='text-sm text-espresso'>Completed</span>
+                  </label>
+                </div>
               </div>
-
-              {config.rangeMode === 'latest' ? (
-                <p className='text-xs text-clay'>
-                  {isGrouped
-                    ? `Shows only the ${BLOCK_VARIABLE_LABELS[variableId]} entries from the single most recent day they were last saved — not the full history.`
-                    : `Shows only the single most recent ${BLOCK_VARIABLE_LABELS[variableId]} entry on file, by date and time — not the full history.`}
-                </p>
-              ) : null}
-
-              {config.rangeMode === 'numberOfEntries' ? (
-                <div className='space-y-1'>
-                  <Label className='text-xs'>Number of most recent entries</Label>
-                  <Input
-                    type='number'
-                    min={1}
-                    value={config.entryCount}
-                    onChange={(event) => setConfig((previous) => ({ ...previous, entryCount: Math.max(1, Number.parseInt(event.target.value, 10) || 1) }))}
-                  />
-                  <p className='text-xs text-clay'>Setting this to 2 for Labs keeps the existing side-by-side comparison formatting.</p>
+            ) : (
+              <div className='space-y-3'>
+                <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+                  {(['numberOfEntries', 'dateRange'] as BlockVariableRangeMode[]).map((mode) => (
+                    <Button
+                      key={mode}
+                      type='button'
+                      size='sm'
+                      variant={config.rangeMode === mode ? 'default' : 'ghost'}
+                      className='flex-1 text-xs'
+                      onClick={() => setConfig((previous) => ({ ...previous, rangeMode: mode }))}
+                    >
+                      {mode === 'numberOfEntries' ? 'Number of Entries' : 'Date Range'}
+                    </Button>
+                  ))}
                 </div>
-              ) : null}
 
-              {config.rangeMode === 'dateRange' ? (
-                <div className='space-y-2'>
-                  <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
-                    {(['sinceAdmission', 'lastNDays', 'fixed'] as RelativeDateRangeMode[]).map((mode) => (
-                      <Button
-                        key={mode}
-                        type='button'
-                        size='sm'
-                        variant={config.relativeMode === mode ? 'default' : 'ghost'}
-                        className='flex-1 text-xs'
-                        onClick={() => setConfig((previous) => ({ ...previous, relativeMode: mode }))}
-                      >
-                        {mode === 'sinceAdmission' ? 'Since Admission' : mode === 'lastNDays' ? 'Last N days' : 'Fixed dates'}
-                      </Button>
-                    ))}
+                {config.rangeMode === 'numberOfEntries' ? (
+                  <div className='space-y-1'>
+                    <Label className='text-xs'>Number of most recent entries</Label>
+                    <Input
+                      type='number'
+                      min={1}
+                      value={config.entryCount}
+                      onChange={(event) => setConfig((previous) => ({ ...previous, entryCount: Math.max(1, Number.parseInt(event.target.value, 10) || 1) }))}
+                    />
+                    <p className='text-xs text-clay'>
+                      {isGrouped
+                        ? 'Set to 1 for just the single most recent day.'
+                        : 'Set to 1 for just the single most recent entry. Setting this to 2 for Labs keeps the existing side-by-side comparison formatting.'}
+                    </p>
                   </div>
-                  {config.relativeMode === 'lastNDays' ? (
-                    <div className='space-y-1'>
-                      <Label className='text-xs'>Number of days</Label>
-                      <Input
-                        type='number'
-                        min={1}
-                        value={config.lastNDays}
-                        onChange={(event) => setConfig((previous) => ({ ...previous, lastNDays: Math.max(1, Number.parseInt(event.target.value, 10) || 1) }))}
-                      />
+                ) : null}
+
+                {config.rangeMode === 'dateRange' ? (
+                  <div className='space-y-2'>
+                    <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+                      {(['sinceAdmission', 'lastNDays', 'fixed'] as RelativeDateRangeMode[]).map((mode) => (
+                        <Button
+                          key={mode}
+                          type='button'
+                          size='sm'
+                          variant={config.relativeMode === mode ? 'default' : 'ghost'}
+                          className='flex-1 text-xs'
+                          onClick={() => setConfig((previous) => ({ ...previous, relativeMode: mode }))}
+                        >
+                          {mode === 'sinceAdmission' ? 'Since Admission' : mode === 'lastNDays' ? 'Last N days' : 'Fixed dates'}
+                        </Button>
+                      ))}
                     </div>
-                  ) : null}
-                  {config.relativeMode === 'fixed' ? (
-                    <div className='grid grid-cols-2 gap-2'>
+                    {config.relativeMode === 'lastNDays' ? (
                       <div className='space-y-1'>
-                        <Label className='text-xs'>From date</Label>
+                        <Label className='text-xs'>Number of days</Label>
                         <Input
-                          type='date'
-                          value={config.fixedDateFrom}
-                          onChange={(event) => setConfig((previous) => ({ ...previous, fixedDateFrom: event.target.value }))}
+                          type='number'
+                          min={1}
+                          value={config.lastNDays}
+                          onChange={(event) => setConfig((previous) => ({ ...previous, lastNDays: Math.max(1, Number.parseInt(event.target.value, 10) || 1) }))}
                         />
                       </div>
-                      <div className='space-y-1'>
-                        <Label className='text-xs'>Until date</Label>
-                        <Input
-                          type='date'
-                          value={config.fixedDateTo}
-                          onChange={(event) => setConfig((previous) => ({ ...previous, fixedDateTo: event.target.value }))}
-                        />
+                    ) : null}
+                    {config.relativeMode === 'fixed' ? (
+                      <div className='space-y-2'>
+                        <div className='grid grid-cols-2 gap-2'>
+                          <div className='space-y-1'>
+                            <Label className='text-xs'>From date</Label>
+                            <Input
+                              type='date'
+                              value={config.fixedDateFrom}
+                              onChange={(event) => setConfig((previous) => ({ ...previous, fixedDateFrom: event.target.value }))}
+                            />
+                          </div>
+                          <div className='space-y-1'>
+                            <Label className='text-xs'>From time</Label>
+                            <Input
+                              type='time'
+                              value={config.fixedTimeFrom}
+                              onChange={(event) => setConfig((previous) => ({ ...previous, fixedTimeFrom: event.target.value }))}
+                            />
+                          </div>
+                        </div>
+                        <div className='grid grid-cols-2 gap-2'>
+                          <div className='space-y-1'>
+                            <Label className='text-xs'>Until date</Label>
+                            <Input
+                              type='date'
+                              value={config.fixedDateTo}
+                              placeholder='Today, if left blank'
+                              onChange={(event) => setConfig((previous) => ({ ...previous, fixedDateTo: event.target.value }))}
+                            />
+                          </div>
+                          <div className='space-y-1'>
+                            <Label className='text-xs'>Until time</Label>
+                            <Input
+                              type='time'
+                              value={config.fixedTimeTo}
+                              placeholder='Now, if left blank'
+                              onChange={(event) => setConfig((previous) => ({ ...previous, fixedTimeTo: event.target.value }))}
+                            />
+                          </div>
+                        </div>
+                        <p className='text-xs text-clay'>
+                          A start date and time are required. Leaving "Until" blank fills it in with the exact date and time you save this — so the template keeps showing the same fixed window every time it's used later, rather than always meaning "up to whenever it happens to run."
+                        </p>
                       </div>
-                    </div>
-                  ) : null}
-                  <p className='text-xs text-clay'>A fixed date range only produces useful output on dates within it — prefer a relative option for a template you'll reuse.</p>
-                </div>
-              ) : null}
-            </div>
+                    ) : null}
+                    <p className='text-xs text-clay'>A fixed date range only produces useful output on dates within it — prefer a relative option for a template you'll reuse.</p>
+                  </div>
+                ) : null}
+              </div>
+            )}
 
             {supportsEntryPattern ? (
               <>
@@ -314,10 +399,12 @@ const BlockVariableConfigDialog = ({
                     key={variableId}
                     initialPatternText={config.entryPatternText}
                     initialFieldIds={config.entryFieldIds}
+                    initialFieldFormats={config.entryFieldDateTimeFormats}
                     catalog={entryCatalog}
+                    dateTimeFormats={dateTimeFormats}
                     addButtonLabel='Add Field'
                     pickerTitle={`Add ${BLOCK_VARIABLE_LABELS[variableId]} field`}
-                    onChange={(entryPatternText, entryFieldIds) => setConfig((previous) => ({ ...previous, entryPatternText, entryFieldIds }))}
+                    onChange={(entryPatternText, entryFieldIds, entryFieldDateTimeFormats) => setConfig((previous) => ({ ...previous, entryPatternText, entryFieldIds, entryFieldDateTimeFormats }))}
                   />
                 </div>
 
@@ -334,6 +421,19 @@ const BlockVariableConfigDialog = ({
                   </div>
                 ) : null}
 
+                {variableId === 'problems' ? (
+                  <div className='grid grid-cols-2 gap-2'>
+                    <div className='space-y-1'>
+                      <Label className='text-xs'>Resolved glyph</Label>
+                      <Input value={config.resolvedGlyph} onChange={(event) => setConfig((previous) => ({ ...previous, resolvedGlyph: event.target.value }))} />
+                    </div>
+                    <div className='space-y-1'>
+                      <Label className='text-xs'>Unresolved glyph</Label>
+                      <Input value={config.unresolvedGlyph} onChange={(event) => setConfig((previous) => ({ ...previous, unresolvedGlyph: event.target.value }))} />
+                    </div>
+                  </div>
+                ) : null}
+
                 <JoinModePicker
                   label={isGrouped ? 'Between entries in the same day' : 'Between entries'}
                   mode={config.entrySeparator}
@@ -341,6 +441,26 @@ const BlockVariableConfigDialog = ({
                   onModeChange={(entrySeparator) => setConfig((previous) => ({ ...previous, entrySeparator }))}
                   onCustomChange={(customEntrySeparator) => setConfig((previous) => ({ ...previous, customEntrySeparator }))}
                 />
+
+                {isMedications ? (
+                  <div className='border-t border-clay/15 pt-3 space-y-2'>
+                    <label className='flex items-center gap-2.5 cursor-pointer'>
+                      <input
+                        type='checkbox'
+                        className='h-4 w-4 accent-action-primary'
+                        checked={config.includeMedicationNotes}
+                        onChange={(event) => setConfig((previous) => ({ ...previous, includeMedicationNotes: event.target.checked }))}
+                      />
+                      <span className='text-sm text-espresso'>Include the freeform Medications-tab notes</span>
+                    </label>
+                    {config.includeMedicationNotes ? (
+                      <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+                        <Button type='button' size='sm' variant={config.medicationNotesPosition === 'before' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setConfig((previous) => ({ ...previous, medicationNotesPosition: 'before' }))}>Before the list</Button>
+                        <Button type='button' size='sm' variant={config.medicationNotesPosition === 'after' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setConfig((previous) => ({ ...previous, medicationNotesPosition: 'after' }))}>After the list</Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {isGrouped ? (
                   <div className='border-t border-clay/15 pt-3 space-y-3'>
@@ -383,15 +503,71 @@ const BlockVariableConfigDialog = ({
                 ) : null}
               </>
             ) : (
-              <p className='text-xs text-clay border-t border-clay/15 pt-3'>
-                Labs' comparison-mode formatting is generated automatically and isn't user-composable — use the built-in "Labs" template if you want the exact current formatting.
-              </p>
+              <div className='border-t border-clay/15 pt-3 space-y-3'>
+                <p className='text-xs text-clay'>
+                  Labs' comparison-mode formatting is generated automatically and isn't field-composable — but how the date shows, and how results are separated, still are.
+                </p>
+                <div className='space-y-1'>
+                  <Label className='text-xs'>Date display</Label>
+                  <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+                    {(['perEntry', 'none', 'groupedByDate'] as LabsDateDisplayMode[]).map((mode) => (
+                      <Button
+                        key={mode}
+                        type='button'
+                        size='sm'
+                        variant={config.labsDateDisplayMode === mode ? 'default' : 'ghost'}
+                        className='flex-1 text-xs px-1'
+                        onClick={() => setConfig((previous) => ({ ...previous, labsDateDisplayMode: mode }))}
+                      >
+                        {mode === 'perEntry' ? 'With each result' : mode === 'none' ? "Don't show" : 'Group by date'}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                {config.labsDateDisplayMode === 'groupedByDate' ? (
+                  <div className='space-y-1'>
+                    <Label className='text-xs'>Date header format</Label>
+                    <Select
+                      value={config.groupHeaderDateFormatId ?? NO_FORMAT_VALUE}
+                      onValueChange={(value) => setConfig((previous) => ({ ...previous, groupHeaderDateFormatId: value === NO_FORMAT_VALUE ? undefined : value }))}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NO_FORMAT_VALUE}>Default (MM-DD-YYYY)</SelectItem>
+                        {dateTimeFormats.map((format) => (
+                          <SelectItem key={format.id} value={String(format.id)}>{format.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+
+                <JoinModePicker
+                  label={config.labsDateDisplayMode === 'groupedByDate' ? 'Between results on the same day' : 'Between results'}
+                  mode={config.entrySeparator}
+                  custom={config.customEntrySeparator}
+                  onModeChange={(entrySeparator) => setConfig((previous) => ({ ...previous, entrySeparator }))}
+                  onCustomChange={(customEntrySeparator) => setConfig((previous) => ({ ...previous, customEntrySeparator }))}
+                />
+
+                {config.labsDateDisplayMode === 'groupedByDate' ? (
+                  <JoinModePicker
+                    label='Between days'
+                    mode={config.groupSeparator}
+                    custom={config.customGroupSeparator}
+                    onModeChange={(groupSeparator) => setConfig((previous) => ({ ...previous, groupSeparator }))}
+                    onCustomChange={(customGroupSeparator) => setConfig((previous) => ({ ...previous, customGroupSeparator }))}
+                  />
+                ) : null}
+              </div>
             )}
           </div>
         </ScrollArea>
+        {saveError ? <p className='text-xs text-red-600 pt-2'>{saveError}</p> : null}
         <div className='flex justify-end gap-2 pt-2'>
           <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
-          <Button type='button' onClick={() => onSave(config)}>{describeBlockConfig(config) ? 'Save' : 'Insert'}</Button>
+          <Button type='button' onClick={handleSaveClick}>{describeBlockConfig(config) ? 'Save' : 'Insert'}</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -742,6 +918,32 @@ const FormatPatternEditor = ({
     emitChange()
   }
 
+  /**
+   * Places the caret immediately before/after a clicked chip. A contentEditable=false element
+   * can't itself host a caret, and left to the browser's default mousedown handling, clicking one
+   * directly can leave the Selection pointing at an unrelated, stale position elsewhere on the
+   * page (outside this editor entirely) — so a Backspace right after appears to silently do
+   * nothing. Intercepting mousedown and resolving the position ourselves avoids that; the click
+   * handler below (which fires after mousedown) still separately opens the reconfigure dialog.
+   */
+  const handleContainerMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement
+    const chipEl = target.closest('[data-variable-id]') as HTMLElement | null
+    if (!chipEl || !containerRef.current?.contains(chipEl)) return
+    event.preventDefault()
+    const rect = chipEl.getBoundingClientRect()
+    const clickedRightHalf = event.clientX > rect.left + rect.width / 2
+    const range = document.createRange()
+    if (clickedRightHalf) range.setStartAfter(chipEl)
+    else range.setStartBefore(chipEl)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    savedRangeRef.current = range.cloneRange()
+    containerRef.current.focus()
+  }
+
   const handleContainerClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
     const chipEl = target.closest('[data-variable-id]') as HTMLElement | null
@@ -838,6 +1040,7 @@ const FormatPatternEditor = ({
         onInput={emitChange}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onMouseDown={handleContainerMouseDown}
         onClick={handleContainerClick}
       />
       <div className='flex flex-wrap gap-2'>
@@ -845,14 +1048,19 @@ const FormatPatternEditor = ({
           <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Add Variable
         </Button>
       </div>
-      <p className='text-xs text-clay'>Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Tags block — or a date/time variable — to change its settings.</p>
+      <p className='text-xs text-clay'>Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags block — or a date/time variable — to change its settings.</p>
 
       <VariablePickerDialog
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         onPickFlat={(variableId) => {
           setPickerOpen(false)
-          insertInstanceAtSavedRange({ kind: 'flat', variableId })
+          if (DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS.has(variableId)) {
+            setReconfiguringId(null)
+            setPendingDateTimeFlatId(variableId)
+          } else {
+            insertInstanceAtSavedRange({ kind: 'flat', variableId })
+          }
         }}
         onPickTags={() => {
           setPickerOpen(false)
@@ -910,8 +1118,13 @@ const FormatPatternEditor = ({
         formats={dateTimeFormats}
         onCancel={() => { setPendingDateTimeFlatId(null); setReconfiguringId(null) }}
         onSave={(dateTimeFormatId) => {
-          if (pendingDateTimeFlatId === null || reconfiguringId === null) return
-          updateExistingChip(reconfiguringId, { kind: 'flat', variableId: pendingDateTimeFlatId, dateTimeFormatId })
+          if (pendingDateTimeFlatId === null) return
+          const instance: TemplateVariableInstance = { kind: 'flat', variableId: pendingDateTimeFlatId, dateTimeFormatId }
+          if (reconfiguringId !== null) {
+            updateExistingChip(reconfiguringId, instance)
+          } else {
+            insertInstanceAtSavedRange(instance)
+          }
           setPendingDateTimeFlatId(null)
           setReconfiguringId(null)
         }}

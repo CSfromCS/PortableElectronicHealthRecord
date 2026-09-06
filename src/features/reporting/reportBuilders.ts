@@ -88,13 +88,34 @@ export const buildStructuredLabLines = (entries: LabEntry[]) => {
   })
 }
 
-export const buildLabReportBlocks = (entries: LabEntry[]) => {
-  const formatDateMMDDSlash = (isoDate: string) => {
-    const [, month, day] = isoDate.split('-')
-    if (!month || !day) return isoDate
-    return `${month}/${day}`
-  }
+const formatDateMMDDSlash = (isoDate: string) => {
+  const [, month, day] = isoDate.split('-')
+  if (!month || !day) return isoDate
+  return `${month}/${day}`
+}
 
+/**
+ * One Labs result block — either a single entry's result, or (when exactly 2 entries of the same
+ * lab template are in scope) a side-by-side comparison of the two. Structured rather than
+ * pre-joined so the template engine can control date display (each block's own date, no date at
+ * all, or one date header shared by every same-day block) independently of the label/body content,
+ * which stays algorithmic (see `formatLabSingleReport`/`formatLabComparisonReport`).
+ */
+export interface LabReportBlockPiece {
+  /** ISO date this block is anchored to — the newer entry's date for a comparison block. */
+  date: string
+  label: string
+  /** A comparison block's "vs ..." context (e.g. "6:00 AM vs 6:00 PM" or "vs 01-01"), never
+   * including the leading date itself — "" for a single-entry block. */
+  headerDetail: string
+  /** Legacy per-block date formatting differs by block kind (dash for comparisons, slash for
+   * singles) — kept only so the default "show each block's own date" display reproduces exactly
+   * what this app already showed before Labs' date display became configurable. */
+  legacyDateLine: string
+  body: string
+}
+
+export const buildLabReportBlockPieces = (entries: LabEntry[]): LabReportBlockPiece[] => {
   const sorted = [...entries].sort((a, b) => {
     if (a.date !== b.date) return b.date.localeCompare(a.date)
     const aTime = a.time ?? ''
@@ -111,7 +132,7 @@ export const buildLabReportBlocks = (entries: LabEntry[]) => {
   })
 
   const consumedIds = new Set<number>()
-  const blocks: string[] = []
+  const pieces: LabReportBlockPiece[] = []
 
   sorted.forEach((entry) => {
     if (entry.id !== undefined && consumedIds.has(entry.id)) return
@@ -131,7 +152,9 @@ export const buildLabReportBlocks = (entries: LabEntry[]) => {
 
       const newerTime = formatClock(newer.time ?? '00:00')
       const olderTime = formatClock(older.time ?? '00:00')
-      const headerLine = newer.date === older.date
+      const sameDay = newer.date === older.date
+      const headerDetail = sameDay ? `${newerTime} vs ${olderTime}` : `vs ${formatDateMMDD(older.date)}`
+      const legacyDateLine = sameDay
         ? `${formatDateMMDD(newer.date)} ${newerTime} vs ${olderTime}`
         : `${formatDateMMDD(newer.date)} vs ${formatDateMMDD(older.date)}`
 
@@ -148,7 +171,7 @@ export const buildLabReportBlocks = (entries: LabEntry[]) => {
         elapsedHours,
       )
 
-      blocks.push([label, headerLine, body].join('\n'))
+      pieces.push({ date: newer.date, label, headerDetail, legacyDateLine, body })
       if (newer.id !== undefined) consumedIds.add(newer.id)
       if (older.id !== undefined) consumedIds.add(older.id)
       return
@@ -160,14 +183,13 @@ export const buildLabReportBlocks = (entries: LabEntry[]) => {
       : entry.templateId === UST_ABG_TEMPLATE_ID
         ? 'ABG'
         : (template?.name ?? entry.templateId)
-    const dateLine = formatDateMMDDSlash(entry.date)
     const body = formatLabSingleReport(
       entry.templateId as 'ust-cbc' | 'ust-urinalysis' | 'ust-electrolytes' | 'ust-abg' | 'others',
       entry.results ?? {},
     )
-    blocks.push([label, dateLine, body].join('\n'))
+    pieces.push({ date: entry.date, label, headerDetail: '', legacyDateLine: formatDateMMDDSlash(entry.date), body })
     if (entry.id !== undefined) consumedIds.add(entry.id)
   })
 
-  return blocks
+  return pieces
 }
