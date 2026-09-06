@@ -722,8 +722,17 @@ const resolveLabsBlock = (config: BlockVariableConfig, entries: LabEntry[], admi
       })
     return groupTexts.join(resolveJoinString(config.groupSeparator, config.customGroupSeparator))
   }
-  // perEntry (default): each block shows its own date, exactly as this app has always shown it.
-  return pieces.map((piece) => [piece.label, piece.legacyDateLine, piece.body].join('\n')).join(entrySep)
+  // perEntry (default): each block shows its own date. Unset format reproduces this app's
+  // historical per-block date line verbatim (dash-style for a comparison, slash-style for a
+  // single result) — choosing a format instead renders just the date through it, with the
+  // comparison's "vs ..." detail (if any) still appended alongside.
+  const hasCustomFormat = Boolean(config.groupHeaderDateFormatId && ctx.dateTimeFormatsById.get(config.groupHeaderDateFormatId))
+  return pieces.map((piece) => {
+    const dateLine = hasCustomFormat
+      ? [renderGroupHeader(piece.date, config, ctx), piece.headerDetail].filter(Boolean).join(' ')
+      : piece.legacyDateLine
+    return [piece.label, dateLine, piece.body].join('\n')
+  }).join(entrySep)
 }
 
 const resolveOrdersBlock = (config: BlockVariableConfig, entries: OrderEntry[], admitDateEffective: string, ctx: TemplateRenderContext): string => {
@@ -834,7 +843,10 @@ const resolvePatternPart = (
   return { kind: 'value', text, blank: text.trim() === '' }
 }
 
-export const renderTemplateForPatient = (template: ReportTemplate, patient: Patient, ctx: TemplateRenderContext): string => {
+/** Takes just the two fields it actually reads (rather than a full `ReportTemplate`) so it can
+ * render a template's Header/Footer — a `patternText`/`variables` pair with no other
+ * `ReportTemplate` fields behind them — without needing to fabricate a dummy template object. */
+export const renderTemplateForPatient = (template: Pick<ReportTemplate, 'patternText' | 'variables'>, patient: Patient, ctx: TemplateRenderContext): string => {
   const parts = tokenizePatternText(template.patternText)
   const resolved = parts.map((part) => resolvePatternPart(part, template.variables, patient, ctx))
   return renderResolvedSegments(collapseBlanks(resolved))
@@ -864,7 +876,7 @@ const isPatientDependentInstance = (instance: TemplateVariableInstance): boolean
  * with only literal text and/or Current Date/Current Time is Prints Once. Re-evaluate this
  * whenever the Format Pattern changes; never set it manually.
  */
-export const classifyTemplateRepeatMode = (template: ReportTemplate): TemplateRepeatMode => {
+export const classifyTemplateRepeatMode = (template: Pick<ReportTemplate, 'patternText' | 'variables'>): TemplateRepeatMode => {
   const usedIds = new Set<string>()
   for (const match of template.patternText.matchAll(VARIABLE_TOKEN_REGEX)) usedIds.add(match[1])
 

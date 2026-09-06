@@ -346,8 +346,9 @@ export interface BlockVariableConfig {
   customEntrySeparator: string
   /** Problems/Checklist only: whether each date-group is preceded by a date header line. */
   showGroupHeader: boolean
-  /** Problems/Checklist/Labs only: which saved Date/Time Format renders the date header — unset
-   * uses the built-in MM-DD-YYYY default. */
+  /** Problems/Checklist/Labs only: which saved Date/Time Format renders the date — the shared
+   * date-group header for Problems/Checklist and Labs' 'groupedByDate' mode, or each individual
+   * result's own date line for Labs' 'perEntry' mode. Unset uses that context's built-in default. */
   groupHeaderDateFormatId?: string
   /** Problems/Checklist only: how consecutive date-groups join. */
   groupSeparator: BlockJoinMode
@@ -414,6 +415,18 @@ export interface ReportTemplate {
    * field-composable — hides Edit/Delete in Manage Templates. The user can still choose whether to
    * include it in a generated report, exactly like any other template. */
   locked?: boolean
+  /** How separate patients' generated blocks join together for a Per-Patient template — meaningless
+   * for Prints Once, which only ever produces one block regardless of how many patients are selected. */
+  patientSeparator: BlockJoinMode
+  customPatientSeparator: string
+  /** Prints exactly once, before the entire generated output (never per patient) — literal text
+   * plus, optionally, Current Date/Current Time chips only. No patient-dependent variable is ever
+   * offered here, since this content isn't associated with any one patient. */
+  headerPatternText: string
+  headerVariables: Record<string, TemplateVariableInstance>
+  /** Same as the header, but printed once at the very end. */
+  footerPatternText: string
+  footerVariables: Record<string, TemplateVariableInstance>
 }
 
 /** A named, savable date/time display format (e.g. "MMM D, YYYY") — selectable wherever a

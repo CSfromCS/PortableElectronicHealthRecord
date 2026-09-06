@@ -4,7 +4,7 @@ import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } fr
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
 import { seedDefaultCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
-import { buildDefaultDateTimeFormats, buildDefaultReportTemplates, buildLockedLabsTemplate } from './features/templates/templateDefaults'
+import { DEFAULT_TEMPLATE_EXTRAS, buildDefaultDateTimeFormats, buildDefaultReportTemplates, buildLockedLabsTemplate } from './features/templates/templateDefaults'
 import { buildDefaultBlockVariableConfig } from './features/templates/templateEngine'
 import type {
   BlockVariableConfig,
@@ -832,6 +832,37 @@ db.version(19).stores({
     }
 
     if (changed) await reportTemplateTable.update(template.id, { variables: nextVariables })
+  }
+})
+
+db.version(20).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Adds a configurable between-patients separator (previously always a hardcoded blank line) and
+  // an optional Header/Footer that prints exactly once around the whole generated output. Existing
+  // templates backfill to the same behavior they already had — blank line between patients, no
+  // header or footer — so nothing about their output changes until the user edits them.
+  const reportTemplateTable = tx.table<ReportTemplate & Partial<{ patientSeparator: unknown }>, number>('reportTemplates')
+  const existingTemplates = await reportTemplateTable.toArray()
+
+  for (const template of existingTemplates) {
+    if (template.id === undefined || template.patientSeparator !== undefined) continue
+    await reportTemplateTable.update(template.id, { ...DEFAULT_TEMPLATE_EXTRAS })
   }
 })
 

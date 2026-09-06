@@ -80,6 +80,7 @@ import {
   buildCurrentDateTimeText,
   classifyTemplateRepeatMode,
   renderTemplateForPatient,
+  resolveJoinString,
 } from './features/templates/templateEngine'
 import {
   ABG_ACTUAL_FIO2_KEY,
@@ -3938,9 +3939,18 @@ function App() {
         dateTimeFormatsById,
         ...buildCurrentDateTimeText(),
       }
-      const text = reportRepeatMode === 'prints-once'
+      const bodyText = reportRepeatMode === 'prints-once'
         ? renderTemplateForPatient(selectedReportTemplate, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
-        : selectedCensusPatients.map((patient) => renderTemplateForPatient(selectedReportTemplate, patient, ctx)).join('\n\n')
+        : selectedCensusPatients
+          .map((patient) => renderTemplateForPatient(selectedReportTemplate, patient, ctx))
+          .join(resolveJoinString(selectedReportTemplate.patientSeparator, selectedReportTemplate.customPatientSeparator))
+      const headerText = selectedReportTemplate.headerPatternText
+        ? renderTemplateForPatient({ patternText: selectedReportTemplate.headerPatternText, variables: selectedReportTemplate.headerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
+        : ''
+      const footerText = selectedReportTemplate.footerPatternText
+        ? renderTemplateForPatient({ patternText: selectedReportTemplate.footerPatternText, variables: selectedReportTemplate.footerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
+        : ''
+      const text = [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
       openCopyModal(text, selectedReportTemplate.name)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to generate report.')

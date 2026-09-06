@@ -6,6 +6,17 @@ import {
 } from './templateEngine'
 import type { DateTimeComponentId, DateTimeFormatDefinition, FlatVariableId, ReportTemplate, TemplateVariableInstance } from '@/types'
 
+/** Matches this app's pre-header/footer/patient-separator behavior exactly: patients joined by a
+ * blank line, no header or footer text. */
+export const DEFAULT_TEMPLATE_EXTRAS = {
+  patientSeparator: 'blankLine' as const,
+  customPatientSeparator: '',
+  headerPatternText: '',
+  headerVariables: {} as Record<string, TemplateVariableInstance>,
+  footerPatternText: '',
+  footerVariables: {} as Record<string, TemplateVariableInstance>,
+}
+
 /** Point 7 of issue #82: two pre-populated templates so there's a working reference point on
  * first install. "Diagnosis" in the issue's own example predates this app's Admission/Discharge
  * Diagnosis split, so it maps to Admission Diagnosis here. */
@@ -34,8 +45,8 @@ export const buildDefaultReportTemplates = (now: string): Omit<ReportTemplate, '
   const shortListPattern = `${shortFlatToken('roomNumber')} ${shortFlatToken('ward')} — ${shortFlatToken('lastName')}`
 
   return [
-    { name: 'Full Census', patternText: fullCensusPattern, variables, sortOrder: 0, createdAt: now },
-    { name: 'Short List', patternText: shortListPattern, variables: shortListVariables, sortOrder: 1, createdAt: now },
+    { name: 'Full Census', patternText: fullCensusPattern, variables, sortOrder: 0, createdAt: now, ...DEFAULT_TEMPLATE_EXTRAS },
+    { name: 'Short List', patternText: shortListPattern, variables: shortListVariables, sortOrder: 1, createdAt: now, ...DEFAULT_TEMPLATE_EXTRAS },
   ]
 }
 
@@ -54,7 +65,7 @@ export const buildLockedLabsTemplate = (now: string, sortOrder: number): Omit<Re
       config: { ...buildDefaultBlockVariableConfig('labs'), rangeMode: 'numberOfEntries', entryCount: 2 },
     },
   }
-  return { name: 'Labs', patternText: buildVariableToken(id), variables, sortOrder, createdAt: now, locked: true }
+  return { name: 'Labs', patternText: buildVariableToken(id), variables, sortOrder, createdAt: now, locked: true, ...DEFAULT_TEMPLATE_EXTRAS }
 }
 
 /** A handful of common date/time display formats so the Date & Time Formats screen isn't empty on

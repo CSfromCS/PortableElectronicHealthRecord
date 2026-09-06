@@ -13,6 +13,8 @@ import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import { toLocalISODate, toLocalTime } from '@/lib/dateTime'
+import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
+import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import { cn } from '@/lib/utils'
 import type {
   BlockJoinMode,
@@ -73,15 +75,37 @@ type TemplateFormState = {
   name: string
   patternText: string
   variables: Record<string, TemplateVariableInstance>
+  patientSeparator: BlockJoinMode
+  customPatientSeparator: string
+  headerPatternText: string
+  headerVariables: Record<string, TemplateVariableInstance>
+  footerPatternText: string
+  footerVariables: Record<string, TemplateVariableInstance>
 }
 
 const templateToForm = (template: ReportTemplate): TemplateFormState => ({
   name: template.name,
   patternText: template.patternText,
   variables: { ...template.variables },
+  patientSeparator: template.patientSeparator,
+  customPatientSeparator: template.customPatientSeparator,
+  headerPatternText: template.headerPatternText,
+  headerVariables: { ...template.headerVariables },
+  footerPatternText: template.footerPatternText,
+  footerVariables: { ...template.footerVariables },
 })
 
-const blankForm = (): TemplateFormState => ({ name: '', patternText: '', variables: {} })
+const blankForm = (): TemplateFormState => ({
+  name: '',
+  patternText: '',
+  variables: {},
+  patientSeparator: 'blankLine',
+  customPatientSeparator: '',
+  headerPatternText: '',
+  headerVariables: {},
+  footerPatternText: '',
+  footerVariables: {},
+})
 
 const JOIN_MODE_ORDER: BlockJoinMode[] = ['lineBreak', 'blankLine', 'space', 'custom']
 
@@ -345,38 +369,40 @@ const BlockVariableConfigDialog = ({
                         <div className='grid grid-cols-2 gap-2'>
                           <div className='space-y-1'>
                             <Label className='text-xs'>From date</Label>
-                            <Input
-                              type='date'
+                            <FlexibleDateInput
+                              ariaLabel='From date'
                               value={config.fixedDateFrom}
-                              onChange={(event) => setConfig((previous) => ({ ...previous, fixedDateFrom: event.target.value }))}
+                              onChange={(isoDate) => setConfig((previous) => ({ ...previous, fixedDateFrom: isoDate }))}
                             />
                           </div>
                           <div className='space-y-1'>
                             <Label className='text-xs'>From time</Label>
-                            <Input
-                              type='time'
+                            <FlexibleTimeInput
+                              ariaLabel='From time'
                               value={config.fixedTimeFrom}
-                              onChange={(event) => setConfig((previous) => ({ ...previous, fixedTimeFrom: event.target.value }))}
+                              onChange={(hhmm) => setConfig((previous) => ({ ...previous, fixedTimeFrom: hhmm }))}
                             />
                           </div>
                         </div>
                         <div className='grid grid-cols-2 gap-2'>
                           <div className='space-y-1'>
                             <Label className='text-xs'>Until date</Label>
-                            <Input
-                              type='date'
+                            <FlexibleDateInput
+                              ariaLabel='Until date'
                               value={config.fixedDateTo}
-                              placeholder='Today, if left blank'
-                              onChange={(event) => setConfig((previous) => ({ ...previous, fixedDateTo: event.target.value }))}
+                              defaultIso={toLocalISODate()}
+                              emitEmptyOnClear
+                              onChange={(isoDate) => setConfig((previous) => ({ ...previous, fixedDateTo: isoDate }))}
                             />
                           </div>
                           <div className='space-y-1'>
                             <Label className='text-xs'>Until time</Label>
-                            <Input
-                              type='time'
+                            <FlexibleTimeInput
+                              ariaLabel='Until time'
                               value={config.fixedTimeTo}
-                              placeholder='Now, if left blank'
-                              onChange={(event) => setConfig((previous) => ({ ...previous, fixedTimeTo: event.target.value }))}
+                              defaultHhmm={toLocalTime()}
+                              emitEmptyOnClear
+                              onChange={(hhmm) => setConfig((previous) => ({ ...previous, fixedTimeTo: hhmm }))}
                             />
                           </div>
                         </div>
@@ -525,9 +551,9 @@ const BlockVariableConfigDialog = ({
                   </div>
                 </div>
 
-                {config.labsDateDisplayMode === 'groupedByDate' ? (
+                {config.labsDateDisplayMode !== 'none' ? (
                   <div className='space-y-1'>
-                    <Label className='text-xs'>Date header format</Label>
+                    <Label className='text-xs'>{config.labsDateDisplayMode === 'groupedByDate' ? 'Date header format' : 'Date format'}</Label>
                     <Select
                       value={config.groupHeaderDateFormatId ?? NO_FORMAT_VALUE}
                       onValueChange={(value) => setConfig((previous) => ({ ...previous, groupHeaderDateFormatId: value === NO_FORMAT_VALUE ? undefined : value }))}
@@ -688,70 +714,94 @@ const TagsVariableConfigDialog = ({
   )
 }
 
+const CURRENT_DATE_TIME_FLAT_IDS: FlatVariableId[] = ['currentDate', 'currentTime']
+
 const VariablePickerDialog = ({
   open,
   onClose,
   onPickFlat,
   onPickTags,
   onPickBlock,
+  restrictToCurrentDateTime = false,
 }: {
   open: boolean
   onClose: () => void
   onPickFlat: (variableId: FlatVariableId) => void
   onPickTags: () => void
   onPickBlock: (variableId: BlockVariableId) => void
+  /** Header/Footer content prints once per run, not per patient, so only Current Date/Current
+   * Time (plus whatever literal text is typed) make sense there — every other variable reads from
+   * a specific patient and is left out of the picker entirely in this mode. */
+  restrictToCurrentDateTime?: boolean
 }) => (
   <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
     <DialogContent className='max-w-md' onCloseAutoFocus={(event) => event.preventDefault()}>
       <DialogHeader>
         <DialogTitle>Add variable</DialogTitle>
       </DialogHeader>
-      <Tabs defaultValue='identity'>
-        <TabsList className='flex-wrap h-auto'>
+      {restrictToCurrentDateTime ? (
+        <ScrollArea className='max-h-[50vh] pr-3'>
+          <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-2 py-1'>
+            {CURRENT_DATE_TIME_FLAT_IDS.map((variableId) => (
+              <button
+                key={variableId}
+                type='button'
+                className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                onClick={() => onPickFlat(variableId)}
+              >
+                {FLAT_VARIABLE_LABELS[variableId]}
+              </button>
+            ))}
+          </div>
+        </ScrollArea>
+      ) : (
+        <Tabs defaultValue='identity'>
+          <TabsList className='flex-wrap h-auto'>
+            {PICKER_TABS.map((tab) => (
+              <TabsTrigger key={tab.id} value={tab.id} className='text-xs'>{tab.label}</TabsTrigger>
+            ))}
+          </TabsList>
           {PICKER_TABS.map((tab) => (
-            <TabsTrigger key={tab.id} value={tab.id} className='text-xs'>{tab.label}</TabsTrigger>
+            <TabsContent key={tab.id} value={tab.id}>
+              <ScrollArea className='max-h-[50vh] pr-3'>
+                <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-2 py-1'>
+                  {tab.id === 'tags' ? (
+                    <button
+                      type='button'
+                      className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                      onClick={onPickTags}
+                    >
+                      Tags
+                    </button>
+                  ) : tab.id === 'records' ? (
+                    BLOCK_VARIABLE_ORDER.map((variableId) => (
+                      <button
+                        key={variableId}
+                        type='button'
+                        className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                        onClick={() => onPickBlock(variableId)}
+                      >
+                        {BLOCK_VARIABLE_LABELS[variableId]}
+                      </button>
+                    ))
+                  ) : (
+                    (tab.flatIds ?? []).map((variableId) => (
+                      <button
+                        key={variableId}
+                        type='button'
+                        className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                        onClick={() => onPickFlat(variableId)}
+                      >
+                        {FLAT_VARIABLE_LABELS[variableId]}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
+            </TabsContent>
           ))}
-        </TabsList>
-        {PICKER_TABS.map((tab) => (
-          <TabsContent key={tab.id} value={tab.id}>
-            <ScrollArea className='max-h-[50vh] pr-3'>
-              <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-2 py-1'>
-                {tab.id === 'tags' ? (
-                  <button
-                    type='button'
-                    className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
-                    onClick={onPickTags}
-                  >
-                    Tags
-                  </button>
-                ) : tab.id === 'records' ? (
-                  BLOCK_VARIABLE_ORDER.map((variableId) => (
-                    <button
-                      key={variableId}
-                      type='button'
-                      className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
-                      onClick={() => onPickBlock(variableId)}
-                    >
-                      {BLOCK_VARIABLE_LABELS[variableId]}
-                    </button>
-                  ))
-                ) : (
-                  (tab.flatIds ?? []).map((variableId) => (
-                    <button
-                      key={variableId}
-                      type='button'
-                      className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
-                      onClick={() => onPickFlat(variableId)}
-                    >
-                      {FLAT_VARIABLE_LABELS[variableId]}
-                    </button>
-                  ))
-                )}
-              </div>
-            </ScrollArea>
-          </TabsContent>
-        ))}
-      </Tabs>
+        </Tabs>
+      )}
       <div className='flex justify-end pt-2'>
         <Button type='button' variant='ghost' onClick={onClose}>Cancel</Button>
       </div>
@@ -783,6 +833,7 @@ const FormatPatternEditor = ({
   tags,
   groups,
   dateTimeFormats,
+  variableScope = 'full',
 }: {
   initialPatternText: string
   initialVariables: Record<string, TemplateVariableInstance>
@@ -790,6 +841,10 @@ const FormatPatternEditor = ({
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
   dateTimeFormats: DateTimeFormatDefinition[]
+  /** 'currentDateTimeOnly' restricts the Add Variable picker to just Current Date/Current Time —
+   * for a template's Header/Footer, which prints once per run rather than once per patient, so no
+   * patient-dependent variable belongs there. */
+  variableScope?: 'full' | 'currentDateTimeOnly'
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const variablesRef = useRef<Record<string, TemplateVariableInstance>>(initialVariables)
@@ -1048,11 +1103,16 @@ const FormatPatternEditor = ({
           <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Add Variable
         </Button>
       </div>
-      <p className='text-xs text-clay'>Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags block — or a date/time variable — to change its settings.</p>
+      <p className='text-xs text-clay'>
+        {variableScope === 'currentDateTimeOnly'
+          ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time — this prints once per run, so no patient-specific variable is available here.'
+          : 'Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags block — or a date/time variable — to change its settings.'}
+      </p>
 
       <VariablePickerDialog
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
+        restrictToCurrentDateTime={variableScope === 'currentDateTimeOnly'}
         onPickFlat={(variableId) => {
           setPickerOpen(false)
           if (DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS.has(variableId)) {
@@ -1152,21 +1212,37 @@ const TemplateEditor = ({
 
   const dateTimeFormatsById = useMemo(() => new Map(dateTimeFormats.map((format) => [String(format.id), format])), [dateTimeFormats])
 
-  const preview = useMemo(() => {
-    const draftTemplate: ReportTemplate = { name: form.name, patternText: form.patternText, variables: form.variables, sortOrder: 0, createdAt: '' }
-    return renderTemplateForPatient(draftTemplate, SAMPLE_PREVIEW_PATIENT, buildSamplePreviewContext(dateTimeFormatsById))
-  }, [form.name, form.patternText, form.variables, dateTimeFormatsById])
-
   const repeatMode = useMemo(
-    () => classifyTemplateRepeatMode({ name: form.name, patternText: form.patternText, variables: form.variables, sortOrder: 0, createdAt: '' }),
-    [form.name, form.patternText, form.variables],
+    () => classifyTemplateRepeatMode({ patternText: form.patternText, variables: form.variables }),
+    [form.patternText, form.variables],
   )
+
+  const preview = useMemo(() => {
+    const ctx = buildSamplePreviewContext(dateTimeFormatsById)
+    const headerText = form.headerPatternText ? renderTemplateForPatient({ patternText: form.headerPatternText, variables: form.headerVariables }, SAMPLE_PREVIEW_PATIENT, ctx) : ''
+    const bodyText = renderTemplateForPatient({ patternText: form.patternText, variables: form.variables }, SAMPLE_PREVIEW_PATIENT, ctx)
+    const footerText = form.footerPatternText ? renderTemplateForPatient({ patternText: form.footerPatternText, variables: form.footerVariables }, SAMPLE_PREVIEW_PATIENT, ctx) : ''
+    return [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
+  }, [form.headerPatternText, form.headerVariables, form.patternText, form.variables, form.footerPatternText, form.footerVariables, dateTimeFormatsById])
 
   return (
     <div className='space-y-4'>
       <div className='space-y-1'>
         <Label htmlFor='template-name'>Template name</Label>
         <Input id='template-name' value={form.name} onChange={(event) => setForm((previous) => ({ ...previous, name: event.target.value }))} placeholder='e.g. OB Rotation Format' />
+      </div>
+
+      <div className='space-y-1.5'>
+        <Label className='text-xs'>Header <span className='font-normal normal-case text-clay'>— prints once, at the very start</span></Label>
+        <FormatPatternEditor
+          initialPatternText={initial.headerPatternText}
+          initialVariables={initial.headerVariables}
+          tags={tags}
+          groups={groups}
+          dateTimeFormats={dateTimeFormats}
+          variableScope='currentDateTimeOnly'
+          onChange={(headerPatternText, headerVariables) => setForm((previous) => ({ ...previous, headerPatternText, headerVariables }))}
+        />
       </div>
 
       <div className='space-y-1.5'>
@@ -1183,6 +1259,29 @@ const TemplateEditor = ({
           groups={groups}
           dateTimeFormats={dateTimeFormats}
           onChange={(patternText, variables) => setForm((previous) => ({ ...previous, patternText, variables }))}
+        />
+      </div>
+
+      {repeatMode === 'per-patient' ? (
+        <JoinModePicker
+          label='Between patients'
+          mode={form.patientSeparator}
+          custom={form.customPatientSeparator}
+          onModeChange={(patientSeparator) => setForm((previous) => ({ ...previous, patientSeparator }))}
+          onCustomChange={(customPatientSeparator) => setForm((previous) => ({ ...previous, customPatientSeparator }))}
+        />
+      ) : null}
+
+      <div className='space-y-1.5'>
+        <Label className='text-xs'>Footer <span className='font-normal normal-case text-clay'>— prints once, at the very end</span></Label>
+        <FormatPatternEditor
+          initialPatternText={initial.footerPatternText}
+          initialVariables={initial.footerVariables}
+          tags={tags}
+          groups={groups}
+          dateTimeFormats={dateTimeFormats}
+          variableScope='currentDateTimeOnly'
+          onChange={(footerPatternText, footerVariables) => setForm((previous) => ({ ...previous, footerPatternText, footerVariables }))}
         />
       </div>
 
@@ -1227,11 +1326,22 @@ export const ManageTemplatesScreen = ({
   const saveTemplate = async (form: TemplateFormState) => {
     const name = form.name.trim()
     if (!name) return
+    const fields = {
+      name,
+      patternText: form.patternText,
+      variables: form.variables,
+      patientSeparator: form.patientSeparator,
+      customPatientSeparator: form.customPatientSeparator,
+      headerPatternText: form.headerPatternText,
+      headerVariables: form.headerVariables,
+      footerPatternText: form.footerPatternText,
+      footerVariables: form.footerVariables,
+    }
     if (editingTemplateId !== 'new' && editingTemplateId !== null) {
-      await db.reportTemplates.update(editingTemplateId, { name, patternText: form.patternText, variables: form.variables })
+      await db.reportTemplates.update(editingTemplateId, fields)
     } else {
       const nextSortOrder = templates.length > 0 ? Math.max(...templates.map((template) => template.sortOrder)) + 1 : 0
-      await db.reportTemplates.add({ name, patternText: form.patternText, variables: form.variables, sortOrder: nextSortOrder, createdAt: new Date().toISOString() })
+      await db.reportTemplates.add({ ...fields, sortOrder: nextSortOrder, createdAt: new Date().toISOString() })
     }
     setEditingTemplateId(null)
   }
@@ -1240,28 +1350,43 @@ export const ManageTemplatesScreen = ({
     const nextSortOrder = templates.length > 0 ? Math.max(...templates.map((t) => t.sortOrder)) + 1 : 0
     // Regenerate every variable id (and rewrite the pattern's tokens to match) so the duplicate's
     // chips are fully independent of the original's — editing one can never affect the other.
-    const idMap = new Map<string, string>()
-    const nextVariables: Record<string, TemplateVariableInstance> = {}
-    Object.entries(template.variables).forEach(([oldId, instance]) => {
-      const newId = createVariableId()
-      idMap.set(oldId, newId)
-      nextVariables[newId] = instance
-    })
-    const nextPatternText = tokenizePatternText(template.patternText)
-      .map((part) => {
-        if (part.type === 'text') return part.text
-        if (part.type === 'lineBreak') return '\n'
-        const newId = idMap.get(part.id)
-        return newId ? buildVariableToken(newId) : ''
+    // Applied separately to the main pattern and the Header/Footer, which each have their own
+    // independent id namespace.
+    const remap = (patternText: string, variables: Record<string, TemplateVariableInstance>) => {
+      const idMap = new Map<string, string>()
+      const nextVariables: Record<string, TemplateVariableInstance> = {}
+      Object.entries(variables).forEach(([oldId, instance]) => {
+        const newId = createVariableId()
+        idMap.set(oldId, newId)
+        nextVariables[newId] = instance
       })
-      .join('')
+      const nextPatternText = tokenizePatternText(patternText)
+        .map((part) => {
+          if (part.type === 'text') return part.text
+          if (part.type === 'lineBreak') return '\n'
+          const newId = idMap.get(part.id)
+          return newId ? buildVariableToken(newId) : ''
+        })
+        .join('')
+      return { patternText: nextPatternText, variables: nextVariables }
+    }
+
+    const body = remap(template.patternText, template.variables)
+    const header = remap(template.headerPatternText, template.headerVariables)
+    const footer = remap(template.footerPatternText, template.footerVariables)
 
     // Deliberately omits `locked` — a duplicate of the built-in Labs template is a normal,
     // fully-editable template like any other.
     const newId = await db.reportTemplates.add({
       name: `${template.name} (Copy)`,
-      patternText: nextPatternText,
-      variables: nextVariables,
+      patternText: body.patternText,
+      variables: body.variables,
+      patientSeparator: template.patientSeparator,
+      customPatientSeparator: template.customPatientSeparator,
+      headerPatternText: header.patternText,
+      headerVariables: header.variables,
+      footerPatternText: footer.patternText,
+      footerVariables: footer.variables,
       sortOrder: nextSortOrder,
       createdAt: new Date().toISOString(),
     })
