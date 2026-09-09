@@ -397,26 +397,71 @@ export type TemplateVariableInstance =
   | { kind: 'tags'; config: TagsVariableConfig }
   | { kind: 'censusSummary'; config: CensusSummaryConfig }
 
-/** One line per tag in `tagGroupId` (e.g. "CD: 0 new admissions, 2 new referrals (SANTOS,
- * MARIMAR), 1 discharged (RIZAL)"), covering every patient currently carrying that tag who was
- * newly admitted/referred/discharged within the lookback window — reuses the same Admitted/
- * Referred/Discharged detection already built for the Patient Filter's Special/Timebound facet.
- * A whole-run aggregate, not a per-patient value, so (like Current Date/Time) it's only offered in
- * a template's Header/Footer, never the per-patient Format Pattern. */
+/** How multiple selected tags spanning more than one Tag Group combine into Census Summary's
+ * output groups. Meaningless when the selected tags all belong to a single Tag Group (or there's
+ * only one selected tag) — there's nothing to combine across yet. 'OR' unions every selected tag
+ * into its own group, e.g. picking CD+PD (Category) and Medicine (Service) produces three groups:
+ * CD, PD, Medicine. 'AND' cross-combines instead: one group per combination of one tag from each
+ * represented Tag Group — the same picks produce two groups, "CD, Medicine" and "PD, Medicine" —
+ * and a patient only counts in a combo group if they carry every tag in it. */
+export type CensusGroupCombineMode = 'AND' | 'OR'
+
+/** How multiple patients within one Census Summary patient-row list are joined together. */
+export type CensusNameJoinMode = 'comma' | 'semicolon' | 'lineBreak' | 'custom'
+
+/** A whole-run aggregate (like Current Date/Time), so it's only offered in a template's
+ * Header/Footer, never the per-patient Format Pattern. Three parts:
+ * 1. Which patients are grouped, and how (`tagIds`/`groupCombineMode`/`lookbackHours`) — reuses
+ *    the same Admitted/Referred/Discharged detection already built for the Patient Filter's
+ *    Special/Timebound facet.
+ * 2. The format proper (`patternText`/`fieldIds`) — one evaluation per output group, joined by
+ *    `groupSeparator`. Fields: groupLabel (that group's comma-joined tag names — see
+ *    `CensusGroupCombineMode`), and, for each of admitted/referred/discharged/signed-out/expired,
+ *    a bare-number tally field and a list field (patients matching that status within the group,
+ *    each rendered through `patientRowPatternText`, wrapped in `listOpenText`/`listCloseText` —
+ *    resolving to "" instead when the list is empty unless `showListBracketsWhenEmpty` is on). On
+ *    top of the Admitted/Referred/Discharged window check, each status also requires a specific
+ *    tag — New Admissions requires "Relationship: Main", New Referrals requires "Relationship:
+ *    Referral" (already implied by the window check itself), and Discharged/Signed Out/Expired
+ *    are told apart by which literal terminal tag the patient carries, despite all three sharing
+ *    the same discharge-date window check. Tally fields are never blank (a number, even "0", is
+ *    never an empty string) so a required separator placed next to one is always safe from
+ *    blank-collapse; a list field can resolve blank, so — per
+ *    [[project_puhrr_collapseblanks_separator_gotcha]] — avoid placing a required separator where
+ *    only a list field's own optional wrapper stands between it and the next field.
+ * 3. How each patient's own row renders (`patientRowPatternText`/`patientRowFieldIds`), shared by
+ *    every list field regardless of which group or status it belongs to. */
 export interface CensusSummaryConfig {
-  /** Which Tag Group's tags to break the summary down by, in that group's canonical tag order. */
-  tagGroupId: number | null
+  /** Individually selected tags (any Tag Groups) forming the basis for Census Summary's output
+   * groups — see `CensusGroupCombineMode`. */
+  tagIds: number[]
+  groupCombineMode: CensusGroupCombineMode
   /** Hours to look back from the moment the report is generated (not frozen at save time, unlike
    * Fixed Dates — a shift summary should always mean "the last N hours from now"). */
   lookbackHours: number
-  /** How each tag's line renders — a mini Format Pattern scoped to this variable's own fields
-   * (groupLabel, admittedPhrase, referredPhrase, dischargedPhrase — each phrase already bakes in
-   * its own count/pluralization and optional patient-names parenthetical, so it's never blank),
-   * same `{{var:<id>}}` token mechanism as everywhere else. */
-  entryPatternText: string
-  entryFieldIds: Record<string, string>
-  entrySeparator: BlockJoinMode
-  customEntrySeparator: string
+
+  patternText: string
+  fieldIds: Record<string, string>
+  groupSeparator: BlockJoinMode
+  customGroupSeparator: string
+
+  /** Wraps a list field's patient rows — e.g. " (" / ")" for "2 (SANTOS, MARIMAR)", or "" / "" for
+   * no wrapper at all. Shared by all three list fields. */
+  listOpenText: string
+  listCloseText: string
+  /** When on, an empty list still renders `listOpenText` + `listCloseText` back-to-back (e.g.
+   * "0 ()") instead of the list field resolving to "". */
+  showListBracketsWhenEmpty: boolean
+
+  /** How one patient renders wherever a patient list appears — a free Format Pattern, same
+   * `{{var:<id>}}` mechanism as everywhere else, scoped to fields Room Number, Last Name, First
+   * Name, Full Name, Ward/Location, Age, and Sex. */
+  patientRowPatternText: string
+  patientRowFieldIds: Record<string, string>
+  /** How multiple patient rows within one list join together. */
+  nameSeparator: CensusNameJoinMode
+  /** Only meaningful when nameSeparator === 'custom'. */
+  customNameSeparator: string
 }
 
 /**

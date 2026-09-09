@@ -2,7 +2,7 @@ import { type DateTimeWindow, type PatientPoolContext, matchesPatientPool } from
 import { composeDiagnosisText } from '@/features/patients/serviceDiagnosis'
 import { buildLabReportBlockPieces, formatOrderStatus } from '@/features/reporting/reportBuilders'
 import { resolveServiceTagNames } from '@/features/tags/serviceTagUtils'
-import { bucketTagsByGroup, getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
+import { getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
 import {
   formatClock,
   formatClockCompact,
@@ -13,10 +13,12 @@ import {
   toLocalISODate,
   toLocalTime,
 } from '@/lib/dateTime'
+import { formatFullName } from '@/lib/patientIdentity'
 import type {
   BlockJoinMode,
   BlockVariableConfig,
   BlockVariableId,
+  CensusNameJoinMode,
   CensusSummaryConfig,
   ChecklistEntryFieldId,
   DailyUpdate,
@@ -32,6 +34,7 @@ import type {
   ProblemBlock,
   ProblemsEntryFieldId,
   ReportTemplate,
+  TagAutomationRole,
   TagDefinition,
   TagGroupDefinition,
   TagsVariableConfig,
@@ -125,7 +128,15 @@ type ResolvedSegment =
 /** Point 3 of issue #82: a blank variable collapses itself AND any literal text immediately
  * adjacent to it on either side, up to the next non-blank variable or line break — so a patient
  * without a referral doesn't produce a dangling "; :" with nothing in it. Only the specific gap
- * around that one blank variable collapses; the rest of the line is unaffected. */
+ * around that one blank variable collapses; the rest of the line is unaffected.
+ *
+ * A second pass then handles the case where a line's only content WAS one of those now-dropped
+ * segments (e.g. a `{{list}}` chip placed alone on its own line) — collapsing the segment alone
+ * would leave a blank line sitting between its two bounding line breaks. When that happens, one
+ * bounding line break is dropped too, merging the empty line away instead of leaving it behind. A
+ * line that was already blank in the authored pattern (no chip on it at all, e.g. a deliberate
+ * blank line for spacing) is left untouched — only a line that HAD content which fully collapsed
+ * gets merged away. */
 const collapseBlanks = (resolved: ResolvedSegment[]): ResolvedSegment[] => {
   const dropped = new Set<number>()
 
@@ -149,6 +160,18 @@ const collapseBlanks = (resolved: ResolvedSegment[]): ResolvedSegment[] => {
       if (right.kind === 'value' && right.blank) break
     }
   })
+
+  let lineStart = 0
+  for (let i = 0; i <= resolved.length; i += 1) {
+    if (i !== resolved.length && resolved[i].kind !== 'lineBreak') continue
+    const hadContent = i > lineStart
+    const lineFullyDropped = hadContent && Array.from({ length: i - lineStart }, (_, offset) => lineStart + offset).every((j) => dropped.has(j))
+    if (lineFullyDropped) {
+      if (i < resolved.length) dropped.add(i)
+      else if (lineStart > 0) dropped.add(lineStart - 1)
+    }
+    lineStart = i + 1
+  }
 
   return resolved.filter((_, index) => !dropped.has(index))
 }
@@ -338,27 +361,95 @@ export const ENTRY_FIELD_LABELS_BY_BLOCK: Record<BlockVariableId, Record<string,
   labs: {},
 }
 
-/** Census Summary's own entry-level fields — one line per tag in the chosen Tag Group, used only
- * inside that variable's own `entryPatternText`/`entryFieldIds`. Each `*Phrase` field bakes its
- * count, pluralized unit word, and (when non-zero) a parenthetical name list all into one value —
- * e.g. "0 new admissions" or "1 new admission (MARIA)" — rather than splitting count and names
- * into separate chips. That's deliberate: the blank-collapse rule every other pattern uses to drop
- * an empty parenthetical would, here, also eat the fixed ", " separators between phrases whenever
- * one phrase's name list happened to be blank — collapsing "0 new admissions, 2 new referrals" down
- * to "0 new admissions2 new referrals". Keeping the whole phrase as a single, never-blank value
- * sidesteps that entirely. */
-export type CensusSummaryEntryFieldId = 'groupLabel' | 'admittedPhrase' | 'referredPhrase' | 'dischargedPhrase'
+/** Census Summary's per-group fields, used inside the variable's own `patternText`/`fieldIds` —
+ * one evaluation per output group (see `CensusGroupCombineMode`). `groupLabel` is that group's
+ * comma-joined tag names, never blank (a group always has at least one defining tag). Each
+ * `*Tally` field is a bare patient count, also never blank (a number, even "0", is never an empty
+ * string) — safe to sit right next to a required separator. Each `*List` field can resolve blank
+ * (when that status has zero matching patients and `showListBracketsWhenEmpty` is off) — per
+ * [[project_puhrr_collapseblanks_separator_gotcha]], avoid placing a required separator where only
+ * a `*List` field's own optional wrapper stands between it and the next field. */
+export type CensusSummaryFieldId =
+  | 'groupLabel'
+  | 'admittedTally' | 'admittedList'
+  | 'referredTally' | 'referredList'
+  | 'dischargedTally' | 'dischargedList'
+  | 'signedOutTally' | 'signedOutList'
+  | 'expiredTally' | 'expiredList'
 
-export const CENSUS_SUMMARY_ENTRY_FIELD_ORDER: CensusSummaryEntryFieldId[] = [
-  'groupLabel', 'admittedPhrase', 'referredPhrase', 'dischargedPhrase',
+export const CENSUS_SUMMARY_FIELD_ORDER: CensusSummaryFieldId[] = [
+  'groupLabel',
+  'admittedTally', 'admittedList',
+  'referredTally', 'referredList',
+  'dischargedTally', 'dischargedList',
+  'signedOutTally', 'signedOutList',
+  'expiredTally', 'expiredList',
 ]
 
-export const CENSUS_SUMMARY_ENTRY_FIELD_LABELS: Record<CensusSummaryEntryFieldId, string> = {
+export const CENSUS_SUMMARY_FIELD_LABELS: Record<CensusSummaryFieldId, string> = {
   groupLabel: 'Group Label',
-  admittedPhrase: 'New Admissions',
-  referredPhrase: 'New Referrals',
-  dischargedPhrase: 'Discharged',
+  admittedTally: 'New Admissions (tally)',
+  admittedList: 'New Admissions (list)',
+  referredTally: 'New Referrals (tally)',
+  referredList: 'New Referrals (list)',
+  dischargedTally: 'Discharged (tally)',
+  dischargedList: 'Discharged (list)',
+  signedOutTally: 'Signed Out (tally)',
+  signedOutList: 'Signed Out (list)',
+  expiredTally: 'Expired (tally)',
+  expiredList: 'Expired (list)',
 }
+
+/** Fields for one patient's own row, used inside `patientRowPatternText`/`patientRowFieldIds` — a
+ * free Format Pattern rather than a fixed preset, so any arrangement of demographics is just a
+ * pattern edit. Shared by every `*List` field regardless of which group or status it belongs to. */
+export type CensusPatientRowFieldId = 'roomNumber' | 'lastName' | 'firstName' | 'fullName' | 'ward' | 'age' | 'sex'
+
+export const CENSUS_PATIENT_ROW_FIELD_ORDER: CensusPatientRowFieldId[] = ['roomNumber', 'lastName', 'firstName', 'fullName', 'ward', 'age', 'sex']
+
+export const CENSUS_PATIENT_ROW_FIELD_LABELS: Record<CensusPatientRowFieldId, string> = {
+  roomNumber: 'Room Number',
+  lastName: 'Last Name',
+  firstName: 'First Name',
+  fullName: 'Full Name',
+  ward: 'Ward/Location',
+  age: 'Age',
+  sex: 'Sex',
+}
+
+export const CENSUS_NAME_JOIN_MODE_ORDER: CensusNameJoinMode[] = ['comma', 'semicolon', 'lineBreak', 'custom']
+
+export const CENSUS_NAME_JOIN_MODE_LABELS: Record<CensusNameJoinMode, string> = {
+  comma: 'Comma',
+  semicolon: 'Semicolon',
+  lineBreak: 'Line break',
+  custom: 'Custom',
+}
+
+export const resolveCensusNameSeparator = (mode: CensusNameJoinMode, custom: string): string => {
+  if (mode === 'comma') return ', '
+  if (mode === 'semicolon') return '; '
+  if (mode === 'lineBreak') return '\n'
+  return custom
+}
+
+const resolveCensusPatientRowField = (fieldId: string, patient: Patient): string => {
+  switch (fieldId as CensusPatientRowFieldId) {
+    case 'roomNumber': return patient.roomNumber
+    case 'lastName': return patient.lastName
+    case 'firstName': return patient.firstName
+    case 'fullName': return formatFullName(patient)
+    case 'ward': return patient.ward
+    case 'age': return patient.age !== undefined ? String(patient.age) : ''
+    case 'sex': return patient.sex
+    default: return ''
+  }
+}
+
+/** Renders one patient through the shared `patientRowPatternText` — the same tokenize/resolve/
+ * collapse pipeline as every other entry pattern in this file, just scoped to a fixed patient. */
+const renderCensusPatientRow = (patient: Patient, config: CensusSummaryConfig): string =>
+  renderEntryPattern(config.patientRowPatternText, config.patientRowFieldIds, {}, (fieldId) => resolveCensusPatientRowField(fieldId, patient))
 
 /** Entry-level fields whose value is a date/time (so a Date/Time Format can be chosen for that
  * specific chip, via `BlockVariableConfig.entryFieldDateTimeFormats`). */
@@ -529,25 +620,54 @@ export const buildDefaultBlockVariableConfig = (variableId: BlockVariableId): Bl
   labsDateDisplayMode: 'perEntry',
 })
 
-/** Defaults to the "Category" Tag Group when one exists (matching this app's own default CD/PD
- * tags), else the first available group — the user can always change it. 12-hour lookback matches
- * the Patient Filter's own default window for the same Admitted/Referred/Discharged criteria. */
-export const buildDefaultCensusSummaryConfig = (groups: TagGroupDefinition[]): CensusSummaryConfig => {
+/** Defaults to the "Category" Tag Group's tags when that group exists (matching this app's own
+ * default CD/PD tags), else no tags selected — the user picks their own from there. 12-hour
+ * lookback matches the Patient Filter's own default window for the same Admitted/Referred/
+ * Discharged criteria. The default pattern puts each clause on its own line specifically so an
+ * empty `*List` field's blank-collapse can never reach past its own line and eat a neighboring
+ * clause's separator — see [[project_puhrr_collapseblanks_separator_gotcha]]. Composing everything
+ * onto one line (e.g. to match "CD: 2 new referrals (SANTOS, MARIMAR), ...") is entirely possible,
+ * just no longer collapse-safe by construction the way this default is — that tradeoff is
+ * inherent to `*Tally` being a bare number and `*List` being a fully independent chip. */
+export const buildDefaultCensusSummaryConfig = (tags: TagDefinition[], groups: TagGroupDefinition[]): CensusSummaryConfig => {
   const defaultGroup = groups.find((group) => group.name.trim().toLowerCase() === 'category') ?? groups[0]
-  const entryFieldIds: Record<string, string> = {}
-  const token = (fieldId: CensusSummaryEntryFieldId): string => {
+  const defaultTagIds = defaultGroup
+    ? tags.filter((tag) => tag.groupId === defaultGroup.id).map((tag) => tag.id).filter((id): id is number => id !== undefined)
+    : []
+
+  const fieldIds: Record<string, string> = {}
+  const token = (fieldId: CensusSummaryFieldId): string => {
     const id = createVariableId()
-    entryFieldIds[id] = fieldId
+    fieldIds[id] = fieldId
     return buildVariableToken(id)
   }
-  const entryPatternText = `${token('groupLabel')}: ${token('admittedPhrase')}, ${token('referredPhrase')}, ${token('dischargedPhrase')}`
+  const patternText = [
+    token('groupLabel'),
+    `Admitted: ${token('admittedTally')}${token('admittedList')}`,
+    `Referred: ${token('referredTally')}${token('referredList')}`,
+    `Discharged: ${token('dischargedTally')}${token('dischargedList')}`,
+  ].join('\n')
+
+  const patientRowFieldIds: Record<string, string> = {}
+  const patientRowId = createVariableId()
+  patientRowFieldIds[patientRowId] = 'lastName'
+  const patientRowPatternText = buildVariableToken(patientRowId)
+
   return {
-    tagGroupId: defaultGroup?.id ?? null,
+    tagIds: defaultTagIds,
+    groupCombineMode: 'OR',
     lookbackHours: 12,
-    entryPatternText,
-    entryFieldIds,
-    entrySeparator: 'blankLine',
-    customEntrySeparator: '',
+    patternText,
+    fieldIds,
+    groupSeparator: 'blankLine',
+    customGroupSeparator: '',
+    listOpenText: ' (',
+    listCloseText: ')',
+    showListBracketsWhenEmpty: false,
+    patientRowPatternText,
+    patientRowFieldIds,
+    nameSeparator: 'comma',
+    customNameSeparator: '',
   }
 }
 
@@ -853,59 +973,121 @@ const resolveMedicationsBlock = (config: BlockVariableConfig, patient: Patient, 
   return lines.join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
 }
 
-const pluralize = (count: number, singular: string, plural: string): string => (count === 1 ? singular : plural)
-
-/** "0 new admissions" / "1 new admission (MARIA)" / "2 new admissions (SANTOS, MARIMAR)" — count,
- * pluralized unit, and (only when non-zero) a parenthetical name list, all as one value. */
-const buildCensusPhrase = (count: number, singular: string, plural: string, patients: Patient[]): string => {
-  const summary = `${count} ${pluralize(count, singular, plural)}`
-  const names = patients.map((patient) => patient.lastName).filter(Boolean).join(', ')
-  return names ? `${summary} (${names})` : summary
-}
-
-const resolveCensusSummaryEntryField = (
-  fieldId: string,
-  group: { label: string; admitted: Patient[]; referred: Patient[]; discharged: Patient[] },
-): string => {
-  switch (fieldId as CensusSummaryEntryFieldId) {
-    case 'groupLabel': return group.label
-    case 'admittedPhrase': return buildCensusPhrase(group.admitted.length, 'new admission', 'new admissions', group.admitted)
-    case 'referredPhrase': return buildCensusPhrase(group.referred.length, 'new referral', 'new referrals', group.referred)
-    case 'dischargedPhrase': return buildCensusPhrase(group.discharged.length, 'discharged', 'discharged', group.discharged)
-    default: return ''
-  }
-}
-
-/** One line per tag in the configured Tag Group — each line covers every patient currently
- * carrying that tag, classified by whether they were newly admitted/referred/discharged within
- * the lookback window (reusing the exact same detection as the Patient Filter's Special/Timebound
- * facet, via `matchesPatientPool`). Not a per-patient value — scans `ctx.allPatients` directly. */
-const resolveCensusSummary = (config: CensusSummaryConfig, ctx: TemplateRenderContext): string => {
-  if (config.tagGroupId === null) return ''
-  const bucket = bucketTagsByGroup([...ctx.tagsById.values()], ctx.tagGroups).find((candidate) => candidate.groupId === config.tagGroupId)
-  if (!bucket) return ''
-
+const buildCensusLookbackWindow = (config: CensusSummaryConfig, ctx: TemplateRenderContext): DateTimeWindow => {
   const windowStart = new Date(ctx.nowDate.getTime() - Math.max(0, config.lookbackHours) * 3_600_000)
-  const window: DateTimeWindow = {
+  return {
     dateFrom: toLocalISODate(windowStart),
     timeFrom: toLocalTime(windowStart),
     dateTo: toLocalISODate(ctx.nowDate),
     timeTo: toLocalTime(ctx.nowDate),
   }
+}
 
-  const lines = bucket.tags.map((tag) => {
-    if (tag.id === undefined) return ''
-    const tagId = tag.id
-    const patientsWithTag = ctx.allPatients.filter((patient) => (patient.tagIds ?? []).includes(tagId))
-    const group = {
-      label: tag.name,
-      admitted: patientsWithTag.filter((patient) => matchesPatientPool(patient, ['admitted'], window, ctx.poolContext)),
-      referred: patientsWithTag.filter((patient) => matchesPatientPool(patient, ['referred'], window, ctx.poolContext)),
-      discharged: patientsWithTag.filter((patient) => matchesPatientPool(patient, ['discharged'], window, ctx.poolContext)),
-    }
-    return renderEntryPattern(config.entryPatternText, config.entryFieldIds, {}, (fieldId) => resolveCensusSummaryEntryField(fieldId, group))
+type CensusOutputGroup = { label: string; tags: TagDefinition[] }
+
+/** Buckets the selected tags into Census Summary's output groups. With no tags spanning more than
+ * one Tag Group (or only one selected tag), each tag is simply its own group. Otherwise
+ * `groupCombineMode` decides: 'OR' unions every selected tag into its own group regardless of
+ * origin; 'AND' cross-combines instead, producing one group per combination of one tag from each
+ * represented Tag Group (a Cartesian product) — see `CensusGroupCombineMode`. */
+const buildCensusOutputGroups = (config: CensusSummaryConfig, tagsById: Map<number, TagDefinition>): CensusOutputGroup[] => {
+  const selectedTags = config.tagIds.map((id) => tagsById.get(id)).filter((tag): tag is TagDefinition => tag !== undefined)
+  if (selectedTags.length === 0) return []
+
+  const tagsByOriginGroup = new Map<number | 'ungrouped', TagDefinition[]>()
+  selectedTags.forEach((tag) => {
+    const key = tag.groupId ?? 'ungrouped'
+    const existing = tagsByOriginGroup.get(key)
+    if (existing) existing.push(tag)
+    else tagsByOriginGroup.set(key, [tag])
   })
-  return lines.join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
+  const perOriginGroup = [...tagsByOriginGroup.values()]
+
+  if (perOriginGroup.length <= 1 || config.groupCombineMode === 'OR') {
+    return selectedTags.map((tag) => ({ label: tag.name, tags: [tag] }))
+  }
+
+  const combinations = perOriginGroup.reduce<TagDefinition[][]>(
+    (combosSoFar, tagsInOneOriginGroup) => combosSoFar.flatMap((combo) => tagsInOneOriginGroup.map((tag) => [...combo, tag])),
+    [[]],
+  )
+  return combinations.map((combo) => ({ label: combo.map((tag) => tag.name).join(', '), tags: combo }))
+}
+
+/** "" when the list is empty and `showListBracketsWhenEmpty` is off; otherwise
+ * `listOpenText` + the joined patient rows + `listCloseText` (so an empty-but-shown list renders
+ * as e.g. "()"). Each row comes from the shared `patientRowPatternText`. */
+const buildCensusListText = (patients: Patient[], config: CensusSummaryConfig): string => {
+  if (patients.length === 0 && !config.showListBracketsWhenEmpty) return ''
+  const separator = resolveCensusNameSeparator(config.nameSeparator, config.customNameSeparator)
+  const rows = patients.map((patient) => renderCensusPatientRow(patient, config)).join(separator)
+  return `${config.listOpenText}${rows}${config.listCloseText}`
+}
+
+const resolveCensusSummaryField = (
+  fieldId: string,
+  group: { label: string; admitted: Patient[]; referred: Patient[]; discharged: Patient[]; signedOut: Patient[]; expired: Patient[] },
+  config: CensusSummaryConfig,
+): string => {
+  switch (fieldId as CensusSummaryFieldId) {
+    case 'groupLabel': return group.label
+    case 'admittedTally': return String(group.admitted.length)
+    case 'admittedList': return buildCensusListText(group.admitted, config)
+    case 'referredTally': return String(group.referred.length)
+    case 'referredList': return buildCensusListText(group.referred, config)
+    case 'dischargedTally': return String(group.discharged.length)
+    case 'dischargedList': return buildCensusListText(group.discharged, config)
+    case 'signedOutTally': return String(group.signedOut.length)
+    case 'signedOutList': return buildCensusListText(group.signedOut, config)
+    case 'expiredTally': return String(group.expired.length)
+    case 'expiredList': return buildCensusListText(group.expired, config)
+    default: return ''
+  }
+}
+
+const patientHasAutomationRole = (patient: Patient, tagsById: Map<number, TagDefinition>, role: TagAutomationRole): boolean =>
+  (patient.tagIds ?? []).some((tagId) => tagsById.get(tagId)?.automationRole === role)
+
+const patientHasTagNamed = (patient: Patient, tagsById: Map<number, TagDefinition>, name: string): boolean =>
+  (patient.tagIds ?? []).some((tagId) => tagsById.get(tagId)?.name.trim().toLowerCase() === name.toLowerCase())
+
+/** One evaluation of `patternText` per output group (see `buildCensusOutputGroups`), each scoped
+ * to patients carrying every tag in that group who were newly admitted/referred/discharged within
+ * the lookback window (reusing the exact same detection as the Patient Filter's Special/Timebound
+ * facet, via `matchesPatientPool`). On top of that window check, each status also requires a
+ * specific tag: New Admissions requires the "Relationship: Main" tag (Referred already requires
+ * "Relationship: Referral" internally, via `matchesPatientPool` itself); Discharged/Signed
+ * Out/Expired share the same discharge-date-window check but are told apart by which literal
+ * terminal tag ("Discharged"/"Signed Out"/"Expired") the patient carries — narrower than
+ * `matchesPatientPool`'s own "any terminal tag" check, which is deliberately kept broad for its
+ * other callers (Patient Filter, Master Checklist). Every group always renders, even one where
+ * every count comes up 0 — a tally field is never blank (see `CensusSummaryFieldId`'s doc comment)
+ * so it reports 0 plainly; only the corresponding `*List` field (and, if it sits alone on its own
+ * line, that line — see `collapseBlanks`) disappears. Not a per-patient value — scans
+ * `ctx.allPatients` directly. */
+const resolveCensusSummary = (config: CensusSummaryConfig, ctx: TemplateRenderContext): string => {
+  const groups = buildCensusOutputGroups(config, ctx.tagsById)
+  if (groups.length === 0) return ''
+
+  const window = buildCensusLookbackWindow(config, ctx)
+  const lines = groups.map((group) => {
+    const patientsInGroup = ctx.allPatients.filter((patient) =>
+      group.tags.every((tag) => tag.id !== undefined && (patient.tagIds ?? []).includes(tag.id)),
+    )
+    const dischargedInWindow = patientsInGroup.filter((patient) => matchesPatientPool(patient, ['discharged'], window, ctx.poolContext))
+    const groupCtx = {
+      label: group.label,
+      admitted: patientsInGroup.filter((patient) =>
+        matchesPatientPool(patient, ['admitted'], window, ctx.poolContext) && patientHasAutomationRole(patient, ctx.tagsById, 'relationship-main'),
+      ),
+      referred: patientsInGroup.filter((patient) => matchesPatientPool(patient, ['referred'], window, ctx.poolContext)),
+      discharged: dischargedInWindow.filter((patient) => patientHasTagNamed(patient, ctx.tagsById, 'Discharged')),
+      signedOut: dischargedInWindow.filter((patient) => patientHasTagNamed(patient, ctx.tagsById, 'Signed Out')),
+      expired: dischargedInWindow.filter((patient) => patientHasTagNamed(patient, ctx.tagsById, 'Expired')),
+    }
+    return renderEntryPattern(config.patternText, config.fieldIds, {}, (fieldId) => resolveCensusSummaryField(fieldId, groupCtx, config))
+  })
+  return lines.join(resolveJoinString(config.groupSeparator, config.customGroupSeparator))
 }
 
 const resolveBlockVariable = (
@@ -1000,15 +1182,16 @@ export const classifyTemplateRepeatMode = (template: Pick<ReportTemplate, 'patte
 }
 
 /** Human-readable label for a variable chip/summary — used by the editor and the variable picker. */
-export const describeVariableInstance = (instance: TemplateVariableInstance, groups: TagGroupDefinition[] = []): string => {
+export const describeVariableInstance = (instance: TemplateVariableInstance): string => {
   if (instance.kind === 'flat') return FLAT_VARIABLE_LABELS[instance.variableId]
   if (instance.kind === 'block') {
     const detail = instance.variableId === 'medications' ? describeMedicationsConfig(instance.config) : describeBlockConfig(instance.config)
     return `${BLOCK_VARIABLE_LABELS[instance.variableId]} — ${detail}`
   }
   if (instance.kind === 'censusSummary') {
-    const groupName = groups.find((group) => group.id === instance.config.tagGroupId)?.name ?? '…'
-    return `Census Summary — ${groupName}, last ${instance.config.lookbackHours}h`
+    const tagCount = instance.config.tagIds.length
+    const tagLabel = tagCount === 0 ? 'no tags selected' : `${tagCount} tag${tagCount === 1 ? '' : 's'}`
+    return `Census Summary — ${tagLabel}, last ${instance.config.lookbackHours}h`
   }
   return describeTagsConfig(instance.config)
 }
