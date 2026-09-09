@@ -46,14 +46,13 @@ export const collectDistinctWards = (patients: Patient[]): string[] => {
   return [...wards].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
 }
 
-export type PatientPoolCriterion = 'active' | 'admitted' | 'discharged' | 'referred' | 'mgh'
+export type PatientPoolCriterion = 'active' | 'admitted' | 'discharged' | 'referred'
 
 export const PATIENT_POOL_CRITERIA: { id: PatientPoolCriterion; label: string }[] = [
   { id: 'active', label: 'Active' },
   { id: 'admitted', label: 'Admitted' },
   { id: 'discharged', label: 'Discharged' },
   { id: 'referred', label: 'Referred' },
-  { id: 'mgh', label: 'MGH' },
 ]
 
 export const DEFAULT_PATIENT_POOL_CRITERIA: PatientPoolCriterion[] = ['active']
@@ -94,34 +93,6 @@ export const resolveWindowDefaults = (raw: DateTimeWindow, defaults: DateTimeWin
   timeTo: raw.timeTo || defaults.timeTo,
 })
 
-/** True when `at` (a stored ISO UTC timestamp, e.g. a TagEvent's `at`) falls within `window`, compared in local date/time — matching how the window's own date/time fields are entered and how other date-scoped data (VitalEntry, OrderEntry) in this app is compared. */
-export const isTimestampWithinWindow = (at: string, window: DateTimeWindow): boolean => {
-  const eventDate = new Date(at)
-  if (Number.isNaN(eventDate.getTime())) return false
-  return isWithinDateTimeWindow(
-    toLocalISODate(eventDate),
-    toLocalTime(eventDate),
-    window.dateFrom,
-    window.dateTo,
-    window.timeFrom,
-    window.timeTo,
-  )
-}
-
-const wasTagEventAddedWithinWindow = (
-  patientId: number,
-  tagId: number,
-  tagEvents: TagEvent[],
-  window: DateTimeWindow,
-): boolean =>
-  tagEvents.some(
-    (event) =>
-      event.patientId === patientId
-      && event.tagId === tagId
-      && event.action === 'added'
-      && isTimestampWithinWindow(event.at, window),
-  )
-
 /** Most recent event for this (patient, tag), if any — used to check whether a tag's *current* application happened inside the window. */
 const latestTagEvent = (patientId: number, tagId: number, tagEvents: TagEvent[]): TagEvent | null =>
   tagEvents
@@ -133,18 +104,14 @@ export type PatientPoolContext = {
   tagEvents: TagEvent[]
   /** The tag whose Automation Role is "Relationship: Referral" — Referred reads this tag's history. Unset when no such tag exists (criterion then matches nobody). */
   referralTagId: number | null
-  /** The tag literally named "MGH" (case-insensitive) — MGH reads this tag's history, since there's no dedicated Automation Role for it. Unset when no such tag exists. */
-  mghTagId: number | null
 }
 
 export const buildPatientPoolContext = (tagsById: Map<number, TagDefinition>, tagEvents: TagEvent[]): PatientPoolContext => {
   let referralTagId: number | null = null
-  let mghTagId: number | null = null
   tagsById.forEach((tag) => {
     if (tag.automationRole === 'relationship-referral') referralTagId = tag.id ?? null
-    if (tag.name.trim().toLowerCase() === 'mgh') mghTagId = tag.id ?? null
   })
-  return { tagsById, tagEvents, referralTagId, mghTagId }
+  return { tagsById, tagEvents, referralTagId }
 }
 
 const matchesActive = (patient: Patient, context: PatientPoolContext): boolean =>
@@ -198,12 +165,6 @@ const matchesReferred = (patient: Patient, context: PatientPoolContext, window: 
   return isWithinDateTimeWindow(effectiveDate, effectiveTime, window.dateFrom, window.dateTo, window.timeFrom, window.timeTo)
 }
 
-const matchesMgh = (patient: Patient, context: PatientPoolContext, window: DateTimeWindow | null): boolean => {
-  if (patient.id === undefined || context.mghTagId === null) return false
-  if (!window) return (patient.tagIds ?? []).includes(context.mghTagId)
-  return wasTagEventAddedWithinWindow(patient.id, context.mghTagId, context.tagEvents, window)
-}
-
 /** Point 2 of issue #81: multiple checked Patient Pool criteria combine via OR — a patient matches if they satisfy ANY checked criterion. Active never consults the window even when one is set. */
 export const matchesPatientPool = (
   patient: Patient,
@@ -218,7 +179,6 @@ export const matchesPatientPool = (
       case 'admitted': return matchesAdmitted(patient, window)
       case 'discharged': return matchesDischarged(patient, context, window)
       case 'referred': return matchesReferred(patient, context, window)
-      case 'mgh': return matchesMgh(patient, context, window)
       default: return false
     }
   })

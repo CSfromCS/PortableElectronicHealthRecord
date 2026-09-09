@@ -53,6 +53,9 @@ export type TagAutomationRole =
   | 'category-pd'
   | 'relationship-main'
   | 'relationship-referral'
+  | 'status-discharged'
+  | 'status-signed-out'
+  | 'status-expired'
 
 export interface TagGroupDefinition {
   id?: number

@@ -14,7 +14,7 @@ import type { DateTimeWindow, PatientPoolCriterion, TagFilterMode, TagWardFilter
 export type PatientPoolFacetProps = {
   criteria: PatientPoolCriterion[]
   onChangeCriteria: (criteria: PatientPoolCriterion[]) => void
-  /** Whether the shared window below actually narrows Admitted/Discharged/Referred/MGH. False means those criteria match regardless of when (issue #81's "if no window is set" fallback). */
+  /** Whether the shared window below actually narrows Admitted/Discharged/Referred. False means those criteria match regardless of when (issue #81's "if no window is set" fallback). */
   useWindow: boolean
   onChangeUseWindow: (useWindow: boolean) => void
   /** Raw, independently-blankable fields — a blank field falls back to the matching field in `defaults` (last 12 hours, ending now), same as any other optional date/time field in this app. */
@@ -147,7 +147,7 @@ export const PatientFilterDialog = ({
                   <p className='text-[11px] font-bold uppercase tracking-widest text-action-primary'>Special/Timebound Filter</p>
                 </div>
                 <p className='text-xs text-clay'>
-                  Unique to this picker — not available on the Patients list or Master Checklist filters. Narrows the pool by clinical status (Active/Admitted/Discharged/Referred/MGH), optionally within a shared time window.
+                  Unique to this picker — not available on the Patients list or Master Checklist filters. Narrows the pool by clinical status (Active/Admitted/Discharged/Referred), optionally within a shared time window.
                 </p>
                 <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
                   {PATIENT_POOL_CRITERIA.map((criterion) => (
@@ -171,14 +171,14 @@ export const PatientFilterDialog = ({
                         className='h-4 w-4 accent-action-primary'
                         checked={pool.useWindow}
                         onChange={(event) => pool.onChangeUseWindow(event.target.checked)}
-                        aria-label='Apply time window to Admitted/Discharged/Referred/MGH'
+                        aria-label='Apply time window to Admitted/Discharged/Referred'
                       />
                       <span className='text-sm text-espresso'>Limit to a time window</span>
                     </label>
                     <p className='text-xs text-clay'>
                       {pool.useWindow
-                        ? 'Shared window for Admitted/Discharged/Referred/MGH. Leave a field blank to use its default (last 12 hours, ending now).'
-                        : 'Unchecked: Admitted/Discharged/Referred/MGH match regardless of when.'}
+                        ? 'Shared window for Admitted/Discharged/Referred. Leave a field blank to use its default (last 12 hours, ending now).'
+                        : 'Unchecked: Admitted/Discharged/Referred match regardless of when.'}
                     </p>
                     <div className={cn('grid grid-cols-2 gap-2', !pool.useWindow && 'opacity-40 pointer-events-none')}>
                       <div className='space-y-1'>

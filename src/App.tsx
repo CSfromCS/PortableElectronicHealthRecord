@@ -1447,7 +1447,7 @@ function App() {
   // Issue #81 Patient Pool facet: unlike the quick-add list above (always active-only), the
   // Multiple Census/Vitals picker draws from the FULL roster, narrowed by the Tag+Ward filter and
   // by the Patient Pool facet (which defaults to "Active" — matching the picker's old active-only
-  // behavior — but can also surface Admitted/Discharged/Referred/MGH patients within a window).
+  // behavior — but can also surface Admitted/Discharged/Referred patients within a window).
   const patientPoolContext = useMemo(
     () => buildPatientPoolContext(tagsById, allTagEvents ?? []),
     [tagsById, allTagEvents],

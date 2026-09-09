@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ChevronLeft, Pencil, Trash2, Plus } from 'lucide-react'
+import { ChevronLeft, Lock, Pencil, Trash2, Plus } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,7 +12,7 @@ import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
 import type { Patient, TagAutomationRole, TagDefinition, TagDisplayType, TagGroupDefinition } from '@/types'
-import { AUTOMATION_ROLE_LABELS, UNGROUPED_LABEL } from './tagConstants'
+import { AUTOMATION_ROLE_LABELS, UNGROUPED_LABEL, isTagProtectedFromDeletion } from './tagConstants'
 import { bucketTagsByGroup, patientHasTagAnywhere, sortTagGroups, sortTagsInGroup } from './tagUtils'
 import { TagChip } from './TagChip'
 
@@ -139,7 +139,7 @@ export const ManageTagsScreen = ({
   }
 
   const confirmDeleteTag = async () => {
-    if (deleteTagTarget?.id === undefined) return
+    if (deleteTagTarget?.id === undefined || isTagProtectedFromDeletion(deleteTagTarget)) return
     const tagId = deleteTagTarget.id
 
     await db.transaction('rw', [db.patients, db.tagDefinitions], async () => {
@@ -496,12 +496,26 @@ export const ManageTagsScreen = ({
                     </div>
                     {tag.terminal ? <span className='text-[10px] text-clay/70'>Terminal</span> : null}
                     {!tag.visibleOnPatientCard ? <span className='text-[10px] text-clay/70'>Hidden on card</span> : null}
+                    {isTagProtectedFromDeletion(tag) ? <span className='text-[10px] text-clay/70' title="Required by PUHRR's automated tag-based features — can't be deleted, but color/emoji/visibility/group are still yours to change.">Required by PUHRR</span> : null}
                     <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${tag.name}`} onClick={() => openEditTag(tag)}>
                       <Pencil className='h-3.5 w-3.5' />
                     </Button>
-                    <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Delete ${tag.name}`} onClick={() => setDeleteTagTarget(tag)}>
-                      <Trash2 className='h-3.5 w-3.5' />
-                    </Button>
+                    {isTagProtectedFromDeletion(tag) ? (
+                      <Button
+                        variant='ghost'
+                        size='sm'
+                        className='h-7 w-7 p-0 text-clay/40 cursor-not-allowed'
+                        aria-label={`${tag.name} can't be deleted — required by PUHRR`}
+                        title="Required by PUHRR's automated tag-based features — can't be deleted."
+                        disabled
+                      >
+                        <Lock className='h-3.5 w-3.5' />
+                      </Button>
+                    ) : (
+                      <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Delete ${tag.name}`} onClick={() => setDeleteTagTarget(tag)}>
+                        <Trash2 className='h-3.5 w-3.5' />
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>

@@ -21,6 +21,7 @@ import type {
   PhotoAttachment,
   ProblemBlock,
   ReportTemplate,
+  TagAutomationRole,
   TagDefinition,
   TagEvent,
   TagGroupDefinition,
@@ -864,6 +865,82 @@ db.version(20).stores({
     if (template.id === undefined || template.patientSeparator !== undefined) continue
     await reportTemplateTable.update(template.id, { ...DEFAULT_TEMPLATE_EXTRAS })
   }
+})
+
+db.version(21).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Census Summary's Discharged/Signed Out/Expired used to find their tag by literal name —
+  // fragile against a rename, and impossible to protect from deletion the same way Relationship:
+  // Main/Referral already are. Each now has its own dedicated Automation Role instead (see
+  // LOAD_BEARING_AUTOMATION_ROLES); this backfills that role onto whichever existing tag is still
+  // literally named for it and hasn't already been assigned some other role by hand, so upgrading
+  // changes no behavior — a brand-new install gets the same roles straight from DEFAULT_TAG_SEEDS
+  // instead, via the 'populate' hook above.
+  const tagDefinitionTable = tx.table<TagDefinition, number>('tagDefinitions')
+  const existingTags = await tagDefinitionTable.toArray()
+  const roleByLowercaseName: Record<string, TagAutomationRole> = {
+    discharged: 'status-discharged',
+    'signed out': 'status-signed-out',
+    expired: 'status-expired',
+  }
+
+  await Promise.all(
+    existingTags.map((tag) => {
+      if (tag.id === undefined || tag.automationRole !== 'none') return Promise.resolve()
+      const role = roleByLowercaseName[tag.name.trim().toLowerCase()]
+      return role ? tagDefinitionTable.update(tag.id, { automationRole: role }) : Promise.resolve()
+    }),
+  )
+})
+
+db.version(22).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // The Patient Pool "MGH" criterion is gone — selecting the MGH tag in the Tag facet already
+  // covers the same ground for everyday use, and it was the only consumer of the short-lived
+  // "Special: MGH" Automation Role (added, then removed, within the same v21/v22 pair). Resets
+  // any tag still carrying that now-nonexistent role back to 'none', which also lifts its
+  // deletion protection — nothing else about the tag (color/emoji/name/group) changes.
+  const tagDefinitionTable = tx.table<TagDefinition, number>('tagDefinitions')
+  const existingTags = await tagDefinitionTable.toArray()
+  await Promise.all(
+    existingTags.map((tag) =>
+      tag.id !== undefined && (tag.automationRole as string) === 'special-mgh'
+        ? tagDefinitionTable.update(tag.id, { automationRole: 'none' })
+        : Promise.resolve(),
+    ),
+  )
 })
 
 export { db }
