@@ -4,19 +4,28 @@ import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } fr
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
 import { seedDefaultCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
+import { DEFAULT_TEMPLATE_EXTRAS, buildDefaultDateTimeFormats, buildDefaultReportTemplates, buildLockedLabsTemplate } from './features/templates/templateDefaults'
+import { buildDefaultBlockVariableConfig } from './features/templates/templateEngine'
 import type {
+  BlockVariableConfig,
+  BlockVariableId,
   CustomAction,
   CustomActionRun,
   DailyUpdate,
+  DateTimeFormatDefinition,
+  FlatVariableId,
   LabEntry,
   MedicationEntry,
   OrderEntry,
   Patient,
   PhotoAttachment,
   ProblemBlock,
+  ReportTemplate,
   TagDefinition,
   TagEvent,
   TagGroupDefinition,
+  TagsVariableConfig,
+  TemplateVariableInstance,
   VitalEntry,
 } from './types'
 
@@ -35,6 +44,8 @@ const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
   tagEvents: EntityTable<TagEvent, 'id'>
   customActions: EntityTable<CustomAction, 'id'>
   customActionRuns: EntityTable<CustomActionRun, 'id'>
+  reportTemplates: EntityTable<ReportTemplate, 'id'>
+  dateTimeFormats: EntityTable<DateTimeFormatDefinition, 'id'>
 }
 
 db.version(1).stores({
@@ -162,6 +173,10 @@ db.on('populate', async () => {
     (tag) => db.tagDefinitions.add(tag) as Promise<number>,
   )
   await seedDefaultCustomActions(tagIdByName, (action) => db.customActions.add(action) as Promise<number>)
+  const now = new Date().toISOString()
+  await db.reportTemplates.bulkAdd(buildDefaultReportTemplates(now))
+  await db.reportTemplates.add(buildLockedLabsTemplate(now, 2))
+  await db.dateTimeFormats.bulkAdd(buildDefaultDateTimeFormats(now))
 })
 
 db.version(5).stores({
@@ -610,6 +625,244 @@ db.version(15).stores({
       dischargeDiagnosisUnassigned: '',
       dischargeDiagnosisByService: {},
     })
+  }
+})
+
+db.version(16).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Issue #82: user-defined, savable report templates, replacing the Reporting tab's fixed export
+  // formats. Pre-populate the same two example templates ("Full Census", "Short List") a fresh
+  // install gets, since an existing database never had any.
+  const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
+  await reportTemplateTable.bulkAdd(buildDefaultReportTemplates(new Date().toISOString()))
+})
+
+type LegacyTemplateSegment =
+  | { id: string; type: 'text'; text: string }
+  | { id: string; type: 'lineBreak' }
+  | { id: string; type: 'flatVariable'; variableId: string }
+  | { id: string; type: 'blockVariable'; variableId: string; config: unknown }
+  | { id: string; type: 'tagsVariable'; config: unknown }
+
+db.version(17).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Replaces the Format Pattern's array-of-segments shape with a single freeform text string
+  // carrying `{{var:<id>}}` placeholder tokens, so the editor can be a real type-anywhere text
+  // field (with inline variable "chips") instead of a list of discrete, reorderable rows. Each
+  // segment's own id is reused verbatim as its token id, so no data is renumbered — just
+  // reshaped: text/lineBreak segments become literal characters, variable segments become a
+  // token plus an entry in the new `variables` map.
+  const reportTemplateTable = tx.table<ReportTemplate & { segments?: LegacyTemplateSegment[] }, number>('reportTemplates')
+  const legacyRows = await reportTemplateTable.toArray()
+
+  for (const row of legacyRows) {
+    if (row.id === undefined || !Array.isArray(row.segments)) continue
+
+    const variables: Record<string, TemplateVariableInstance> = {}
+    const parts: string[] = []
+    for (const segment of row.segments) {
+      if (segment.type === 'text') {
+        parts.push(segment.text)
+      } else if (segment.type === 'lineBreak') {
+        parts.push('\n')
+      } else if (segment.type === 'flatVariable') {
+        variables[segment.id] = { kind: 'flat', variableId: segment.variableId as FlatVariableId }
+        parts.push(`{{var:${segment.id}}}`)
+      } else if (segment.type === 'blockVariable') {
+        variables[segment.id] = {
+          kind: 'block',
+          variableId: segment.variableId as BlockVariableId,
+          config: segment.config as BlockVariableConfig,
+        }
+        parts.push(`{{var:${segment.id}}}`)
+      } else if (segment.type === 'tagsVariable') {
+        variables[segment.id] = { kind: 'tags', config: segment.config as TagsVariableConfig }
+        parts.push(`{{var:${segment.id}}}`)
+      }
+    }
+
+    await reportTemplateTable.update(row.id, {
+      patternText: parts.join(''),
+      variables,
+    })
+  }
+})
+
+db.version(18).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Adds user-configurable per-entry formatting to Vitals/Orders/Problems/Checklist Block
+  // variables (entry pattern + separators, plus a date-group header toggle/separator for
+  // Problems/Checklist), and a savable Date/Time Format library selectable from any date/time
+  // variable. Existing Block variable configs only ever had the range-mode fields below, so merge
+  // in that record type's default entry pattern (which exactly reproduces the previous hardcoded
+  // formatting) while preserving whatever range mode the user already chose. Also introduces the
+  // built-in, locked "Labs" template — Labs' comparison-mode formatting is algorithmic rather than
+  // field-composable, so it's seeded once here rather than left for the user to reconstruct.
+  const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
+  const dateTimeFormatTable = tx.table<DateTimeFormatDefinition, number>('dateTimeFormats')
+  const now = new Date().toISOString()
+
+  const existingTemplates = await reportTemplateTable.toArray()
+  for (const template of existingTemplates) {
+    if (template.id === undefined) continue
+    let changed = false
+    const nextVariables: Record<string, TemplateVariableInstance> = { ...template.variables }
+    for (const [variableId, instance] of Object.entries(nextVariables)) {
+      if (instance.kind !== 'block') continue
+      const legacyConfig = instance.config as Partial<BlockVariableConfig>
+      if (legacyConfig.entryPatternText !== undefined) continue
+      nextVariables[variableId] = {
+        ...instance,
+        config: { ...buildDefaultBlockVariableConfig(instance.variableId), ...legacyConfig },
+      }
+      changed = true
+    }
+    if (changed) await reportTemplateTable.update(template.id, { variables: nextVariables })
+  }
+
+  const maxSortOrder = existingTemplates.length > 0 ? Math.max(...existingTemplates.map((template) => template.sortOrder)) : -1
+  await reportTemplateTable.add(buildLockedLabsTemplate(now, maxSortOrder + 1))
+  await dateTimeFormatTable.bulkAdd(buildDefaultDateTimeFormats(now))
+})
+
+db.version(19).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Three changes: (1) Medications becomes a Block variable (per-entry formatting like
+  // Vitals/Orders, plus a toggle for the freeform Medications-tab text) instead of a single Flat
+  // variable — an existing `{kind:'flat', variableId:'medications'}` upgrades in place to a Block
+  // instance under the SAME token id, so the surrounding patternText needs no rewriting. (2) The
+  // Block variable range mode 'latest' is removed — it was exactly equivalent to 'numberOfEntries'
+  // with entryCount 1, so existing configs using it convert to that. (3) Every Block config gets
+  // this version's new fields (entryFieldDateTimeFormats, resolvedGlyph/unresolvedGlyph, the
+  // Medications status/notes toggles, labsDateDisplayMode) via the same
+  // merge-onto-current-defaults approach the v18 migration used, preserving whatever the user
+  // already had for every pre-existing field.
+  const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
+  const existingTemplates = await reportTemplateTable.toArray()
+
+  for (const template of existingTemplates) {
+    if (template.id === undefined) continue
+    let changed = false
+    const nextVariables: Record<string, TemplateVariableInstance> = { ...template.variables }
+
+    for (const [tokenId, instance] of Object.entries(nextVariables)) {
+      if (instance.kind === 'flat' && (instance.variableId as string) === 'medications') {
+        nextVariables[tokenId] = { kind: 'block', variableId: 'medications', config: buildDefaultBlockVariableConfig('medications') }
+        changed = true
+        continue
+      }
+      if (instance.kind !== 'block') continue
+
+      const legacyConfig = instance.config as Partial<BlockVariableConfig>
+      const rawRangeMode = (instance.config as { rangeMode?: unknown }).rangeMode
+      const defaults = buildDefaultBlockVariableConfig(instance.variableId)
+      const isLegacyLatest = rawRangeMode === 'latest'
+      nextVariables[tokenId] = {
+        ...instance,
+        config: {
+          ...defaults,
+          ...legacyConfig,
+          rangeMode: isLegacyLatest ? 'numberOfEntries' : legacyConfig.rangeMode ?? defaults.rangeMode,
+          entryCount: isLegacyLatest ? 1 : legacyConfig.entryCount ?? defaults.entryCount,
+        },
+      }
+      changed = true
+    }
+
+    if (changed) await reportTemplateTable.update(template.id, { variables: nextVariables })
+  }
+})
+
+db.version(20).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Adds a configurable between-patients separator (previously always a hardcoded blank line) and
+  // an optional Header/Footer that prints exactly once around the whole generated output. Existing
+  // templates backfill to the same behavior they already had — blank line between patients, no
+  // header or footer — so nothing about their output changes until the user edits them.
+  const reportTemplateTable = tx.table<ReportTemplate & Partial<{ patientSeparator: unknown }>, number>('reportTemplates')
+  const existingTemplates = await reportTemplateTable.toArray()
+
+  for (const template of existingTemplates) {
+    if (template.id === undefined || template.patientSeparator !== undefined) continue
+    await reportTemplateTable.update(template.id, { ...DEFAULT_TEMPLATE_EXTRAS })
   }
 })
 
