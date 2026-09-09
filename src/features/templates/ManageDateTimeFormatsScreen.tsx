@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { DragHandle } from '@/lib/dnd/DragHandle'
-import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { cn } from '@/lib/utils'
 import type { DateTimeComponentId, DateTimeFormatDefinition } from '@/types'
 import { ChipTextEditor, type ChipCatalogEntry } from './ChipTextEditor'
@@ -126,15 +126,15 @@ export const ManageDateTimeFormatsScreen = ({
     setDeleteTarget(null)
   }
 
-  const reorderFormats = async (sourceId: number, targetId: number) => {
-    const reordered = moveItemByKey(ordered, (format) => format.id, sourceId, targetId)
+  const reorderFormats = async (sourceId: number, targetId: number, position: DropPosition) => {
+    const reordered = moveItemByKey(ordered, (format) => format.id, sourceId, targetId, position)
     await Promise.all(
       reordered.map((format, index) =>
         format.id === undefined || format.sortOrder === index ? Promise.resolve() : db.dateTimeFormats.update(format.id, { sortOrder: index }),
       ),
     )
   }
-  const formatDrag = useDragReorder(ordered.map((format) => format.id as number), (source, target) => void reorderFormats(source, target))
+  const formatDrag = useDragReorder(ordered.map((format) => format.id as number), (source, target, position) => void reorderFormats(source, target, position))
 
   return (
     <Card className='bg-white/80 border-clay/25 shadow-sm'>
@@ -175,7 +175,7 @@ export const ManageDateTimeFormatsScreen = ({
                     className={cn(
                       'flex items-center gap-2 rounded-lg border border-clay/25 bg-white/70 px-3 py-2 transition-shadow',
                       formatDrag.isDragging(format.id as number) && 'opacity-50',
-                      formatDrag.isDropTarget(format.id as number) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                      dropIndicatorClassName(formatDrag.dropIndicator(format.id as number)),
                     )}
                     {...formatDrag.getItemProps(format.id as number)}
                   >

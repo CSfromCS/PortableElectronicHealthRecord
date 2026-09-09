@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
-import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import {
   DEFAULT_PATIENT_TAB_SETTINGS,
   PATIENT_TAB_DESCRIPTIONS,
@@ -26,8 +26,8 @@ export const TabSettingsScreen = ({
     onChange(settings.map((tab) => (tab.id === id ? { ...tab, visible: !tab.visible } : tab)))
   }
 
-  const reorderTabs = (sourceId: PatientTabId, targetId: PatientTabId) => {
-    onChange(moveItemByKey(settings, (tab) => tab.id, sourceId, targetId))
+  const reorderTabs = (sourceId: PatientTabId, targetId: PatientTabId, position: DropPosition) => {
+    onChange(moveItemByKey(settings, (tab) => tab.id, sourceId, targetId, position))
   }
 
   const drag = useDragReorder(settings.map((tab) => tab.id), reorderTabs)
@@ -56,7 +56,7 @@ export const TabSettingsScreen = ({
               className={cn(
                 'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-2 transition-shadow',
                 drag.isDragging(tab.id) && 'opacity-50',
-                drag.isDropTarget(tab.id) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                dropIndicatorClassName(drag.dropIndicator(tab.id)),
                 !tab.visible && 'opacity-60',
               )}
               {...drag.getItemProps(tab.id)}

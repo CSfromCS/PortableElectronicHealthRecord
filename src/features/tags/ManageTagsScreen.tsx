@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
-import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import type { Patient, TagAutomationRole, TagDefinition, TagDisplayType, TagGroupDefinition } from '@/types'
 import { AUTOMATION_ROLE_LABELS, UNGROUPED_LABEL, isTagProtectedFromDeletion } from './tagConstants'
 import { bucketTagsByGroup, patientHasTagAnywhere, sortTagGroups, sortTagsInGroup } from './tagUtils'
@@ -198,8 +198,8 @@ export const ManageTagsScreen = ({
     setDeleteGroupTarget(null)
   }
 
-  const reorderGroups = async (sourceGroupId: number, targetGroupId: number) => {
-    const reordered = moveItemByKey(orderedGroups, (group) => group.id, sourceGroupId, targetGroupId)
+  const reorderGroups = async (sourceGroupId: number, targetGroupId: number, position: DropPosition) => {
+    const reordered = moveItemByKey(orderedGroups, (group) => group.id, sourceGroupId, targetGroupId, position)
     await db.transaction('rw', [db.tagGroups], async () => {
       await Promise.all(
         reordered.map((group, index) =>
@@ -208,16 +208,16 @@ export const ManageTagsScreen = ({
       )
     })
   }
-  const groupDrag = useDragReorder(orderedGroups.map((group) => group.id as number), (source, target) => void reorderGroups(source, target))
+  const groupDrag = useDragReorder(orderedGroups.map((group) => group.id as number), (source, target, position) => void reorderGroups(source, target, position))
 
-  const reorderTags = async (sourceTagId: number, targetTagId: number) => {
+  const reorderTags = async (sourceTagId: number, targetTagId: number, position: DropPosition) => {
     const sourceTag = tags.find((tag) => tag.id === sourceTagId)
     const targetTag = tags.find((tag) => tag.id === targetTagId)
     if (!sourceTag || !targetTag || (sourceTag.groupId ?? null) !== (targetTag.groupId ?? null)) return
 
     const bucket = bucketsById.get(sourceTag.groupId ?? null)
     const siblings = bucket ? sortTagsInGroup(bucket.tags) : []
-    const reordered = moveItemByKey(siblings, (tag) => tag.id, sourceTagId, targetTagId)
+    const reordered = moveItemByKey(siblings, (tag) => tag.id, sourceTagId, targetTagId, position)
     await db.transaction('rw', [db.tagDefinitions], async () => {
       await Promise.all(
         reordered.map((tag, index) =>
@@ -226,7 +226,7 @@ export const ManageTagsScreen = ({
       )
     })
   }
-  const tagDrag = useDragReorder(tags.map((tag) => tag.id as number), (source, target) => void reorderTags(source, target))
+  const tagDrag = useDragReorder(tags.map((tag) => tag.id as number), (source, target, position) => void reorderTags(source, target, position))
 
   // Multi-select is independent of which Tag Group a tag currently sits in, so bulk actions
   // (recolor, card visibility, terminal flag, move-to-group) can span tags from any category.
@@ -344,7 +344,7 @@ export const ManageTagsScreen = ({
                 className={cn(
                   'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5 transition-shadow',
                   groupDrag.isDragging(group.id as number) && 'opacity-50',
-                  groupDrag.isDropTarget(group.id as number) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                  dropIndicatorClassName(groupDrag.dropIndicator(group.id as number)),
                 )}
                 {...groupDrag.getItemProps(group.id as number)}
               >
@@ -386,7 +386,21 @@ export const ManageTagsScreen = ({
                 <p className='text-xs font-semibold text-espresso'>
                   {selectedTagIds.size} tag{selectedTagIds.size === 1 ? '' : 's'} selected
                 </p>
-                <Button variant='ghost' size='sm' className='h-6 text-xs px-2' onClick={clearSelection}>Clear</Button>
+                <div className='flex items-center gap-1'>
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    className='h-6 text-xs px-2'
+                    onClick={() => {
+                      const ids = tags.map((tag) => tag.id).filter((id): id is number => id !== undefined)
+                      const allSelected = ids.length > 0 && ids.every((id) => selectedTagIds.has(id))
+                      setSelectedTagIds(allSelected ? new Set() : new Set(ids))
+                    }}
+                  >
+                    {tags.length > 0 && tags.every((tag) => tag.id !== undefined && selectedTagIds.has(tag.id)) ? 'Deselect All' : 'Select All'}
+                  </Button>
+                  <Button variant='ghost' size='sm' className='h-6 text-xs px-2' onClick={clearSelection}>Clear</Button>
+                </div>
               </div>
 
               <div className='flex flex-wrap items-center gap-1.5'>
@@ -472,7 +486,7 @@ export const ManageTagsScreen = ({
                     className={cn(
                       'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5 transition-shadow',
                       tagDrag.isDragging(tag.id as number) && 'opacity-50',
-                      tagDrag.isDropTarget(tag.id as number) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                      dropIndicatorClassName(tagDrag.dropIndicator(tag.id as number)),
                     )}
                     {...tagDrag.getItemProps(tag.id as number)}
                   >

@@ -6,6 +6,8 @@ import { Label } from '@/components/ui/label'
 import { MentionText, PhotoMentionField, type MentionablePhoto } from '@/features/photos/photoMentions'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
+import { moveItemByKey } from '@/lib/dnd/reorderList'
+import { dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { cn } from '@/lib/utils'
 import type { ProblemBlock } from '@/types'
 import { createProblemBlockId } from './problemUtils'
@@ -18,14 +20,6 @@ type ProblemListEditorProps = {
   onOpenPhotoById: (attachmentId: number) => void
 }
 
-const reorderProblems = (problems: ProblemBlock[], sourceIndex: number, targetIndex: number) => {
-  if (sourceIndex === targetIndex || !problems[sourceIndex] || !problems[targetIndex]) return problems
-  const nextProblems = [...problems]
-  const [movedProblem] = nextProblems.splice(sourceIndex, 1)
-  nextProblems.splice(targetIndex, 0, movedProblem)
-  return nextProblems
-}
-
 export function ProblemListEditor({
   problems,
   onChange,
@@ -34,7 +28,7 @@ export function ProblemListEditor({
   onOpenPhotoById,
 }: ProblemListEditorProps) {
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
-  const [touchTargetIndex, setTouchTargetIndex] = useState<number | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ index: number; position: DropPosition } | null>(null)
   const [pendingRemovalId, setPendingRemovalId] = useState<string | null>(null)
 
   const updateProblem = (id: string, field: 'title' | 'notes', value: string) => {
@@ -62,19 +56,22 @@ export function ProblemListEditor({
     setPendingRemovalId(problem.id)
   }
 
-  const moveProblem = (sourceIndex: number, targetIndex: number) => {
-    onChange(reorderProblems(problems, sourceIndex, targetIndex))
+  const moveProblem = (sourceIndex: number, targetIndex: number, position: DropPosition) => {
+    const sourceProblem = problems[sourceIndex]
+    const targetProblem = problems[targetIndex]
+    if (!sourceProblem || !targetProblem) return
+    onChange(moveItemByKey(problems, (problem) => problem.id, sourceProblem.id, targetProblem.id, position))
   }
 
   const resetDragState = () => {
     setDraggingIndex(null)
-    setTouchTargetIndex(null)
+    setDropTarget(null)
   }
 
   const startTouchDrag = (event: TouchEvent<HTMLButtonElement>, index: number) => {
     event.preventDefault()
     setDraggingIndex(index)
-    setTouchTargetIndex(index)
+    setDropTarget({ index, position: 'after' })
   }
 
   const updateTouchTarget = (event: TouchEvent<HTMLButtonElement>) => {
@@ -86,12 +83,14 @@ export function ProblemListEditor({
     const targetIndex = Number.parseInt(target.dataset.problemIndex ?? '', 10)
     if (!Number.isInteger(targetIndex)) return
     event.preventDefault()
-    setTouchTargetIndex(targetIndex)
+    const rect = target.getBoundingClientRect()
+    const position: DropPosition = touchPoint.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setDropTarget({ index: targetIndex, position })
   }
 
   const finishTouchDrag = () => {
-    if (draggingIndex !== null && touchTargetIndex !== null) {
-      moveProblem(draggingIndex, touchTargetIndex)
+    if (draggingIndex !== null && dropTarget !== null) {
+      moveProblem(draggingIndex, dropTarget.index, dropTarget.position)
     }
     resetDragState()
   }
@@ -124,16 +123,23 @@ export function ProblemListEditor({
             className={cn(
               'border-b border-clay/25 pb-3 last:border-b-0',
               draggingIndex === index && 'opacity-60',
-              touchTargetIndex === index && draggingIndex !== null && 'ring-2 ring-action-primary/40 ring-offset-2',
+              dropIndicatorClassName(dropTarget?.index === index && draggingIndex !== null ? dropTarget.position : null),
             )}
             onDragOver={(event) => {
               if (draggingIndex === null || draggingIndex === index) return
               event.preventDefault()
               event.dataTransfer.dropEffect = 'move'
+              const rect = event.currentTarget.getBoundingClientRect()
+              const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+              setDropTarget((previous) => (previous?.index === index && previous.position === position ? previous : { index, position }))
             }}
             onDrop={(event) => {
               event.preventDefault()
-              if (draggingIndex !== null) moveProblem(draggingIndex, index)
+              if (draggingIndex !== null) {
+                const rect = event.currentTarget.getBoundingClientRect()
+                const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+                moveProblem(draggingIndex, index, position)
+              }
               resetDragState()
             }}
           >
@@ -157,7 +163,7 @@ export function ProblemListEditor({
                   if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
                   event.preventDefault()
                   const targetIndex = event.key === 'ArrowUp' ? index - 1 : index + 1
-                  if (targetIndex >= 0 && targetIndex < problems.length) moveProblem(index, targetIndex)
+                  if (targetIndex >= 0 && targetIndex < problems.length) moveProblem(index, targetIndex, event.key === 'ArrowUp' ? 'before' : 'after')
                 }}
               >
                 <GripVertical className='h-4 w-4' aria-hidden='true' />

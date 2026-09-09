@@ -49,17 +49,20 @@ export const ServiceTagMultiSelect = ({
   const hasExactMatch = trimmedQuery.length > 0 && findServiceTagByName(trimmedQuery, availableTags) !== undefined
   const canCreate = trimmedQuery.length > 0 && !hasExactMatch
 
+  // Main is typically a single pick, so the suggestion list tucking away afterward keeps the
+  // profile tidy. Referral is typically picked several times in a row, so it stays open —
+  // collapsing it after every single pick would force a re-click before each next one.
   const selectSuggestion = (tag: TagDefinition) => {
     onAdd(tag)
     setQuery('')
-    setIsOpen(false)
+    if (role !== 'referral') setIsOpen(false)
   }
 
   const createFromQuery = () => {
     if (!canCreate) return
     onCreate(trimmedQuery)
     setQuery('')
-    setIsOpen(false)
+    if (role !== 'referral') setIsOpen(false)
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {

@@ -52,7 +52,7 @@ import { DragHandle } from '@/lib/dnd/DragHandle'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
-import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { useEntrySelection } from '@/lib/useEntrySelection'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
@@ -426,11 +426,16 @@ const initialDailyUpdateForm: DailyUpdateFormState = {
 // Once a field has a value, its label recedes so the value itself carries the visual weight.
 const fieldLabelClassName = (hasValue: boolean) => (hasValue ? 'text-xs font-normal text-clay/70 transition-colors' : undefined)
 
-const reorderChecklistItems = (items: DailyChecklistItem[], sourceIndex: number, targetIndex: number) => {
-  if (sourceIndex === targetIndex || !items[sourceIndex] || !items[targetIndex]) return items
+const reorderChecklistItems = (items: DailyChecklistItem[], sourceIndex: number, targetIndex: number, position: DropPosition) => {
+  const sourceItem = items[sourceIndex]
+  const targetItem = items[targetIndex]
+  if (!sourceItem || !targetItem || sourceItem === targetItem) return items
   const nextItems = [...items]
   const [movedItem] = nextItems.splice(sourceIndex, 1)
-  nextItems.splice(targetIndex, 0, movedItem)
+  const targetIndexAfterRemoval = nextItems.indexOf(targetItem)
+  if (targetIndexAfterRemoval === -1) return items
+  const insertIndex = position === 'before' ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
+  nextItems.splice(insertIndex, 0, movedItem)
   return nextItems
 }
 
@@ -716,9 +721,9 @@ function App() {
   const [dailyUpdateForm, setDailyUpdateForm] = useState<DailyUpdateFormState>(initialDailyUpdateForm)
   const [dailyUpdateId, setDailyUpdateId] = useState<number | undefined>(undefined)
   const [draggingDailyChecklistItemIndex, setDraggingDailyChecklistItemIndex] = useState<number | null>(null)
-  const [touchDailyChecklistTargetIndex, setTouchDailyChecklistTargetIndex] = useState<number | null>(null)
+  const [dailyChecklistDropTarget, setDailyChecklistDropTarget] = useState<{ index: number; position: DropPosition } | null>(null)
   const [draggingMasterChecklistItem, setDraggingMasterChecklistItem] = useState<{ patientId: number; index: number } | null>(null)
-  const [touchMasterChecklistTarget, setTouchMasterChecklistTarget] = useState<{ patientId: number; index: number } | null>(null)
+  const [masterChecklistDropTarget, setMasterChecklistDropTarget] = useState<{ patientId: number; index: number; position: DropPosition } | null>(null)
   // Continuous-checklist editing (issue #78): which row currently has focus somewhere inside it
   // (reveals its notes line even while empty), and a one-shot request to move the cursor into a
   // specific row/offset right after a split or merge reshapes the list.
@@ -739,7 +744,7 @@ function App() {
   const [medicationForm, setMedicationForm] = useState<MedicationFormState>(() => initialMedicationForm())
   const [editingMedicationId, setEditingMedicationId] = useState<number | null>(null)
   const [draggingMedicationIndex, setDraggingMedicationIndex] = useState<number | null>(null)
-  const [touchMedicationTargetIndex, setTouchMedicationTargetIndex] = useState<number | null>(null)
+  const [medicationDropTarget, setMedicationDropTarget] = useState<{ index: number; position: DropPosition } | null>(null)
   const [orderForm, setOrderForm] = useState<OrderFormState>(() => initialOrderForm())
   const [editingOrderId, setEditingOrderId] = useState<number | null>(null)
   const [orderDraftId, setOrderDraftId] = useState<number | null>(null)
@@ -1586,8 +1591,8 @@ function App() {
     setSelectedCensusPatientIds([])
   }
 
-  const reorderCensusPatientSelection = (sourcePatientId: number, targetPatientId: number) => {
-    setSelectedCensusPatientIds((previous) => moveItemByKey(previous, (id) => id, sourcePatientId, targetPatientId))
+  const reorderCensusPatientSelection = (sourcePatientId: number, targetPatientId: number, position: DropPosition) => {
+    setSelectedCensusPatientIds((previous) => moveItemByKey(previous, (id) => id, sourcePatientId, targetPatientId, position))
   }
   const censusPatientDrag = useDragReorder(selectedCensusPatientIds, reorderCensusPatientSelection)
 
@@ -2904,11 +2909,11 @@ function App() {
     setDailyDirty(true)
   }, [])
 
-  const reorderDailyChecklistItem = useCallback((sourceIndex: number, targetIndex: number) => {
+  const reorderDailyChecklistItem = useCallback((sourceIndex: number, targetIndex: number, position: DropPosition) => {
     setDailyUpdateForm((previous) => {
       return {
         ...previous,
-        checklist: reorderChecklistItems(previous.checklist, sourceIndex, targetIndex),
+        checklist: reorderChecklistItems(previous.checklist, sourceIndex, targetIndex, position),
       }
     })
     setDailyDirty(true)
@@ -2921,7 +2926,7 @@ function App() {
 
   const resetDailyChecklistDragState = useCallback(() => {
     setDraggingDailyChecklistItemIndex(null)
-    setTouchDailyChecklistTargetIndex(null)
+    setDailyChecklistDropTarget(null)
   }, [])
 
   const endDailyChecklistDrag = useCallback(() => {
@@ -2931,7 +2936,7 @@ function App() {
   const startDailyChecklistTouchDrag = useCallback((event: TouchEvent<HTMLButtonElement>, index: number) => {
     event.preventDefault()
     setDraggingDailyChecklistItemIndex(index)
-    setTouchDailyChecklistTargetIndex(index)
+    setDailyChecklistDropTarget({ index, position: 'after' })
   }, [])
 
   const updateDailyChecklistTouchTarget = useCallback((event: TouchEvent<HTMLButtonElement>) => {
@@ -2943,38 +2948,36 @@ function App() {
     const targetElement = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
     const checklistItemContainer = targetElement?.closest('[data-daily-checklist-index]')
     if (!(checklistItemContainer instanceof HTMLElement)) {
-      setTouchDailyChecklistTargetIndex(null)
+      setDailyChecklistDropTarget(null)
       return
     }
 
     const parsedTargetIndex = Number.parseInt(checklistItemContainer.dataset.dailyChecklistIndex ?? '', 10)
     if (!Number.isInteger(parsedTargetIndex)) {
-      setTouchDailyChecklistTargetIndex(null)
+      setDailyChecklistDropTarget(null)
       return
     }
 
     const sourceItem = dailyUpdateForm.checklist[draggingDailyChecklistItemIndex]
     const targetItem = dailyUpdateForm.checklist[parsedTargetIndex]
     if (!sourceItem || !targetItem) {
-      setTouchDailyChecklistTargetIndex(null)
+      setDailyChecklistDropTarget(null)
       return
     }
 
     event.preventDefault()
-    setTouchDailyChecklistTargetIndex(parsedTargetIndex)
+    const rect = checklistItemContainer.getBoundingClientRect()
+    const position: DropPosition = touchPoint.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setDailyChecklistDropTarget({ index: parsedTargetIndex, position })
   }, [dailyUpdateForm.checklist, draggingDailyChecklistItemIndex])
 
   const endDailyChecklistTouchDrag = useCallback(() => {
-    if (
-      draggingDailyChecklistItemIndex !== null
-      && touchDailyChecklistTargetIndex !== null
-      && draggingDailyChecklistItemIndex !== touchDailyChecklistTargetIndex
-    ) {
-      reorderDailyChecklistItem(draggingDailyChecklistItemIndex, touchDailyChecklistTargetIndex)
+    if (draggingDailyChecklistItemIndex !== null && dailyChecklistDropTarget !== null && draggingDailyChecklistItemIndex !== dailyChecklistDropTarget.index) {
+      reorderDailyChecklistItem(draggingDailyChecklistItemIndex, dailyChecklistDropTarget.index, dailyChecklistDropTarget.position)
     }
 
     resetDailyChecklistDragState()
-  }, [draggingDailyChecklistItemIndex, reorderDailyChecklistItem, resetDailyChecklistDragState, touchDailyChecklistTargetIndex])
+  }, [dailyChecklistDropTarget, draggingDailyChecklistItemIndex, reorderDailyChecklistItem, resetDailyChecklistDragState])
 
   const cancelDailyChecklistTouchDrag = useCallback(() => {
     resetDailyChecklistDragState()
@@ -2989,6 +2992,9 @@ function App() {
 
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setDailyChecklistDropTarget((previous) => (previous?.index === targetIndex && previous.position === position ? previous : { index: targetIndex, position }))
   }, [dailyUpdateForm.checklist, draggingDailyChecklistItemIndex])
 
   const dropDailyChecklistItem = useCallback((event: DragEvent<HTMLDivElement>, targetIndex: number) => {
@@ -2998,14 +3004,16 @@ function App() {
       return
     }
 
-    reorderDailyChecklistItem(draggingDailyChecklistItemIndex, targetIndex)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    reorderDailyChecklistItem(draggingDailyChecklistItemIndex, targetIndex, position)
     resetDailyChecklistDragState()
   }, [draggingDailyChecklistItemIndex, reorderDailyChecklistItem, resetDailyChecklistDragState])
 
   const moveDailyChecklistItemByDirection = useCallback((index: number, direction: 'up' | 'down') => {
     const targetIndex = direction === 'up' ? index - 1 : index + 1
     if (targetIndex < 0 || targetIndex >= dailyUpdateForm.checklist.length) return
-    reorderDailyChecklistItem(index, targetIndex)
+    reorderDailyChecklistItem(index, targetIndex, direction === 'up' ? 'before' : 'after')
   }, [dailyUpdateForm.checklist, reorderDailyChecklistItem])
 
   // The blank draft line at the end of the list (see withTrailingBlankChecklistItem) commits
@@ -3026,7 +3034,12 @@ function App() {
     <div
       key={`checklist-${index}`}
       data-daily-checklist-index={index}
-      className={`flex flex-col gap-0.5 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingDailyChecklistItemIndex === index ? 'opacity-60' : ''} ${touchDailyChecklistTargetIndex === index && draggingDailyChecklistItemIndex !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
+      className={cn(
+        'flex flex-col gap-0.5 rounded-md px-2 py-1.5',
+        item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory',
+        draggingDailyChecklistItemIndex === index && 'opacity-60',
+        dropIndicatorClassName(dailyChecklistDropTarget?.index === index && draggingDailyChecklistItemIndex !== null ? dailyChecklistDropTarget.position : null),
+      )}
       onDragOver={(event) => allowDailyChecklistDrop(event, index)}
       onDrop={(event) => dropDailyChecklistItem(event, index)}
       // Deferred to a macrotask: firing this synchronously (as focus/blur normally do) can land
@@ -3156,7 +3169,7 @@ function App() {
         ) : null}
       </div>
     </div>
-  ), [activeDailyChecklistIndex, allowDailyChecklistDrop, appendDailyChecklistItemAtEnd, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, insertBlankDailyChecklistItemAfter, mergeDailyChecklistItemWithPrevious, moveDailyChecklistItemByDirection, pendingDailyChecklistFocus, removeDailyChecklistItem, requestDeleteConfirmation, splitDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemNotes, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
+  ), [activeDailyChecklistIndex, allowDailyChecklistDrop, appendDailyChecklistItemAtEnd, cancelDailyChecklistTouchDrag, dailyChecklistDropTarget, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, insertBlankDailyChecklistItemAfter, mergeDailyChecklistItemWithPrevious, moveDailyChecklistItemByDirection, pendingDailyChecklistFocus, removeDailyChecklistItem, requestDeleteConfirmation, splitDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, updateDailyChecklistItemCompletion, updateDailyChecklistItemNotes, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
 
   const addMasterChecklistItem = useCallback((patientId: number, text: string) => {
     const nextText = text.trim()
@@ -3364,17 +3377,17 @@ function App() {
     void updateMasterChecklist(patientId, (previous) => {
       const targetIndex = direction === 'up' ? index - 1 : index + 1
       if (targetIndex < 0 || targetIndex >= previous.length) return previous
-      return reorderChecklistItems(previous, index, targetIndex)
+      return reorderChecklistItems(previous, index, targetIndex, direction === 'up' ? 'before' : 'after')
     })
   }, [updateMasterChecklist])
 
-  const reorderMasterChecklistItem = useCallback((patientId: number, sourceIndex: number, targetIndex: number) => {
-    void updateMasterChecklist(patientId, (previous) => reorderChecklistItems(previous, sourceIndex, targetIndex))
+  const reorderMasterChecklistItem = useCallback((patientId: number, sourceIndex: number, targetIndex: number, position: DropPosition) => {
+    void updateMasterChecklist(patientId, (previous) => reorderChecklistItems(previous, sourceIndex, targetIndex, position))
   }, [updateMasterChecklist])
 
   const resetMasterChecklistDragState = useCallback(() => {
     setDraggingMasterChecklistItem(null)
-    setTouchMasterChecklistTarget(null)
+    setMasterChecklistDropTarget(null)
   }, [])
 
   const startMasterChecklistDrag = useCallback((event: DragEvent<HTMLButtonElement>, patientId: number, index: number) => {
@@ -3389,7 +3402,7 @@ function App() {
   const startMasterChecklistTouchDrag = useCallback((event: TouchEvent<HTMLButtonElement>, patientId: number, index: number) => {
     event.preventDefault()
     setDraggingMasterChecklistItem({ patientId, index })
-    setTouchMasterChecklistTarget({ patientId, index })
+    setMasterChecklistDropTarget({ patientId, index, position: 'after' })
   }, [])
 
   const updateMasterChecklistTouchTarget = useCallback((event: TouchEvent<HTMLButtonElement>) => {
@@ -3401,14 +3414,14 @@ function App() {
     const targetElement = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
     const checklistItemContainer = targetElement?.closest('[data-master-checklist-patient-id][data-master-checklist-index]')
     if (!(checklistItemContainer instanceof HTMLElement)) {
-      setTouchMasterChecklistTarget(null)
+      setMasterChecklistDropTarget(null)
       return
     }
 
     const parsedPatientId = Number.parseInt(checklistItemContainer.dataset.masterChecklistPatientId ?? '', 10)
     const parsedTargetIndex = Number.parseInt(checklistItemContainer.dataset.masterChecklistIndex ?? '', 10)
     if (!Number.isInteger(parsedPatientId) || !Number.isInteger(parsedTargetIndex)) {
-      setTouchMasterChecklistTarget(null)
+      setMasterChecklistDropTarget(null)
       return
     }
 
@@ -3417,32 +3430,35 @@ function App() {
     ))
     const targetItem = masterChecklistItems.find((item) => item.patientId === parsedPatientId && item.index === parsedTargetIndex)
     if (!sourceItem || !targetItem || sourceItem.patientId !== targetItem.patientId) {
-      setTouchMasterChecklistTarget(null)
+      setMasterChecklistDropTarget(null)
       return
     }
 
     event.preventDefault()
-    setTouchMasterChecklistTarget({ patientId: parsedPatientId, index: parsedTargetIndex })
+    const rect = checklistItemContainer.getBoundingClientRect()
+    const position: DropPosition = touchPoint.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setMasterChecklistDropTarget({ patientId: parsedPatientId, index: parsedTargetIndex, position })
   }, [draggingMasterChecklistItem, masterChecklistItems])
 
   const endMasterChecklistTouchDrag = useCallback(() => {
     if (
       draggingMasterChecklistItem
-      && touchMasterChecklistTarget
+      && masterChecklistDropTarget
       && (
-        draggingMasterChecklistItem.patientId !== touchMasterChecklistTarget.patientId
-        || draggingMasterChecklistItem.index !== touchMasterChecklistTarget.index
+        draggingMasterChecklistItem.patientId !== masterChecklistDropTarget.patientId
+        || draggingMasterChecklistItem.index !== masterChecklistDropTarget.index
       )
     ) {
       reorderMasterChecklistItem(
         draggingMasterChecklistItem.patientId,
         draggingMasterChecklistItem.index,
-        touchMasterChecklistTarget.index,
+        masterChecklistDropTarget.index,
+        masterChecklistDropTarget.position,
       )
     }
 
     resetMasterChecklistDragState()
-  }, [draggingMasterChecklistItem, reorderMasterChecklistItem, resetMasterChecklistDragState, touchMasterChecklistTarget])
+  }, [draggingMasterChecklistItem, masterChecklistDropTarget, reorderMasterChecklistItem, resetMasterChecklistDragState])
 
   const cancelMasterChecklistTouchDrag = useCallback(() => {
     resetMasterChecklistDragState()
@@ -3457,6 +3473,13 @@ function App() {
 
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setMasterChecklistDropTarget((previous) => (
+      previous?.patientId === patientId && previous.index === targetIndex && previous.position === position
+        ? previous
+        : { patientId, index: targetIndex, position }
+    ))
   }, [draggingMasterChecklistItem])
 
   const dropMasterChecklistItem = useCallback((event: DragEvent<HTMLDivElement>, patientId: number, targetIndex: number) => {
@@ -3470,7 +3493,9 @@ function App() {
       return
     }
 
-    reorderMasterChecklistItem(patientId, draggingMasterChecklistItem.index, targetIndex)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    reorderMasterChecklistItem(patientId, draggingMasterChecklistItem.index, targetIndex, position)
     resetMasterChecklistDragState()
   }, [draggingMasterChecklistItem, reorderMasterChecklistItem, resetMasterChecklistDragState])
 
@@ -3479,7 +3504,16 @@ function App() {
       key={key}
       data-master-checklist-patient-id={item.patientId}
       data-master-checklist-index={item.index}
-      className={`space-y-1 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingMasterChecklistItem?.patientId === item.patientId && draggingMasterChecklistItem.index === item.index ? 'opacity-60' : ''} ${touchMasterChecklistTarget?.patientId === item.patientId && touchMasterChecklistTarget.index === item.index && draggingMasterChecklistItem !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
+      className={cn(
+        'space-y-1 rounded-md px-2 py-1.5',
+        item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory',
+        draggingMasterChecklistItem?.patientId === item.patientId && draggingMasterChecklistItem.index === item.index && 'opacity-60',
+        dropIndicatorClassName(
+          masterChecklistDropTarget?.patientId === item.patientId && masterChecklistDropTarget.index === item.index && draggingMasterChecklistItem !== null
+            ? masterChecklistDropTarget.position
+            : null,
+        ),
+      )}
       onDragOver={(event) => allowMasterChecklistDrop(event, item.patientId, item.index)}
       onDrop={(event) => dropMasterChecklistItem(event, item.patientId, item.index)}
       // Deferred to a macrotask: see the matching comment on the per-patient row (issue #122) —
@@ -3618,7 +3652,7 @@ function App() {
         </Button>
       </div>
     </div>
-    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, commitMasterChecklistItemNotesAndInsertBlankAfter, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
+    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, commitMasterChecklistItemNotesAndInsertBlankAfter, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, masterChecklistDropTarget, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
@@ -4513,16 +4547,19 @@ function App() {
     setMedicationForm(initialMedicationForm())
   }
 
-  const reorderStructuredMedication = useCallback(async (sourceIndex: number, targetIndex: number) => {
-    if (selectedPatientId === null || sourceIndex === targetIndex) return
+  const reorderStructuredMedication = useCallback(async (sourceIndex: number, targetIndex: number, position: DropPosition) => {
+    if (selectedPatientId === null) return
 
     const sourceEntry = selectedPatientStructuredMeds[sourceIndex]
     const targetEntry = selectedPatientStructuredMeds[targetIndex]
-    if (!sourceEntry || !targetEntry) return
+    if (!sourceEntry || !targetEntry || sourceEntry.id === targetEntry.id) return
 
     const reorderedEntries = [...selectedPatientStructuredMeds]
     const [movedEntry] = reorderedEntries.splice(sourceIndex, 1)
-    reorderedEntries.splice(targetIndex, 0, movedEntry)
+    const targetIndexAfterRemoval = reorderedEntries.findIndex((entry) => entry.id === targetEntry.id)
+    if (targetIndexAfterRemoval === -1) return
+    const insertIndex = position === 'before' ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
+    reorderedEntries.splice(insertIndex, 0, movedEntry)
 
     await db.transaction('rw', [db.medications], async () => {
       await Promise.all(reorderedEntries.map((entry, index) => {
@@ -4541,7 +4578,7 @@ function App() {
 
   const resetMedicationDragState = useCallback(() => {
     setDraggingMedicationIndex(null)
-    setTouchMedicationTargetIndex(null)
+    setMedicationDropTarget(null)
   }, [])
 
   const endMedicationDrag = useCallback(() => {
@@ -4551,7 +4588,7 @@ function App() {
   const startMedicationTouchDrag = useCallback((event: TouchEvent<HTMLButtonElement>, index: number) => {
     event.preventDefault()
     setDraggingMedicationIndex(index)
-    setTouchMedicationTargetIndex(index)
+    setMedicationDropTarget({ index, position: 'after' })
   }, [])
 
   const updateMedicationTouchTarget = useCallback((event: TouchEvent<HTMLButtonElement>) => {
@@ -4563,31 +4600,29 @@ function App() {
     const targetElement = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
     const medicationItemContainer = targetElement?.closest('[data-medication-index]')
     if (!(medicationItemContainer instanceof HTMLElement)) {
-      setTouchMedicationTargetIndex(null)
+      setMedicationDropTarget(null)
       return
     }
 
     const parsedTargetIndex = Number.parseInt(medicationItemContainer.dataset.medicationIndex ?? '', 10)
     if (!Number.isInteger(parsedTargetIndex)) {
-      setTouchMedicationTargetIndex(null)
+      setMedicationDropTarget(null)
       return
     }
 
     event.preventDefault()
-    setTouchMedicationTargetIndex(parsedTargetIndex)
+    const rect = medicationItemContainer.getBoundingClientRect()
+    const position: DropPosition = touchPoint.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setMedicationDropTarget({ index: parsedTargetIndex, position })
   }, [draggingMedicationIndex])
 
   const endMedicationTouchDrag = useCallback(() => {
-    if (
-      draggingMedicationIndex !== null
-      && touchMedicationTargetIndex !== null
-      && draggingMedicationIndex !== touchMedicationTargetIndex
-    ) {
-      void reorderStructuredMedication(draggingMedicationIndex, touchMedicationTargetIndex)
+    if (draggingMedicationIndex !== null && medicationDropTarget !== null && draggingMedicationIndex !== medicationDropTarget.index) {
+      void reorderStructuredMedication(draggingMedicationIndex, medicationDropTarget.index, medicationDropTarget.position)
     }
 
     resetMedicationDragState()
-  }, [draggingMedicationIndex, reorderStructuredMedication, resetMedicationDragState, touchMedicationTargetIndex])
+  }, [draggingMedicationIndex, medicationDropTarget, reorderStructuredMedication, resetMedicationDragState])
 
   const cancelMedicationTouchDrag = useCallback(() => {
     resetMedicationDragState()
@@ -4598,6 +4633,9 @@ function App() {
 
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setMedicationDropTarget((previous) => (previous?.index === targetIndex && previous.position === position ? previous : { index: targetIndex, position }))
   }, [draggingMedicationIndex])
 
   const dropMedicationItem = useCallback((event: DragEvent<HTMLLIElement>, targetIndex: number) => {
@@ -4607,7 +4645,9 @@ function App() {
       return
     }
 
-    void reorderStructuredMedication(draggingMedicationIndex, targetIndex)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    void reorderStructuredMedication(draggingMedicationIndex, targetIndex, position)
     resetMedicationDragState()
   }, [draggingMedicationIndex, reorderStructuredMedication, resetMedicationDragState])
 
@@ -4615,7 +4655,7 @@ function App() {
     const targetIndex = direction === 'up' ? index - 1 : index + 1
     if (targetIndex < 0 || targetIndex >= selectedPatientStructuredMeds.length) return
 
-    void reorderStructuredMedication(index, targetIndex)
+    void reorderStructuredMedication(index, targetIndex, direction === 'up' ? 'before' : 'after')
   }, [reorderStructuredMedication, selectedPatientStructuredMeds.length])
 
   const addStructuredLab = async () => {
@@ -5660,6 +5700,18 @@ function App() {
                     size='sm'
                     variant='outline'
                     className='h-7 text-xs'
+                    onClick={() => {
+                      const ids = visiblePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
+                      const allSelected = ids.length > 0 && ids.every((id) => selectedPatientIdsForTagging.has(id))
+                      setSelectedPatientIdsForTagging(allSelected ? new Set() : new Set(ids))
+                    }}
+                  >
+                    {visiblePatients.length > 0 && visiblePatients.every((patient) => patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id)) ? 'Deselect All' : 'Select All'}
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 text-xs'
                     disabled={selectedPatientIdsForTagging.size === 0}
                     onClick={() => openBulkTagDialog('add')}
                   >
@@ -6033,7 +6085,7 @@ function App() {
                                       className={cn(
                                         'flex items-center gap-2 rounded border border-clay/30 bg-warm-ivory px-2 py-1 transition-shadow',
                                         censusPatientDrag.isDragging(patientId) && 'opacity-50',
-                                        censusPatientDrag.isDropTarget(patientId) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                                        dropIndicatorClassName(censusPatientDrag.dropIndicator(patientId)),
                                       )}
                                       {...censusPatientDrag.getItemProps(patientId)}
                                     >
@@ -6391,18 +6443,31 @@ function App() {
                           />
                         </TabsContent>
                         <TabsContent value='discharge'>
-                          <ServiceDiagnosisFields
-                            patient={selectedPatient}
-                            tagsById={tagsById}
-                            unassigned={profileForm.dischargeDiagnosisUnassigned}
-                            byService={profileForm.dischargeDiagnosisByService}
-                            onChangeUnassigned={(text) => updateProfileField('dischargeDiagnosisUnassigned', text)}
-                            onChangeService={(serviceId, text) => updateProfileField('dischargeDiagnosisByService', { ...profileForm.dischargeDiagnosisByService, [serviceId]: text })}
-                            label='Discharge Diagnosis'
-                            mentionableAttachments={mentionableAttachments}
-                            attachmentByTitle={mentionableAttachmentByTitle}
-                            onOpenPhotoById={openPhotoById}
-                          />
+                          <div className='space-y-2'>
+                            <Button
+                              type='button'
+                              size='sm'
+                              variant='outline'
+                              onClick={() => {
+                                updateProfileField('dischargeDiagnosisUnassigned', profileForm.admissionDiagnosisUnassigned)
+                                updateProfileField('dischargeDiagnosisByService', { ...profileForm.dischargeDiagnosisByService, ...profileForm.admissionDiagnosisByService })
+                              }}
+                            >
+                              Copy Admission Diagnosis
+                            </Button>
+                            <ServiceDiagnosisFields
+                              patient={selectedPatient}
+                              tagsById={tagsById}
+                              unassigned={profileForm.dischargeDiagnosisUnassigned}
+                              byService={profileForm.dischargeDiagnosisByService}
+                              onChangeUnassigned={(text) => updateProfileField('dischargeDiagnosisUnassigned', text)}
+                              onChangeService={(serviceId, text) => updateProfileField('dischargeDiagnosisByService', { ...profileForm.dischargeDiagnosisByService, [serviceId]: text })}
+                              label='Discharge Diagnosis'
+                              mentionableAttachments={mentionableAttachments}
+                              attachmentByTitle={mentionableAttachmentByTitle}
+                              onOpenPhotoById={openPhotoById}
+                            />
+                          </div>
                         </TabsContent>
                       </Tabs>
                     </div>
@@ -6774,6 +6839,9 @@ function App() {
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{vitalsSelection.selectedIds.size} selected</p>
                                 <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => vitalsSelection.toggleSelectAll(patientVitals?.map((entry) => entry.id) ?? [])}>
+                                    {patientVitals && patientVitals.length > 0 && patientVitals.every((entry) => vitalsSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
+                                  </Button>
                                   <Button
                                     size='sm'
                                     variant='destructive'
@@ -6994,6 +7062,9 @@ function App() {
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{medicationsSelection.selectedIds.size} selected</p>
                                 <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => medicationsSelection.toggleSelectAll(selectedPatientStructuredMeds.map((entry) => entry.id))}>
+                                    {selectedPatientStructuredMeds.length > 0 && selectedPatientStructuredMeds.every((entry) => medicationsSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
+                                  </Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('active')}>Mark Active</Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('discontinued')}>Mark Discontinued</Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('completed')}>Mark Completed</Button>
@@ -7023,7 +7094,7 @@ function App() {
                                   'flex items-center gap-2 rounded-sm border-b border-clay/30 py-1 text-sm last:border-0',
                                   !medicationsSelection.selectionMode && 'justify-between',
                                   draggingMedicationIndex === index && 'opacity-60',
-                                  touchMedicationTargetIndex === index && draggingMedicationIndex !== null && 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent',
+                                  dropIndicatorClassName(medicationDropTarget?.index === index && draggingMedicationIndex !== null ? medicationDropTarget.position : null),
                                 )}
                                 onDragOver={(event) => allowMedicationDrop(event, index)}
                                 onDrop={(event) => dropMedicationItem(event, index)}
@@ -7381,6 +7452,9 @@ function App() {
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{labsSelection.selectedIds.size} selected</p>
                                 <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => labsSelection.toggleSelectAll(selectedPatientStructuredLabs.map((entry) => entry.id))}>
+                                    {selectedPatientStructuredLabs.length > 0 && selectedPatientStructuredLabs.every((entry) => labsSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
+                                  </Button>
                                   <Button
                                     size='sm'
                                     variant='destructive'
@@ -7569,6 +7643,9 @@ function App() {
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{ordersSelection.selectedIds.size} selected</p>
                                 <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => ordersSelection.toggleSelectAll(selectedPatientOrders.map((entry) => entry.id))}>
+                                    {selectedPatientOrders.length > 0 && selectedPatientOrders.every((entry) => ordersSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
+                                  </Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('active')}>Mark Active</Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('carriedOut')}>Mark Carried Out</Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('discontinued')}>Mark Discontinued</Button>
@@ -7766,6 +7843,20 @@ function App() {
                           <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                             <p className='text-xs font-semibold text-espresso'>{photosSelection.selectedIds.size} selected</p>
                             <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                className='h-7 text-xs'
+                                onClick={() => {
+                                  const allPhotoIds = selectedPatientExpandedPhotoSections.flatMap((section) => section.entries.map((entry) => entry.id))
+                                  photosSelection.toggleSelectAll(allPhotoIds)
+                                }}
+                              >
+                                {(() => {
+                                  const allPhotoIds = selectedPatientExpandedPhotoSections.flatMap((section) => section.entries.map((entry) => entry.id))
+                                  return allPhotoIds.length > 0 && allPhotoIds.every((id) => photosSelection.isSelected(id)) ? 'Deselect All' : 'Select All'
+                                })()}
+                              </Button>
                               <Button
                                 size='sm'
                                 variant='destructive'
