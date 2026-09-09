@@ -63,6 +63,22 @@ export interface TagGroupDefinition {
   sortOrder: number
 }
 
+/** A named, saved Tag+Ward filter combo — lets the user re-apply a commonly-used selection (e.g.
+ * "CD, Ward A") on the Patients list, Master Checklist, or Reports patient picker without
+ * re-checking every box each time. Shared across all three — a view saved from one applies
+ * equally well from another, since they all filter the same underlying tags/wards. Kept as its
+ * own flat fields (not a nested filter object) so this file, which nothing else imports into,
+ * doesn't need to import the filter feature's own type. */
+export interface CustomView {
+  id?: number
+  name: string
+  tagIds: number[]
+  tagMode: 'AND' | 'OR'
+  wards: string[]
+  sortOrder: number
+  createdAt: string
+}
+
 export interface TagDefinition {
   id?: number
   name: string

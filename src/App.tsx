@@ -53,6 +53,7 @@ import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useEntrySelection } from '@/lib/useEntrySelection'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import {
@@ -147,9 +148,10 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText } from 'lucide-react'
-import type { CustomAction, CustomActionCondition, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark } from 'lucide-react'
+import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
+import { ManageCustomViewsScreen } from './features/filters/ManageCustomViewsScreen'
 import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
 import {
   actionHasApplicableEffect,
@@ -411,6 +413,7 @@ type BackupPayload = {
   tagEvents?: TagEvent[]
   reportTemplates?: ReportTemplate[]
   dateTimeFormats?: DateTimeFormatDefinition[]
+  customViews?: CustomView[]
 }
 
 const initialDailyUpdateForm: DailyUpdateFormState = {
@@ -519,7 +522,8 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
   const validTagEvents = candidate.tagEvents === undefined || Array.isArray(candidate.tagEvents)
   const validReportTemplates = candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates)
   const validDateTimeFormats = candidate.dateTimeFormats === undefined || Array.isArray(candidate.dateTimeFormats)
-  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates && validDateTimeFormats
+  const validCustomViews = candidate.customViews === undefined || Array.isArray(candidate.customViews)
+  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates && validDateTimeFormats && validCustomViews
 }
 
 const isConflictSyncResult = (result: SyncNowResult): result is ConflictResult => {
@@ -568,6 +572,18 @@ const comparePhotoGroupsByNewest = (a: PhotoAttachmentGroup, b: PhotoAttachmentG
 // (TapToEditField); this just coalesces same-tick multi-field commits before the
 // IndexedDB write, so it stays short rather than adding a second perceptible delay.
 const AUTOSAVE_FLUSH_MS = 150
+
+const MEDICATION_STATUS_LABELS: Record<MedicationEntry['status'], string> = {
+  active: 'Active',
+  discontinued: 'Discontinued',
+  completed: 'Completed',
+}
+
+const ORDER_STATUS_LABELS: Record<OrderEntry['status'], string> = {
+  active: 'Active',
+  carriedOut: 'Carried Out',
+  discontinued: 'Discontinued',
+}
 
 // Device-local UI preference (not clinical data), same rationale as patientTabSettings.
 const ADD_PATIENT_COLLAPSED_STORAGE_KEY = 'puhrr.addPatientCollapsed'
@@ -626,7 +642,7 @@ function App() {
   const patientLongPressFiredRef = useRef(false)
   const [form, setForm] = useState<PatientFormState>(initialForm)
   const [pendingMainServiceTagIds, setPendingMainServiceTagIds] = useState<number[]>([])
-  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'reporting' | 'settings' | 'manageTags' | 'tabSettings' | 'manageCustomActions' | 'manageTemplates' | 'manageDateTimeFormats'>('patients')
+  const [view, setView] = useState<'patients' | 'patient' | 'checklist' | 'reporting' | 'settings' | 'manageTags' | 'tabSettings' | 'manageCustomActions' | 'manageTemplates' | 'manageDateTimeFormats' | 'manageCustomViews'>('patients')
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null)
   const [tagsEditOverrideByPatientId, setTagsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
   // Snapshot, per patient, of whether tags were already applied the first time this patient's
@@ -830,6 +846,14 @@ function App() {
   const [bulkTagPickerSelectedIds, setBulkTagPickerSelectedIds] = useState<Set<number>>(new Set())
   const [bulkTagConfirmOpen, setBulkTagConfirmOpen] = useState(false)
   const [isBulkTagApplying, setIsBulkTagApplying] = useState(false)
+  // Multi-select for the per-patient entry lists (mass delete, plus a bulk status change for
+  // Medications/Orders) — same long-press/checkbox gesture as the Patients list above, one
+  // independent instance per list. Checklist items are deliberately excluded.
+  const vitalsSelection = useEntrySelection()
+  const medicationsSelection = useEntrySelection()
+  const labsSelection = useEntrySelection()
+  const ordersSelection = useEntrySelection()
+  const photosSelection = useEntrySelection()
   const [bulkCustomActionTarget, setBulkCustomActionTarget] = useState<CustomAction | null>(null)
   const [isBulkCustomActionApplying, setIsBulkCustomActionApplying] = useState(false)
   const [customActionResolveState, setCustomActionResolveState] = useState<{ action: CustomAction; patient: Patient } | null>(null)
@@ -913,6 +937,31 @@ function App() {
   const customActions = useLiveQuery(() => db.customActions.toArray(), [])
   const reportTemplates = useLiveQuery(() => db.reportTemplates.toArray(), [])
   const dateTimeFormats = useLiveQuery(() => db.dateTimeFormats.toArray(), [])
+  const customViews = useLiveQuery(() => db.customViews.toArray(), [])
+  const orderedCustomViews = useMemo(() => [...(customViews ?? [])].sort((a, b) => a.sortOrder - b.sortOrder), [customViews])
+  // Custom Views: named, saved Tag+Ward combos shared across the Patients list, Master Checklist,
+  // and Reports picker filters — save/rename/delete here since they're just Dexie CRUD, same as
+  // Custom Actions and Report Templates elsewhere in this file; applying one is handled per-caller
+  // (each of the three filter setters below), since the target filter state differs per screen.
+  const saveCustomView = async (name: string, filter: TagWardFilterState) => {
+    const existing = customViews ?? []
+    const nextSortOrder = existing.length > 0 ? Math.max(...existing.map((view) => view.sortOrder)) + 1 : 0
+    await db.customViews.add({
+      name,
+      tagIds: filter.tagIds,
+      tagMode: filter.tagMode,
+      wards: filter.wards,
+      sortOrder: nextSortOrder,
+      createdAt: new Date().toISOString(),
+    })
+  }
+  const renameCustomView = async (id: number, name: string) => {
+    await db.customViews.update(id, { name })
+  }
+  const deleteCustomView = async (id: number) => {
+    await db.customViews.delete(id)
+  }
+  const applyCustomView = (view: CustomView): TagWardFilterState => ({ tagIds: view.tagIds, tagMode: view.tagMode, wards: view.wards })
   const dateTimeFormatsById = useMemo(() => new Map((dateTimeFormats ?? []).map((format) => [String(format.id), format])), [dateTimeFormats])
   const manualCustomActions = useMemo(
     () => (customActions ?? []).filter((action) => (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
@@ -3796,6 +3845,18 @@ function App() {
     )
   }
 
+  const deleteSelectedPhotos = async () => {
+    const ids = [...photosSelection.selectedIds]
+    if (ids.length === 0) return
+    await db.photoAttachments.bulkDelete(ids)
+    await touchPatientLastModified(selectedPatientId)
+    if (selectedAttachmentId !== null && ids.includes(selectedAttachmentId)) {
+      setSelectedAttachmentId(null)
+    }
+    photosSelection.exit()
+    setNotice(`Deleted ${ids.length} photo${ids.length === 1 ? '' : 's'}.`)
+  }
+
   const hasUnsavedChanges = profileDirty || dailyDirty || vitalDirty || orderDirty
 
   const saveDailyUpdate = useCallback(
@@ -4058,6 +4119,24 @@ function App() {
     setNotice('Vital removed.')
   }
 
+  const deleteSelectedVitals = async () => {
+    const ids = [...vitalsSelection.selectedIds]
+    if (ids.length === 0) return
+    await db.vitals.bulkDelete(ids)
+    await touchPatientLastModified(selectedPatientId)
+    if (editingVitalId !== null && ids.includes(editingVitalId)) {
+      setEditingVitalId(null)
+      setVitalForm(initialVitalForm())
+      setVitalDirty(false)
+    }
+    if (vitalDraftId !== null && ids.includes(vitalDraftId)) {
+      setVitalDraftId(null)
+      setVitalDirty(false)
+    }
+    vitalsSelection.exit()
+    setNotice(`Deleted ${ids.length} vital${ids.length === 1 ? '' : 's'}.`)
+  }
+
   const startEditingVital = (entry: VitalEntry) => {
     if (entry.id === undefined) return
     setEditingVitalId(entry.id)
@@ -4182,6 +4261,35 @@ function App() {
       setOrderDirty(false)
     }
     setNotice('Order removed.')
+  }
+
+  const deleteSelectedOrders = async () => {
+    const ids = [...ordersSelection.selectedIds]
+    if (ids.length === 0) return
+    await db.orders.bulkDelete(ids)
+    await touchPatientLastModified(selectedPatientId)
+    if (editingOrderId !== null && ids.includes(editingOrderId)) {
+      setEditingOrderId(null)
+      setOrderForm(initialOrderForm())
+      setOrderDirty(false)
+    }
+    if (orderDraftId !== null && ids.includes(orderDraftId)) {
+      setOrderDraftId(null)
+      setOrderDirty(false)
+    }
+    ordersSelection.exit()
+    setNotice(`Deleted ${ids.length} order${ids.length === 1 ? '' : 's'}.`)
+  }
+
+  const setSelectedOrdersStatus = async (status: OrderEntry['status']) => {
+    const ids = [...ordersSelection.selectedIds]
+    if (ids.length === 0) return
+    await db.transaction('rw', [db.orders], async () => {
+      await Promise.all(ids.map((id) => db.orders.update(id, { status })))
+    })
+    await touchPatientLastModified(selectedPatientId)
+    ordersSelection.exit()
+    setNotice(`Marked ${ids.length} order${ids.length === 1 ? '' : 's'} as ${ORDER_STATUS_LABELS[status]}.`)
   }
 
   const saveVitalDraft = useCallback(
@@ -4343,6 +4451,30 @@ function App() {
       setMedicationForm(initialMedicationForm())
     }
     setNotice('Medication removed.')
+  }
+
+  const deleteSelectedMedications = async () => {
+    const ids = [...medicationsSelection.selectedIds]
+    if (ids.length === 0) return
+    await db.medications.bulkDelete(ids)
+    await touchPatientLastModified(selectedPatientId)
+    if (editingMedicationId !== null && ids.includes(editingMedicationId)) {
+      setEditingMedicationId(null)
+      setMedicationForm(initialMedicationForm())
+    }
+    medicationsSelection.exit()
+    setNotice(`Deleted ${ids.length} medication${ids.length === 1 ? '' : 's'}.`)
+  }
+
+  const setSelectedMedicationsStatus = async (status: MedicationEntry['status']) => {
+    const ids = [...medicationsSelection.selectedIds]
+    if (ids.length === 0) return
+    await db.transaction('rw', [db.medications], async () => {
+      await Promise.all(ids.map((id) => db.medications.update(id, { status })))
+    })
+    await touchPatientLastModified(selectedPatientId)
+    medicationsSelection.exit()
+    setNotice(`Marked ${ids.length} medication${ids.length === 1 ? '' : 's'} as ${MEDICATION_STATUS_LABELS[status]}.`)
   }
 
   const startEditingMedication = (entry: MedicationEntry) => {
@@ -4531,6 +4663,23 @@ function App() {
       setLabTemplateNote('')
     }
     setNotice('Lab removed.')
+  }
+
+  const deleteSelectedLabs = async () => {
+    const ids = [...labsSelection.selectedIds]
+    if (ids.length === 0) return
+    await db.labs.bulkDelete(ids)
+    await touchPatientLastModified(selectedPatientId)
+    if (editingLabId !== null && ids.includes(editingLabId)) {
+      setEditingLabId(null)
+      setSelectedLabTemplateId(DEFAULT_LAB_TEMPLATE_ID)
+      setLabTemplateDate('')
+      setLabTemplateTime('')
+      setLabTemplateValues({})
+      setLabTemplateNote('')
+    }
+    labsSelection.exit()
+    setNotice(`Deleted ${ids.length} lab${ids.length === 1 ? '' : 's'}.`)
   }
 
   const startEditingLab = (entry: LabEntry) => {
@@ -4760,6 +4909,7 @@ function App() {
       tagEvents: await db.tagEvents.toArray(),
       reportTemplates: await db.reportTemplates.toArray(),
       dateTimeFormats: await db.dateTimeFormats.toArray(),
+      customViews: await db.customViews.toArray(),
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -4787,7 +4937,7 @@ function App() {
 
       await db.transaction(
         'rw',
-        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates, db.dateTimeFormats],
+        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates, db.dateTimeFormats, db.customViews],
         async () => {
         await db.labs.clear()
         await db.medications.clear()
@@ -4800,6 +4950,7 @@ function App() {
         await db.tagEvents.clear()
         await db.reportTemplates.clear()
         await db.dateTimeFormats.clear()
+        await db.customViews.clear()
         if (parsed.patients.length > 0) {
           await db.patients.bulkPut(parsed.patients.map((patient) => ensurePatientLastModified(patient)))
         }
@@ -4832,6 +4983,9 @@ function App() {
         }
         if ((parsed.dateTimeFormats ?? []).length > 0) {
           await db.dateTimeFormats.bulkPut(parsed.dateTimeFormats ?? [])
+        }
+        if ((parsed.customViews ?? []).length > 0) {
+          await db.customViews.bulkPut(parsed.customViews ?? [])
         }
       },
       )
@@ -5343,7 +5497,7 @@ function App() {
               ) : null}
               <Button variant={view === 'checklist' ? 'default' : 'ghost'} size='sm' onClick={() => setView('checklist')}>Checklist</Button>
               <Button variant={view === 'reporting' || view === 'manageTemplates' || view === 'manageDateTimeFormats' ? 'default' : 'ghost'} size='sm' onClick={() => setView('reporting')}>Reports</Button>
-              <Button variant={view === 'settings' || view === 'manageTags' || view === 'tabSettings' || view === 'manageCustomActions' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
+              <Button variant={view === 'settings' || view === 'manageTags' || view === 'tabSettings' || view === 'manageCustomActions' || view === 'manageCustomViews' ? 'default' : 'ghost'} size='sm' onClick={() => setView('settings')}>Settings</Button>
             </div>
           </div>
         </div>
@@ -5370,6 +5524,14 @@ function App() {
             customActions={customActions ?? []}
             tags={tagDefinitions ?? []}
             groups={tagGroups ?? []}
+            onBack={() => setView('settings')}
+          />
+        ) : view === 'manageCustomViews' ? (
+          <ManageCustomViewsScreen
+            views={orderedCustomViews}
+            tags={tagDefinitions ?? []}
+            groups={tagGroups ?? []}
+            wards={distinctWards}
             onBack={() => setView('settings')}
           />
         ) : view === 'manageTemplates' ? (
@@ -6601,26 +6763,78 @@ function App() {
                           )}
                         </div>
                         {patientVitals && patientVitals.length > 0 ? (
-                          <ul className='space-y-1'>
-                            {[...patientVitals].reverse().map((entry) => (
-                              <li key={entry.id} className='flex items-center justify-between gap-2 text-sm py-1 border-b border-clay/30 last:border-0'>
-                                {editingVitalId === entry.id ? (
-                                  <span className='text-clay italic'>(Editing above...)</span>
-                                ) : (
-                                  <>
-                                    <span className='whitespace-pre-wrap'>
-                                      <MentionText
-                                        text={`${entry.date} ${entry.time} • BP ${entry.bp || '-'} • HR ${entry.hr || '-'} • RR ${entry.rr || '-'} • T ${entry.temp || '-'} • O2 ${entry.spo2 || '-'}${entry.note ? ` • ${entry.note}` : ''}`}
-                                        attachmentByTitle={mentionableAttachmentByTitle}
-                                        onOpenPhotoById={openPhotoById}
-                                      />
-                                    </span>
-                                    <Button size='sm' variant='edit' onClick={() => startEditingVital(entry)}>Edit</Button>
-                                  </>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
+                          <>
+                            <div className='flex items-center justify-between gap-2'>
+                              <p className='text-xs text-clay'>{patientVitals.length} vital{patientVitals.length === 1 ? '' : 's'}</p>
+                              {!vitalsSelection.selectionMode ? (
+                                <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => vitalsSelection.setSelectionMode(true)}>Select</Button>
+                              ) : null}
+                            </div>
+                            {vitalsSelection.selectionMode ? (
+                              <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
+                                <p className='text-xs font-semibold text-espresso'>{vitalsSelection.selectedIds.size} selected</p>
+                                <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button
+                                    size='sm'
+                                    variant='destructive'
+                                    className='h-7 text-xs'
+                                    disabled={vitalsSelection.selectedIds.size === 0}
+                                    onClick={() => requestDeleteConfirmation({
+                                      title: 'Delete vitals?',
+                                      message: `Permanently delete ${vitalsSelection.selectedIds.size} vital${vitalsSelection.selectedIds.size === 1 ? '' : 's'}? This cannot be undone.`,
+                                      onConfirm: () => deleteSelectedVitals(),
+                                    })}
+                                  >
+                                    Delete
+                                  </Button>
+                                  <Button size='sm' variant='ghost' className='h-7 text-xs' onClick={vitalsSelection.exit}>Cancel</Button>
+                                </div>
+                              </div>
+                            ) : null}
+                            <ul className='space-y-1'>
+                              {[...patientVitals].reverse().map((entry) => (
+                                <li
+                                  key={entry.id}
+                                  className={cn(
+                                    'flex items-center gap-2 text-sm py-1 border-b border-clay/30 last:border-0',
+                                    !vitalsSelection.selectionMode && 'justify-between',
+                                  )}
+                                  onTouchStart={() => vitalsSelection.handleTouchStart(entry.id)}
+                                  onTouchEnd={vitalsSelection.handleTouchEnd}
+                                  onTouchMove={vitalsSelection.cancelLongPress}
+                                  onTouchCancel={vitalsSelection.cancelLongPress}
+                                  onClick={() => { if (vitalsSelection.selectionMode) vitalsSelection.toggle(entry.id) }}
+                                >
+                                  {vitalsSelection.selectionMode ? (
+                                    <input
+                                      type='checkbox'
+                                      className='h-4 w-4 shrink-0 accent-action-primary'
+                                      checked={vitalsSelection.isSelected(entry.id)}
+                                      onChange={() => vitalsSelection.toggle(entry.id)}
+                                      onClick={(event) => event.stopPropagation()}
+                                      aria-label={`Select vital from ${entry.date} ${entry.time}`}
+                                    />
+                                  ) : null}
+                                  {editingVitalId === entry.id ? (
+                                    <span className='text-clay italic'>(Editing above...)</span>
+                                  ) : (
+                                    <>
+                                      <span className='whitespace-pre-wrap flex-1'>
+                                        <MentionText
+                                          text={`${entry.date} ${entry.time} • BP ${entry.bp || '-'} • HR ${entry.hr || '-'} • RR ${entry.rr || '-'} • T ${entry.temp || '-'} • O2 ${entry.spo2 || '-'}${entry.note ? ` • ${entry.note}` : ''}`}
+                                          attachmentByTitle={mentionableAttachmentByTitle}
+                                          onOpenPhotoById={openPhotoById}
+                                        />
+                                      </span>
+                                      {!vitalsSelection.selectionMode ? (
+                                        <Button size='sm' variant='edit' onClick={() => startEditingVital(entry)}>Edit</Button>
+                                      ) : null}
+                                    </>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </>
                         ) : (
                           <div className='flex flex-col items-center justify-center py-8 text-center'>
                             <div className='h-12 w-12 rounded-full bg-blush-sand flex items-center justify-center mb-3'>
@@ -6769,19 +6983,66 @@ function App() {
                           )}
                         </div>
                         {selectedPatientStructuredMeds.length > 0 ? (
-                          <ul className='space-y-1'>
-                            {selectedPatientStructuredMeds.map((entry, index) => (
+                          <>
+                            <div className='flex items-center justify-between gap-2'>
+                              <p className='text-xs text-clay'>{selectedPatientStructuredMeds.length} medication{selectedPatientStructuredMeds.length === 1 ? '' : 's'}</p>
+                              {!medicationsSelection.selectionMode ? (
+                                <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => medicationsSelection.setSelectionMode(true)}>Select</Button>
+                              ) : null}
+                            </div>
+                            {medicationsSelection.selectionMode ? (
+                              <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
+                                <p className='text-xs font-semibold text-espresso'>{medicationsSelection.selectedIds.size} selected</p>
+                                <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('active')}>Mark Active</Button>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('discontinued')}>Mark Discontinued</Button>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('completed')}>Mark Completed</Button>
+                                  <Button
+                                    size='sm'
+                                    variant='destructive'
+                                    className='h-7 text-xs'
+                                    disabled={medicationsSelection.selectedIds.size === 0}
+                                    onClick={() => requestDeleteConfirmation({
+                                      title: 'Delete medications?',
+                                      message: `Permanently delete ${medicationsSelection.selectedIds.size} medication${medicationsSelection.selectedIds.size === 1 ? '' : 's'}? This cannot be undone.`,
+                                      onConfirm: () => deleteSelectedMedications(),
+                                    })}
+                                  >
+                                    Delete
+                                  </Button>
+                                  <Button size='sm' variant='ghost' className='h-7 text-xs' onClick={medicationsSelection.exit}>Cancel</Button>
+                                </div>
+                              </div>
+                            ) : null}
+                            <ul className='space-y-1'>
+                              {selectedPatientStructuredMeds.map((entry, index) => (
                               <li
                                 key={entry.id}
                                 data-medication-index={index}
                                 className={cn(
-                                  'flex items-center justify-between gap-2 rounded-sm border-b border-clay/30 py-1 text-sm last:border-0',
+                                  'flex items-center gap-2 rounded-sm border-b border-clay/30 py-1 text-sm last:border-0',
+                                  !medicationsSelection.selectionMode && 'justify-between',
                                   draggingMedicationIndex === index && 'opacity-60',
                                   touchMedicationTargetIndex === index && draggingMedicationIndex !== null && 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent',
                                 )}
                                 onDragOver={(event) => allowMedicationDrop(event, index)}
                                 onDrop={(event) => dropMedicationItem(event, index)}
+                                onTouchStart={() => medicationsSelection.handleTouchStart(entry.id)}
+                                onTouchEnd={medicationsSelection.handleTouchEnd}
+                                onTouchMove={medicationsSelection.cancelLongPress}
+                                onTouchCancel={medicationsSelection.cancelLongPress}
+                                onClick={() => { if (medicationsSelection.selectionMode) medicationsSelection.toggle(entry.id) }}
                               >
+                                {medicationsSelection.selectionMode ? (
+                                  <input
+                                    type='checkbox'
+                                    className='h-4 w-4 shrink-0 accent-action-primary'
+                                    checked={medicationsSelection.isSelected(entry.id)}
+                                    onChange={() => medicationsSelection.toggle(entry.id)}
+                                    onClick={(event) => event.stopPropagation()}
+                                    aria-label={`Select medication ${entry.medication}`}
+                                  />
+                                ) : null}
                                 {editingMedicationId === entry.id ? (
                                   <span className='text-clay italic'>(Editing above...)</span>
                                 ) : (
@@ -6793,32 +7054,37 @@ function App() {
                                         onOpenPhotoById={openPhotoById}
                                       />
                                     </span>
-                                    <Button
-                                      type='button'
-                                      variant='ghost'
-                                      className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
-                                      aria-label='Drag medication to reorder'
-                                      draggable
-                                      onDragStart={(event) => startMedicationDrag(event, index)}
-                                      onDragEnd={endMedicationDrag}
-                                      onTouchStart={(event) => startMedicationTouchDrag(event, index)}
-                                      onTouchMove={updateMedicationTouchTarget}
-                                      onTouchEnd={endMedicationTouchDrag}
-                                      onTouchCancel={cancelMedicationTouchDrag}
-                                      onKeyDown={(event) => {
-                                        if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
-                                        event.preventDefault()
-                                        moveMedicationByDirection(index, event.key === 'ArrowUp' ? 'up' : 'down')
-                                      }}
-                                    >
-                                      <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
-                                    </Button>
-                                    <Button size='sm' variant='edit' onClick={() => startEditingMedication(entry)}>Edit</Button>
+                                    {!medicationsSelection.selectionMode ? (
+                                      <>
+                                        <Button
+                                          type='button'
+                                          variant='ghost'
+                                          className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
+                                          aria-label='Drag medication to reorder'
+                                          draggable
+                                          onDragStart={(event) => startMedicationDrag(event, index)}
+                                          onDragEnd={endMedicationDrag}
+                                          onTouchStart={(event) => { event.stopPropagation(); startMedicationTouchDrag(event, index) }}
+                                          onTouchMove={updateMedicationTouchTarget}
+                                          onTouchEnd={endMedicationTouchDrag}
+                                          onTouchCancel={cancelMedicationTouchDrag}
+                                          onKeyDown={(event) => {
+                                            if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+                                            event.preventDefault()
+                                            moveMedicationByDirection(index, event.key === 'ArrowUp' ? 'up' : 'down')
+                                          }}
+                                        >
+                                          <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
+                                        </Button>
+                                        <Button size='sm' variant='edit' onClick={() => startEditingMedication(entry)}>Edit</Button>
+                                      </>
+                                    ) : null}
                                   </>
                                 )}
                               </li>
-                            ))}
-                          </ul>
+                              ))}
+                            </ul>
+                          </>
                         ) : (
                           <div className='flex flex-col items-center justify-center py-8 text-center'>
                             <div className='h-12 w-12 rounded-full bg-blush-sand flex items-center justify-center mb-3'>
@@ -7104,29 +7370,81 @@ function App() {
                           )}
                         </div>
                         {selectedPatientStructuredLabs.length > 0 ? (
-                          <ul className='space-y-1'>
-                            {buildStructuredLabLines(selectedPatientStructuredLabs).map((line, index) => {
-                              const entry = selectedPatientStructuredLabs[index]
-                              return (
-                                <li key={entry.id} className='flex items-center justify-between gap-2 text-sm py-1 border-b border-clay/30 last:border-0'>
-                                  {editingLabId === entry.id ? (
-                                    <span className='text-clay italic'>(Editing above...)</span>
-                                  ) : (
-                                    <>
-                                      <span className='whitespace-pre-wrap'>
-                                        <MentionText
-                                          text={line}
-                                          attachmentByTitle={mentionableAttachmentByTitle}
-                                          onOpenPhotoById={openPhotoById}
-                                        />
-                                      </span>
-                                      <Button size='sm' variant='edit' onClick={() => startEditingLab(entry)}>Edit</Button>
-                                    </>
-                                  )}
-                                </li>
-                              )
-                            })}
-                          </ul>
+                          <>
+                            <div className='flex items-center justify-between gap-2'>
+                              <p className='text-xs text-clay'>{selectedPatientStructuredLabs.length} lab{selectedPatientStructuredLabs.length === 1 ? '' : 's'}</p>
+                              {!labsSelection.selectionMode ? (
+                                <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => labsSelection.setSelectionMode(true)}>Select</Button>
+                              ) : null}
+                            </div>
+                            {labsSelection.selectionMode ? (
+                              <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
+                                <p className='text-xs font-semibold text-espresso'>{labsSelection.selectedIds.size} selected</p>
+                                <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button
+                                    size='sm'
+                                    variant='destructive'
+                                    className='h-7 text-xs'
+                                    disabled={labsSelection.selectedIds.size === 0}
+                                    onClick={() => requestDeleteConfirmation({
+                                      title: 'Delete labs?',
+                                      message: `Permanently delete ${labsSelection.selectedIds.size} lab${labsSelection.selectedIds.size === 1 ? '' : 's'}? This cannot be undone.`,
+                                      onConfirm: () => deleteSelectedLabs(),
+                                    })}
+                                  >
+                                    Delete
+                                  </Button>
+                                  <Button size='sm' variant='ghost' className='h-7 text-xs' onClick={labsSelection.exit}>Cancel</Button>
+                                </div>
+                              </div>
+                            ) : null}
+                            <ul className='space-y-1'>
+                              {buildStructuredLabLines(selectedPatientStructuredLabs).map((line, index) => {
+                                const entry = selectedPatientStructuredLabs[index]
+                                return (
+                                  <li
+                                    key={entry.id}
+                                    className={cn(
+                                      'flex items-center gap-2 text-sm py-1 border-b border-clay/30 last:border-0',
+                                      !labsSelection.selectionMode && 'justify-between',
+                                    )}
+                                    onTouchStart={() => labsSelection.handleTouchStart(entry.id)}
+                                    onTouchEnd={labsSelection.handleTouchEnd}
+                                    onTouchMove={labsSelection.cancelLongPress}
+                                    onTouchCancel={labsSelection.cancelLongPress}
+                                    onClick={() => { if (labsSelection.selectionMode) labsSelection.toggle(entry.id) }}
+                                  >
+                                    {labsSelection.selectionMode ? (
+                                      <input
+                                        type='checkbox'
+                                        className='h-4 w-4 shrink-0 accent-action-primary'
+                                        checked={labsSelection.isSelected(entry.id)}
+                                        onChange={() => labsSelection.toggle(entry.id)}
+                                        onClick={(event) => event.stopPropagation()}
+                                        aria-label='Select lab entry'
+                                      />
+                                    ) : null}
+                                    {editingLabId === entry.id ? (
+                                      <span className='text-clay italic'>(Editing above...)</span>
+                                    ) : (
+                                      <>
+                                        <span className='whitespace-pre-wrap flex-1'>
+                                          <MentionText
+                                            text={line}
+                                            attachmentByTitle={mentionableAttachmentByTitle}
+                                            onOpenPhotoById={openPhotoById}
+                                          />
+                                        </span>
+                                        {!labsSelection.selectionMode ? (
+                                          <Button size='sm' variant='edit' onClick={() => startEditingLab(entry)}>Edit</Button>
+                                        ) : null}
+                                      </>
+                                    )}
+                                  </li>
+                                )
+                              })}
+                            </ul>
+                          </>
                         ) : (
                           <div className='flex flex-col items-center justify-center py-8 text-center'>
                             <div className='h-12 w-12 rounded-full bg-blush-sand flex items-center justify-center mb-3'>
@@ -7240,36 +7558,91 @@ function App() {
                           )}
                         </div>
                         {selectedPatientOrders.length > 0 ? (
-                          <ul className='space-y-1'>
-                            {selectedPatientOrders.map((entry) => {
-                              const orderServiceTag = findServiceTagByName(entry.service, serviceTags)
-                              return (
-                              <li key={entry.id} className='flex items-center justify-between gap-2 text-sm py-1 border-b border-clay/30 last:border-0'>
-                                {editingOrderId === entry.id ? (
-                                  <span className='text-clay italic'>(Editing above...)</span>
-                                ) : (
-                                  <>
-                                    <span className='min-w-0 flex-1 flex items-center gap-1.5 whitespace-pre-wrap text-left'>
-                                      {entry.service.trim() ? (
-                                        orderServiceTag ? (
-                                          <TagChip tag={orderServiceTag} className='shrink-0' />
-                                        ) : (
-                                          <span className='shrink-0 rounded-full bg-blush-sand px-2 py-0.5 text-[11px] font-semibold text-espresso'>{entry.service}</span>
-                                        )
+                          <>
+                            <div className='flex items-center justify-between gap-2'>
+                              <p className='text-xs text-clay'>{selectedPatientOrders.length} order{selectedPatientOrders.length === 1 ? '' : 's'}</p>
+                              {!ordersSelection.selectionMode ? (
+                                <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => ordersSelection.setSelectionMode(true)}>Select</Button>
+                              ) : null}
+                            </div>
+                            {ordersSelection.selectionMode ? (
+                              <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
+                                <p className='text-xs font-semibold text-espresso'>{ordersSelection.selectedIds.size} selected</p>
+                                <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('active')}>Mark Active</Button>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('carriedOut')}>Mark Carried Out</Button>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('discontinued')}>Mark Discontinued</Button>
+                                  <Button
+                                    size='sm'
+                                    variant='destructive'
+                                    className='h-7 text-xs'
+                                    disabled={ordersSelection.selectedIds.size === 0}
+                                    onClick={() => requestDeleteConfirmation({
+                                      title: 'Delete orders?',
+                                      message: `Permanently delete ${ordersSelection.selectedIds.size} order${ordersSelection.selectedIds.size === 1 ? '' : 's'}? This cannot be undone.`,
+                                      onConfirm: () => deleteSelectedOrders(),
+                                    })}
+                                  >
+                                    Delete
+                                  </Button>
+                                  <Button size='sm' variant='ghost' className='h-7 text-xs' onClick={ordersSelection.exit}>Cancel</Button>
+                                </div>
+                              </div>
+                            ) : null}
+                            <ul className='space-y-1'>
+                              {selectedPatientOrders.map((entry) => {
+                                const orderServiceTag = findServiceTagByName(entry.service, serviceTags)
+                                return (
+                                <li
+                                  key={entry.id}
+                                  className={cn(
+                                    'flex items-center gap-2 text-sm py-1 border-b border-clay/30 last:border-0',
+                                    !ordersSelection.selectionMode && 'justify-between',
+                                  )}
+                                  onTouchStart={() => ordersSelection.handleTouchStart(entry.id)}
+                                  onTouchEnd={ordersSelection.handleTouchEnd}
+                                  onTouchMove={ordersSelection.cancelLongPress}
+                                  onTouchCancel={ordersSelection.cancelLongPress}
+                                  onClick={() => { if (ordersSelection.selectionMode) ordersSelection.toggle(entry.id) }}
+                                >
+                                  {ordersSelection.selectionMode ? (
+                                    <input
+                                      type='checkbox'
+                                      className='h-4 w-4 shrink-0 accent-action-primary'
+                                      checked={ordersSelection.isSelected(entry.id)}
+                                      onChange={() => ordersSelection.toggle(entry.id)}
+                                      onClick={(event) => event.stopPropagation()}
+                                      aria-label='Select order'
+                                    />
+                                  ) : null}
+                                  {editingOrderId === entry.id ? (
+                                    <span className='text-clay italic'>(Editing above...)</span>
+                                  ) : (
+                                    <>
+                                      <span className='min-w-0 flex-1 flex items-center gap-1.5 whitespace-pre-wrap text-left'>
+                                        {entry.service.trim() ? (
+                                          orderServiceTag ? (
+                                            <TagChip tag={orderServiceTag} className='shrink-0' />
+                                          ) : (
+                                            <span className='shrink-0 rounded-full bg-blush-sand px-2 py-0.5 text-[11px] font-semibold text-espresso'>{entry.service}</span>
+                                          )
+                                        ) : null}
+                                        <MentionText
+                                          text={formatOrderEntryWithoutService(entry)}
+                                          attachmentByTitle={mentionableAttachmentByTitle}
+                                          onOpenPhotoById={openPhotoById}
+                                        />
+                                      </span>
+                                      {!ordersSelection.selectionMode ? (
+                                        <Button size='sm' variant='edit' onClick={() => startEditingOrder(entry)}>Edit</Button>
                                       ) : null}
-                                      <MentionText
-                                        text={formatOrderEntryWithoutService(entry)}
-                                        attachmentByTitle={mentionableAttachmentByTitle}
-                                        onOpenPhotoById={openPhotoById}
-                                      />
-                                    </span>
-                                    <Button size='sm' variant='edit' onClick={() => startEditingOrder(entry)}>Edit</Button>
-                                  </>
-                                )}
-                              </li>
-                              )
-                            })}
-                          </ul>
+                                    </>
+                                  )}
+                                </li>
+                                )
+                              })}
+                            </ul>
+                          </>
                         ) : (
                           <div className='flex flex-col items-center justify-center py-8 text-center'>
                             <div className='h-12 w-12 rounded-full bg-blush-sand flex items-center justify-center mb-3'>
@@ -7384,6 +7757,33 @@ function App() {
                           </Button>
                         </div>
 
+                        {patientPhotoViewMode === 'expanded' && selectedPatientAttachmentGroups.length > 0 && !photosSelection.selectionMode ? (
+                          <div className='flex items-center justify-end gap-2'>
+                            <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => photosSelection.setSelectionMode(true)}>Select</Button>
+                          </div>
+                        ) : null}
+                        {patientPhotoViewMode === 'expanded' && photosSelection.selectionMode ? (
+                          <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
+                            <p className='text-xs font-semibold text-espresso'>{photosSelection.selectedIds.size} selected</p>
+                            <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                              <Button
+                                size='sm'
+                                variant='destructive'
+                                className='h-7 text-xs'
+                                disabled={photosSelection.selectedIds.size === 0}
+                                onClick={() => requestDeleteConfirmation({
+                                  title: 'Delete photos?',
+                                  message: `Permanently delete ${photosSelection.selectedIds.size} photo${photosSelection.selectedIds.size === 1 ? '' : 's'}? This cannot be undone.`,
+                                  onConfirm: () => deleteSelectedPhotos(),
+                                })}
+                              >
+                                Delete
+                              </Button>
+                              <Button size='sm' variant='ghost' className='h-7 text-xs' onClick={photosSelection.exit}>Cancel</Button>
+                            </div>
+                          </div>
+                        ) : null}
+
                         {selectedPatientAttachmentGroups.length > 0 ? (
                           patientPhotoViewMode === 'collapsed' ? (
                             <div className='grid grid-cols-2 sm:grid-cols-3 gap-2'>
@@ -7446,8 +7846,18 @@ function App() {
                                         <button
                                           key={`expanded-photo-${entry.id}`}
                                           type='button'
-                                          className='relative aspect-square overflow-hidden rounded border border-clay/30 bg-warm-ivory'
-                                          onClick={() => openPhotoById(entry.id)}
+                                          className={cn(
+                                            'relative aspect-square overflow-hidden rounded border bg-warm-ivory',
+                                            photosSelection.isSelected(entry.id) ? 'border-action-primary border-2' : 'border-clay/30',
+                                          )}
+                                          onTouchStart={() => photosSelection.handleTouchStart(entry.id)}
+                                          onTouchEnd={photosSelection.handleTouchEnd}
+                                          onTouchMove={photosSelection.cancelLongPress}
+                                          onTouchCancel={photosSelection.cancelLongPress}
+                                          onClick={() => {
+                                            if (photosSelection.selectionMode) photosSelection.toggle(entry.id)
+                                            else openPhotoById(entry.id)
+                                          }}
                                         >
                                           {previewUrl ? (
                                             <img
@@ -7459,6 +7869,18 @@ function App() {
                                           ) : (
                                             <div className='h-full w-full flex items-center justify-center text-xs text-clay'>No preview</div>
                                           )}
+                                          {photosSelection.selectionMode ? (
+                                            <span className='absolute left-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-white/90 shadow'>
+                                              <input
+                                                type='checkbox'
+                                                className='h-4 w-4 accent-action-primary'
+                                                checked={photosSelection.isSelected(entry.id)}
+                                                onChange={() => photosSelection.toggle(entry.id)}
+                                                onClick={(event) => event.stopPropagation()}
+                                                aria-label={`Select photo ${entry.title || formatPhotoCategory(entry.category)}`}
+                                              />
+                                            </span>
+                                          ) : null}
                                         </button>
                                       )
                                     })}
@@ -7672,6 +8094,19 @@ function App() {
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Manage Templates</p>
                       <p className='text-xs text-clay mt-0.5'>Create and edit report Format Patterns used in Reports</p>
+                    </div>
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => setView('manageCustomViews')}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-primary/10 flex items-center justify-center shrink-0'>
+                      <Bookmark className='h-4 w-4 text-action-primary' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-espresso'>Manage Custom Views</p>
+                      <p className='text-xs text-clay mt-0.5'>Rename, edit, reorder, or delete saved Tag+Ward filter combos</p>
                     </div>
                   </button>
                 </div>
@@ -8388,6 +8823,11 @@ function App() {
           filter={patientListFilter}
           onChangeFilter={setPatientListFilter}
           onClear={() => setPatientListFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: patientListFilter.tagMode })}
+          views={orderedCustomViews}
+          onApplyView={(view) => setPatientListFilter(applyCustomView(view))}
+          onSaveView={(name) => void saveCustomView(name, patientListFilter)}
+          onRenameView={(id, name) => void renameCustomView(id, name)}
+          onDeleteView={(id) => void deleteCustomView(id)}
         />
 
         <PatientFilterDialog
@@ -8400,6 +8840,11 @@ function App() {
           filter={checklistFilter}
           onChangeFilter={setChecklistFilter}
           onClear={() => setChecklistFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: checklistFilter.tagMode })}
+          views={orderedCustomViews}
+          onApplyView={(view) => setChecklistFilter(applyCustomView(view))}
+          onSaveView={(name) => void saveCustomView(name, checklistFilter)}
+          onRenameView={(id, name) => void renameCustomView(id, name)}
+          onDeleteView={(id) => void deleteCustomView(id)}
         />
 
         <PatientFilterDialog
@@ -8426,6 +8871,11 @@ function App() {
             setCensusPoolUseWindow(true)
             setCensusPoolWindow(EMPTY_DATE_TIME_WINDOW)
           }}
+          views={orderedCustomViews}
+          onApplyView={(view) => setCensusFilter(applyCustomView(view))}
+          onSaveView={(name) => void saveCustomView(name, censusFilter)}
+          onRenameView={(id, name) => void renameCustomView(id, name)}
+          onDeleteView={(id) => void deleteCustomView(id)}
         />
       </main>
       <nav className={cn(
@@ -8517,7 +8967,7 @@ function App() {
             <button
               className={cn(
                 'flex flex-1 flex-col items-center gap-0.5 px-2 py-1.5 text-xs font-semibold rounded-xl transition-all duration-200',
-                view === 'settings' || view === 'manageTags' || view === 'tabSettings' || view === 'manageCustomActions'
+                view === 'settings' || view === 'manageTags' || view === 'tabSettings' || view === 'manageCustomActions' || view === 'manageCustomViews'
                   ? 'text-action-primary bg-action-primary/10'
                   : 'text-clay/70 hover:text-espresso hover:bg-clay/5',
               )}
