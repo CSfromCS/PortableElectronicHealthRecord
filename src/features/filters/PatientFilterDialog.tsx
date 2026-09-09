@@ -1,20 +1,22 @@
-import { Clock } from 'lucide-react'
+import { useState } from 'react'
+import { Bookmark, Clock, Pencil, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import { BulkTagPicker } from '@/features/tags/BulkTagPicker'
 import { cn } from '@/lib/utils'
-import type { TagDefinition, TagGroupDefinition } from '@/types'
+import type { CustomView, TagDefinition, TagGroupDefinition } from '@/types'
 import { PATIENT_POOL_CRITERIA, patientPoolCriteriaNeedWindow } from './patientFilterUtils'
 import type { DateTimeWindow, PatientPoolCriterion, TagFilterMode, TagWardFilterState } from './patientFilterUtils'
 
 export type PatientPoolFacetProps = {
   criteria: PatientPoolCriterion[]
   onChangeCriteria: (criteria: PatientPoolCriterion[]) => void
-  /** Whether the shared window below actually narrows Admitted/Discharged/Referred/MGH. False means those criteria match regardless of when (issue #81's "if no window is set" fallback). */
+  /** Whether the shared window below actually narrows Admitted/Discharged/Referred. False means those criteria match regardless of when (issue #81's "if no window is set" fallback). */
   useWindow: boolean
   onChangeUseWindow: (useWindow: boolean) => void
   /** Raw, independently-blankable fields — a blank field falls back to the matching field in `defaults` (last 12 hours, ending now), same as any other optional date/time field in this app. */
@@ -35,6 +37,11 @@ export const PatientFilterDialog = ({
   onChangeFilter,
   pool,
   onClear,
+  views,
+  onApplyView,
+  onSaveView,
+  onRenameView,
+  onDeleteView,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -46,7 +53,38 @@ export const PatientFilterDialog = ({
   onChangeFilter: (filter: TagWardFilterState) => void
   pool?: PatientPoolFacetProps
   onClear: () => void
+  /** Saved Tag+Ward filter combos — shared across every screen this dialog is used from, so a view
+   * saved here also shows up (and applies) from the Patients list, Master Checklist, or Reports
+   * picker's own copy of this dialog. */
+  views: CustomView[]
+  onApplyView: (view: CustomView) => void
+  onSaveView: (name: string) => void
+  onRenameView: (id: number, name: string) => void
+  onDeleteView: (id: number) => void
 }) => {
+  const [saveName, setSaveName] = useState('')
+  const [renamingViewId, setRenamingViewId] = useState<number | null>(null)
+  const [renamingViewName, setRenamingViewName] = useState('')
+
+  const handleSaveView = () => {
+    const name = saveName.trim()
+    if (!name) return
+    onSaveView(name)
+    setSaveName('')
+  }
+
+  const startRenameView = (view: CustomView) => {
+    setRenamingViewId(view.id ?? null)
+    setRenamingViewName(view.name)
+  }
+
+  const saveRenameView = () => {
+    if (renamingViewId === null) return
+    const name = renamingViewName.trim()
+    if (name) onRenameView(renamingViewId, name)
+    setRenamingViewId(null)
+  }
+
   const toggleTag = (tag: TagDefinition) => {
     if (tag.id === undefined) return
     const tagId = tag.id
@@ -86,6 +124,51 @@ export const PatientFilterDialog = ({
         </DialogHeader>
         <ScrollArea className='max-h-[65vh] pr-3'>
           <div className='space-y-5'>
+            {views.length > 0 ? (
+              <div className='space-y-1.5'>
+                <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Saved Views</p>
+                <div className='flex flex-col gap-1'>
+                  {views.map((view) => (
+                    <div key={view.id} className='flex items-center gap-1.5 rounded-lg border border-clay/20 bg-warm-ivory px-2 py-1'>
+                      {renamingViewId === view.id ? (
+                        <div className='flex-1 flex items-center gap-1.5'>
+                          <Input
+                            value={renamingViewName}
+                            onChange={(event) => setRenamingViewName(event.target.value)}
+                            className='h-7 text-sm'
+                            autoFocus
+                          />
+                          <Button size='sm' className='h-7' onClick={saveRenameView}>Save</Button>
+                        </div>
+                      ) : (
+                        <button
+                          type='button'
+                          className='flex-1 flex items-center gap-1.5 text-left text-sm text-espresso py-1 min-w-0'
+                          onClick={() => onApplyView(view)}
+                        >
+                          <Bookmark className='h-3.5 w-3.5 text-action-primary shrink-0' aria-hidden='true' />
+                          <span className='truncate'>{view.name}</span>
+                        </button>
+                      )}
+                      <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay shrink-0' aria-label={`Rename ${view.name}`} onClick={() => startRenameView(view)}>
+                        <Pencil className='h-3.5 w-3.5' />
+                      </Button>
+                      <Button
+                        variant='ghost'
+                        size='sm'
+                        className='h-7 w-7 p-0 text-action-danger shrink-0'
+                        aria-label={`Delete ${view.name}`}
+                        onClick={() => view.id !== undefined && onDeleteView(view.id)}
+                      >
+                        <Trash2 className='h-3.5 w-3.5' />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                <p className='text-xs text-clay'>Tap a view to apply its tags and wards here.</p>
+              </div>
+            ) : null}
+
             <div className='space-y-1.5'>
               <div className='flex items-center justify-between'>
                 <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tags</p>
@@ -140,6 +223,28 @@ export const PatientFilterDialog = ({
               )}
             </div>
 
+            <div className='space-y-1.5'>
+              <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Save as a View</p>
+              <div className='flex items-center gap-1.5'>
+                <Input
+                  value={saveName}
+                  onChange={(event) => setSaveName(event.target.value)}
+                  placeholder='e.g. "CD, Ward A"'
+                  className='h-8 text-sm'
+                  disabled={filter.tagIds.length === 0 && filter.wards.length === 0}
+                />
+                <Button
+                  size='sm'
+                  className='h-8'
+                  disabled={!saveName.trim() || (filter.tagIds.length === 0 && filter.wards.length === 0)}
+                  onClick={handleSaveView}
+                >
+                  Save
+                </Button>
+              </div>
+              <p className='text-xs text-clay'>Saves the tags and wards currently checked above — not the Special/Timebound facet below, which isn't part of a View.</p>
+            </div>
+
             {pool ? (
               <div className='space-y-2 rounded-xl border-2 border-dashed border-action-primary/50 bg-action-primary/5 p-3'>
                 <div className='flex items-center gap-1.5'>
@@ -147,7 +252,7 @@ export const PatientFilterDialog = ({
                   <p className='text-[11px] font-bold uppercase tracking-widest text-action-primary'>Special/Timebound Filter</p>
                 </div>
                 <p className='text-xs text-clay'>
-                  Unique to this picker — not available on the Patients list or Master Checklist filters. Narrows the pool by clinical status (Active/Admitted/Discharged/Referred/MGH), optionally within a shared time window.
+                  Unique to this picker — not available on the Patients list or Master Checklist filters. Narrows the pool by clinical status (Active/Admitted/Discharged/Referred), optionally within a shared time window.
                 </p>
                 <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
                   {PATIENT_POOL_CRITERIA.map((criterion) => (
@@ -171,14 +276,14 @@ export const PatientFilterDialog = ({
                         className='h-4 w-4 accent-action-primary'
                         checked={pool.useWindow}
                         onChange={(event) => pool.onChangeUseWindow(event.target.checked)}
-                        aria-label='Apply time window to Admitted/Discharged/Referred/MGH'
+                        aria-label='Apply time window to Admitted/Discharged/Referred'
                       />
                       <span className='text-sm text-espresso'>Limit to a time window</span>
                     </label>
                     <p className='text-xs text-clay'>
                       {pool.useWindow
-                        ? 'Shared window for Admitted/Discharged/Referred/MGH. Leave a field blank to use its default (last 12 hours, ending now).'
-                        : 'Unchecked: Admitted/Discharged/Referred/MGH match regardless of when.'}
+                        ? 'Shared window for Admitted/Discharged/Referred. Leave a field blank to use its default (last 12 hours, ending now).'
+                        : 'Unchecked: Admitted/Discharged/Referred match regardless of when.'}
                     </p>
                     <div className={cn('grid grid-cols-2 gap-2', !pool.useWindow && 'opacity-40 pointer-events-none')}>
                       <div className='space-y-1'>

@@ -1048,19 +1048,18 @@ const resolveCensusSummaryField = (
 const patientHasAutomationRole = (patient: Patient, tagsById: Map<number, TagDefinition>, role: TagAutomationRole): boolean =>
   (patient.tagIds ?? []).some((tagId) => tagsById.get(tagId)?.automationRole === role)
 
-const patientHasTagNamed = (patient: Patient, tagsById: Map<number, TagDefinition>, name: string): boolean =>
-  (patient.tagIds ?? []).some((tagId) => tagsById.get(tagId)?.name.trim().toLowerCase() === name.toLowerCase())
-
 /** One evaluation of `patternText` per output group (see `buildCensusOutputGroups`), each scoped
  * to patients carrying every tag in that group who were newly admitted/referred/discharged within
  * the lookback window (reusing the exact same detection as the Patient Filter's Special/Timebound
  * facet, via `matchesPatientPool`). On top of that window check, each status also requires a
- * specific tag: New Admissions requires the "Relationship: Main" tag (Referred already requires
- * "Relationship: Referral" internally, via `matchesPatientPool` itself); Discharged/Signed
- * Out/Expired share the same discharge-date-window check but are told apart by which literal
- * terminal tag ("Discharged"/"Signed Out"/"Expired") the patient carries — narrower than
+ * specific Automation Role: New Admissions requires "Relationship: Main" (Referred already
+ * requires "Relationship: Referral" internally, via `matchesPatientPool` itself); Discharged/
+ * Signed Out/Expired share the same discharge-date-window check but are told apart by which
+ * specific "Status: …" role the patient's terminal tag carries — narrower than
  * `matchesPatientPool`'s own "any terminal tag" check, which is deliberately kept broad for its
- * other callers (Patient Filter, Master Checklist). Every group always renders, even one where
+ * other callers (Patient Filter, Master Checklist). All five roles are load-bearing — see
+ * `LOAD_BEARING_AUTOMATION_ROLES` — so Manage Tags blocks deleting whichever tag currently
+ * fulfills one. Every group always renders, even one where
  * every count comes up 0 — a tally field is never blank (see `CensusSummaryFieldId`'s doc comment)
  * so it reports 0 plainly; only the corresponding `*List` field (and, if it sits alone on its own
  * line, that line — see `collapseBlanks`) disappears. Not a per-patient value — scans
@@ -1081,9 +1080,9 @@ const resolveCensusSummary = (config: CensusSummaryConfig, ctx: TemplateRenderCo
         matchesPatientPool(patient, ['admitted'], window, ctx.poolContext) && patientHasAutomationRole(patient, ctx.tagsById, 'relationship-main'),
       ),
       referred: patientsInGroup.filter((patient) => matchesPatientPool(patient, ['referred'], window, ctx.poolContext)),
-      discharged: dischargedInWindow.filter((patient) => patientHasTagNamed(patient, ctx.tagsById, 'Discharged')),
-      signedOut: dischargedInWindow.filter((patient) => patientHasTagNamed(patient, ctx.tagsById, 'Signed Out')),
-      expired: dischargedInWindow.filter((patient) => patientHasTagNamed(patient, ctx.tagsById, 'Expired')),
+      discharged: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-discharged')),
+      signedOut: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-signed-out')),
+      expired: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-expired')),
     }
     return renderEntryPattern(config.patternText, config.fieldIds, {}, (fieldId) => resolveCensusSummaryField(fieldId, groupCtx, config))
   })
