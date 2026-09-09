@@ -17,7 +17,6 @@ import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib
 import type {
   CustomAction,
   CustomActionCondition,
-  CustomActionKind,
   CustomActionScope,
   CustomActionTagEffect,
   CustomActionTriggerType,
@@ -44,14 +43,13 @@ type ConditionFormState = {
 type CustomActionFormState = {
   name: string
   scope: CustomActionScope
-  kind: CustomActionKind
   triggerType: CustomActionTriggerType
   triggerTagId: string
   /** Applied to every triggered patient unconditionally — no condition needs to be defined for this to run. */
   checklistItems: ChecklistItemDraft[]
   tagEffects: CustomActionTagEffect[]
   conditions: ConditionFormState[]
-  /** Only meaningful when kind === 'templateRun'. */
+  /** General scope only — optionally ALSO run a template on top of the above. Blank means no template. */
   templateRunTemplateId: string
   templateRunFilterTagIds: number[]
   templateRunFilterTagMode: 'AND' | 'OR'
@@ -75,7 +73,6 @@ const blankCondition = (): ConditionFormState => ({
 const blankCustomActionForm = (): CustomActionFormState => ({
   name: '',
   scope: 'patient',
-  kind: 'effects',
   triggerType: 'manual',
   triggerTagId: '',
   checklistItems: [],
@@ -99,7 +96,6 @@ const conditionToForm = (condition: CustomActionCondition): ConditionFormState =
 const actionToForm = (action: CustomAction): CustomActionFormState => ({
   name: action.name,
   scope: action.scope ?? 'patient',
-  kind: action.kind ?? 'effects',
   triggerType: action.triggerType,
   triggerTagId: action.triggerTagId !== undefined ? String(action.triggerTagId) : '',
   checklistItems: action.checklistItems.map((text) => ({ id: createChecklistItemId(), text })),
@@ -644,20 +640,9 @@ export const ManageCustomActionsScreen = ({
           tagEffects: [],
           conditions: previous.conditions.map((condition) => ({ ...condition, requiredTagIds: [], tagEffects: [] })),
         }
-        // 'templateRun' only makes sense for a General action — switching back to Per Patient
-        // forces the kind back to 'effects' and drops whatever template/filter was chosen.
-        : { ...previous, scope, kind: 'effects', templateRunTemplateId: '', templateRunFilterTagIds: [], templateRunFilterTagMode: 'OR', templateRunFilterWards: [] }
-    ))
-  }
-
-  // Switching kind clears whichever side's fields are about to be hidden, same rationale as
-  // setScope above — a templateRun action has no checklist items/conditions of its own, and an
-  // effects action has no template/filter.
-  const setKind = (kind: CustomActionKind) => {
-    setForm((previous) => (
-      kind === 'templateRun'
-        ? { ...previous, kind, checklistItems: [], conditions: [] }
-        : { ...previous, kind, templateRunTemplateId: '', templateRunFilterTagIds: [], templateRunFilterTagMode: 'OR', templateRunFilterWards: [] }
+        // Running a template only makes sense for a General action — switching back to Per
+        // Patient drops whatever template/filter was chosen.
+        : { ...previous, scope, templateRunTemplateId: '', templateRunFilterTagIds: [], templateRunFilterTagMode: 'OR', templateRunFilterWards: [] }
     ))
   }
 
@@ -687,18 +672,18 @@ export const ManageCustomActionsScreen = ({
     // A General action is always manual with no trigger tag, regardless of what's left over in
     // form state — belt-and-suspenders alongside setScope already clearing these on switch.
     const isGeneral = form.scope === 'general'
-    const isTemplateRun = isGeneral && form.kind === 'templateRun'
+    // A template only ever runs for a General action, and only when one is actually picked —
+    // it's additive on top of the checklist items/tag effects/conditions below, not a replacement.
+    const hasTemplateRun = isGeneral && form.templateRunTemplateId !== ''
     const triggerType = isGeneral ? 'manual' : form.triggerType
     const triggerTagId = !isGeneral && form.triggerTagId ? Number.parseInt(form.triggerTagId, 10) : undefined
     if (triggerType === 'automatic' && triggerTagId === undefined) return
-    if (isTemplateRun && !form.templateRunTemplateId) return
-    const checklistItems = isTemplateRun ? [] : formChecklistItemsToStrings(form.checklistItems)
+    const checklistItems = formChecklistItemsToStrings(form.checklistItems)
     const tagEffects = isGeneral ? [] : form.tagEffects
-    const conditions = isTemplateRun ? [] : formToConditions(form.conditions).map((condition) => (
+    const conditions = formToConditions(form.conditions).map((condition) => (
       isGeneral ? { ...condition, requiredTagIds: [], tagEffects: [] } : condition
     ))
-    const kind: CustomActionKind = isTemplateRun ? 'templateRun' : 'effects'
-    const templateRunFields = isTemplateRun ? {
+    const templateRunFields = hasTemplateRun ? {
       templateRunTemplateId: Number.parseInt(form.templateRunTemplateId, 10),
       templateRunFilterTagIds: form.templateRunFilterTagIds,
       templateRunFilterTagMode: form.templateRunFilterTagMode,
@@ -714,7 +699,6 @@ export const ManageCustomActionsScreen = ({
       await db.customActions.update(editingActionId, {
         name,
         scope: form.scope,
-        kind,
         triggerType,
         triggerTagId: triggerType === 'automatic' ? triggerTagId : undefined,
         checklistItems,
@@ -727,7 +711,6 @@ export const ManageCustomActionsScreen = ({
       await db.customActions.add({
         name,
         scope: form.scope,
-        kind,
         triggerType,
         triggerTagId: triggerType === 'automatic' ? triggerTagId : undefined,
         checklistItems,
@@ -806,16 +789,13 @@ export const ManageCustomActionsScreen = ({
                 <p className='text-sm font-semibold text-espresso truncate'>{action.name}</p>
                 <p className='text-[11px] text-clay/80'>
                   {action.scope === 'general' ? 'General · ' : ''}
-                  {action.kind === 'templateRun'
-                    ? `Runs template${action.templateRunTemplateId !== undefined ? ` "${reportTemplates.find((template) => template.id === action.templateRunTemplateId)?.name ?? 'deleted template'}"` : ''}`
-                    : (
-                      <>
-                        {action.triggerType === 'manual' ? 'Manual button' : `Automatic on "${triggerTagName(action)}" added`}
-                        {action.conditions.length > 0
-                          ? ` · ${action.conditions.length} condition${action.conditions.length === 1 ? '' : 's'}`
-                          : ' · applies uniformly (no conditions)'}
-                      </>
-                    )}
+                  {action.triggerType === 'manual' ? 'Manual button' : `Automatic on "${triggerTagName(action)}" added`}
+                  {action.conditions.length > 0
+                    ? ` · ${action.conditions.length} condition${action.conditions.length === 1 ? '' : 's'}`
+                    : ' · applies uniformly (no conditions)'}
+                  {action.templateRunTemplateId !== undefined
+                    ? ` · also runs "${reportTemplates.find((template) => template.id === action.templateRunTemplateId)?.name ?? 'deleted template'}"`
+                    : ''}
                 </p>
               </div>
               <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${action.name}`} onClick={() => openEdit(action)}>
@@ -876,122 +856,6 @@ export const ManageCustomActionsScreen = ({
                 </p>
               </div>
 
-              {form.scope === 'general' ? (
-                <div className='space-y-1'>
-                  <Label>What does this do?</Label>
-                  <div className='flex gap-3 text-sm'>
-                    <label className='flex items-center gap-1.5'>
-                      <input
-                        type='radio'
-                        name='customActionKind'
-                        checked={form.kind === 'effects'}
-                        onChange={() => setKind('effects')}
-                      />
-                      Checklist/tag effects
-                    </label>
-                    <label className='flex items-center gap-1.5'>
-                      <input
-                        type='radio'
-                        name='customActionKind'
-                        checked={form.kind === 'templateRun'}
-                        onChange={() => setKind('templateRun')}
-                      />
-                      Run a template
-                    </label>
-                  </div>
-                  {form.kind === 'templateRun' ? (
-                    <p className='text-xs text-clay'>
-                      Runs once: renders the chosen template across every patient matching the filter below, copies the result to the clipboard, and opens the preview. The filter only pre-selects patients — every matching patient can still be individually included or excluded each time this runs, since it's impossible to know in advance which ones should be skipped.
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {form.scope === 'general' && form.kind === 'templateRun' ? (
-                <div className='space-y-3'>
-                  <div className='space-y-1'>
-                    <Label>Template</Label>
-                    <Select value={form.templateRunTemplateId} onValueChange={(value) => setForm({ ...form, templateRunTemplateId: value })}>
-                      <SelectTrigger><SelectValue placeholder='Choose a template…' /></SelectTrigger>
-                      <SelectContent>
-                        {reportTemplates.map((template) => (
-                          <SelectItem key={template.id} value={String(template.id)}>{template.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {reportTemplates.length === 0 ? <p className='text-xs text-clay'>No templates yet — create one in Manage Templates.</p> : null}
-                  </div>
-
-                  <div className='space-y-1.5'>
-                    <div className='flex items-center justify-between'>
-                      <Label>Patient filter</Label>
-                      <div className='flex gap-0.5 bg-blush-sand/60 rounded-lg p-0.5 border border-clay/15'>
-                        <Button
-                          type='button'
-                          size='sm'
-                          variant={form.templateRunFilterTagMode === 'OR' ? 'default' : 'ghost'}
-                          className='h-6 px-2 text-[11px]'
-                          onClick={() => setForm({ ...form, templateRunFilterTagMode: 'OR' })}
-                        >
-                          Any (OR)
-                        </Button>
-                        <Button
-                          type='button'
-                          size='sm'
-                          variant={form.templateRunFilterTagMode === 'AND' ? 'default' : 'ghost'}
-                          className='h-6 px-2 text-[11px]'
-                          onClick={() => setForm({ ...form, templateRunFilterTagMode: 'AND' })}
-                        >
-                          All (AND)
-                        </Button>
-                      </div>
-                    </div>
-                    <BulkTagPicker
-                      tags={tags}
-                      groups={groups}
-                      selectedTagIds={new Set(form.templateRunFilterTagIds)}
-                      onToggle={(tag) => {
-                        if (tag.id === undefined) return
-                        const tagId = tag.id
-                        setForm({
-                          ...form,
-                          templateRunFilterTagIds: form.templateRunFilterTagIds.includes(tagId)
-                            ? form.templateRunFilterTagIds.filter((id) => id !== tagId)
-                            : [...form.templateRunFilterTagIds, tagId],
-                        })
-                      }}
-                    />
-                  </div>
-
-                  {wards.length > 0 ? (
-                    <div className='space-y-1.5'>
-                      <Label>Ward</Label>
-                      <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
-                        {wards.map((ward) => (
-                          <label key={ward} className='flex items-center gap-2.5 py-1 cursor-pointer'>
-                            <input
-                              type='checkbox'
-                              className='h-4 w-4 accent-action-primary'
-                              checked={form.templateRunFilterWards.includes(ward)}
-                              onChange={() => setForm({
-                                ...form,
-                                templateRunFilterWards: form.templateRunFilterWards.includes(ward)
-                                  ? form.templateRunFilterWards.filter((w) => w !== ward)
-                                  : [...form.templateRunFilterWards, ward],
-                              })}
-                              aria-label={`Toggle ward ${ward}`}
-                            />
-                            <span className='text-sm text-espresso'>{ward}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {form.kind !== 'templateRun' ? (
-              <>
               <div className='space-y-1'>
                 <Label>Trigger</Label>
                 <div className='flex gap-3 text-sm'>
@@ -1099,7 +963,102 @@ export const ManageCustomActionsScreen = ({
                   {form.conditions.length === 0 ? <p className='text-xs text-clay'>No conditions defined — this action only runs the unconditional items/effects above for every patient.</p> : null}
                 </div>
               </div>
-              </>
+
+              {form.scope === 'general' ? (
+                <div className='space-y-3 rounded-xl border border-clay/25 bg-warm-ivory/50 p-3'>
+                  <div>
+                    <Label>Also run a template (optional)</Label>
+                    <p className='text-xs text-clay'>
+                      Runs after the checklist items/tag effects above: renders the chosen template across every patient matching the filter below, copies the result to the clipboard, and opens the preview. The filter only pre-selects patients — every matching patient can still be individually included or excluded each time this runs, since it's impossible to know in advance which ones should be skipped.
+                    </p>
+                  </div>
+                  <div className='space-y-1'>
+                    <Label>Template</Label>
+                    <Select
+                      value={form.templateRunTemplateId}
+                      onValueChange={(value) => setForm({ ...form, templateRunTemplateId: value === '__none__' ? '' : value })}
+                    >
+                      <SelectTrigger><SelectValue placeholder='None' /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='__none__'>None</SelectItem>
+                        {reportTemplates.map((template) => (
+                          <SelectItem key={template.id} value={String(template.id)}>{template.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {reportTemplates.length === 0 ? <p className='text-xs text-clay'>No templates yet — create one in Manage Templates.</p> : null}
+                  </div>
+
+                  {form.templateRunTemplateId ? (
+                    <>
+                      <div className='space-y-1.5'>
+                        <div className='flex items-center justify-between'>
+                          <Label>Patient filter</Label>
+                          <div className='flex gap-0.5 bg-blush-sand/60 rounded-lg p-0.5 border border-clay/15'>
+                            <Button
+                              type='button'
+                              size='sm'
+                              variant={form.templateRunFilterTagMode === 'OR' ? 'default' : 'ghost'}
+                              className='h-6 px-2 text-[11px]'
+                              onClick={() => setForm({ ...form, templateRunFilterTagMode: 'OR' })}
+                            >
+                              Any (OR)
+                            </Button>
+                            <Button
+                              type='button'
+                              size='sm'
+                              variant={form.templateRunFilterTagMode === 'AND' ? 'default' : 'ghost'}
+                              className='h-6 px-2 text-[11px]'
+                              onClick={() => setForm({ ...form, templateRunFilterTagMode: 'AND' })}
+                            >
+                              All (AND)
+                            </Button>
+                          </div>
+                        </div>
+                        <BulkTagPicker
+                          tags={tags}
+                          groups={groups}
+                          selectedTagIds={new Set(form.templateRunFilterTagIds)}
+                          onToggle={(tag) => {
+                            if (tag.id === undefined) return
+                            const tagId = tag.id
+                            setForm({
+                              ...form,
+                              templateRunFilterTagIds: form.templateRunFilterTagIds.includes(tagId)
+                                ? form.templateRunFilterTagIds.filter((id) => id !== tagId)
+                                : [...form.templateRunFilterTagIds, tagId],
+                            })
+                          }}
+                        />
+                      </div>
+
+                      {wards.length > 0 ? (
+                        <div className='space-y-1.5'>
+                          <Label>Ward</Label>
+                          <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
+                            {wards.map((ward) => (
+                              <label key={ward} className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                                <input
+                                  type='checkbox'
+                                  className='h-4 w-4 accent-action-primary'
+                                  checked={form.templateRunFilterWards.includes(ward)}
+                                  onChange={() => setForm({
+                                    ...form,
+                                    templateRunFilterWards: form.templateRunFilterWards.includes(ward)
+                                      ? form.templateRunFilterWards.filter((w) => w !== ward)
+                                      : [...form.templateRunFilterWards, ward],
+                                  })}
+                                  aria-label={`Toggle ward ${ward}`}
+                                />
+                                <span className='text-sm text-espresso'>{ward}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           </ScrollArea>
@@ -1110,7 +1069,6 @@ export const ManageCustomActionsScreen = ({
               disabled={
                 !form.name.trim()
                 || (form.scope === 'patient' && form.triggerType === 'automatic' && !form.triggerTagId)
-                || (form.kind === 'templateRun' && !form.templateRunTemplateId)
               }
             >
               Save

@@ -3379,29 +3379,27 @@ function App() {
   // day-of-week/month condition that doesn't match today simply isn't offered by the button being
   // disabled-free (it always runs whatever currently applies), and an action with nothing
   // applicable today just reports that in a notice instead.
-  const triggerGeneralCustomAction = useCallback(async (action: CustomAction) => {
+  // Runs a general action's checklist items/tag effects immediately (if it has any that apply
+  // today), then — if it also has a template configured — opens the review dialog so the
+  // pre-selected patient list can be adjusted before generating (issue #129). The template run is
+  // additive: it happens after the checklist/tag effects, not instead of them.
+  const runGeneralCustomAction = useCallback(async (action: CustomAction) => {
     if (action.id === undefined) return
 
     const matched = resolveMatchingGeneralConditions(action)
-    if (!actionHasApplicableGeneralEffect(action, matched)) {
-      setNotice(`"${action.name}" has nothing to add today.`)
-      return
+    const hasEffect = actionHasApplicableGeneralEffect(action, matched)
+    if (hasEffect) {
+      await applyGeneralCustomActionEffects(action, matched, (items) => appendCustomActionChecklistItems(GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate, items))
     }
 
-    await applyGeneralCustomActionEffects(action, matched, (items) => appendCustomActionChecklistItems(GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate, items))
-    setNotice(`Ran "${action.name}".`)
-  }, [appendCustomActionChecklistItems, masterChecklistDate])
-
-  // A general action's button either runs its checklist/tag effects immediately, or — for a
-  // 'templateRun' action — opens the review dialog so the pre-selected patient list can be
-  // adjusted before generating (issue #129).
-  const runGeneralCustomAction = useCallback((action: CustomAction) => {
-    if (action.kind === 'templateRun') {
+    if (action.templateRunTemplateId !== undefined) {
       setTemplateRunReviewAction(action)
-      return
+    } else if (hasEffect) {
+      setNotice(`Ran "${action.name}".`)
+    } else {
+      setNotice(`"${action.name}" has nothing to add today.`)
     }
-    void triggerGeneralCustomAction(action)
-  }, [triggerGeneralCustomAction])
+  }, [appendCustomActionChecklistItems, masterChecklistDate])
 
   const templateRunReviewTemplate = useMemo(() => {
     if (!templateRunReviewAction) return null
@@ -6068,7 +6066,7 @@ function App() {
                                 size='sm'
                                 variant='outline'
                                 className='h-7 text-xs gap-1'
-                                onClick={() => runGeneralCustomAction(action)}
+                                onClick={() => void runGeneralCustomAction(action)}
                               >
                                 <Zap className='h-3.5 w-3.5' aria-hidden='true' />
                                 {action.name}

@@ -143,19 +143,10 @@ export interface CustomActionCondition {
   tagEffects: CustomActionTagEffect[]
 }
 
-/**
- * 'effects' (default when absent — every action before issue #129) applies checklist items/tag
- * effects per the conditions below. 'templateRun' (general scope only) is a one-shot action that
- * instead renders a single saved template across a filtered patient list and copies the result to
- * the clipboard — it has no checklist items, tag effects, or conditions of its own.
- */
-export type CustomActionKind = 'effects' | 'templateRun'
-
 export interface CustomAction {
   id?: number
   name: string
   scope: CustomActionScope
-  kind?: CustomActionKind
   triggerType: CustomActionTriggerType
   /** Required (and only meaningful) when triggerType === 'automatic': the tag whose absent→present transition fires this action. */
   triggerTagId?: number
@@ -164,11 +155,15 @@ export interface CustomAction {
   tagEffects: CustomActionTagEffect[]
   /** Optional additional scoping on top of the unconditional items/effects above — each matching condition's own checklist items and tag effects also apply. */
   conditions: CustomActionCondition[]
-  /** Only meaningful when kind === 'templateRun': which single ReportTemplate to run. */
+  /** General scope only (issue #129): optionally, ALSO render a single saved template across a
+   * filtered patient list and copy the result to the clipboard, on top of (not instead of) the
+   * checklist items/tag effects/conditions above — runs after them when the action is triggered.
+   * Unset means this action doesn't run a template at all. At most one template per action. */
   templateRunTemplateId?: number
-  /** Only meaningful when kind === 'templateRun' — the patient filter used to pre-select which
-   * patients to include when the action runs, adjustable at run time. Flattened rather than
-   * reusing TagWardFilterState, for the same reason as CustomView's own fields (see its comment). */
+  /** The patient filter used to pre-select which patients to include when the template runs,
+   * adjustable at run time. Only meaningful alongside templateRunTemplateId. Flattened rather
+   * than reusing TagWardFilterState, for the same reason as CustomView's own fields (see its
+   * comment). */
   templateRunFilterTagIds?: number[]
   templateRunFilterTagMode?: 'AND' | 'OR'
   templateRunFilterWards?: string[]
