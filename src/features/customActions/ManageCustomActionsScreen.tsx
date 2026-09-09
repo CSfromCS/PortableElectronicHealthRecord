@@ -13,7 +13,7 @@ import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
-import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import type {
   CustomAction,
   CustomActionCondition,
@@ -641,8 +641,8 @@ export const ManageCustomActionsScreen = ({
     setPendingConditionRemovalId(null)
   }
 
-  const reorderConditions = (sourceId: string, targetId: string) => {
-    setForm((previous) => ({ ...previous, conditions: moveItemByKey(previous.conditions, (condition) => condition.id, sourceId, targetId) }))
+  const reorderConditions = (sourceId: string, targetId: string, position: DropPosition) => {
+    setForm((previous) => ({ ...previous, conditions: moveItemByKey(previous.conditions, (condition) => condition.id, sourceId, targetId, position) }))
   }
   const conditionDrag = useDragReorder(form.conditions.map((condition) => condition.id), reorderConditions)
 
@@ -698,8 +698,8 @@ export const ManageCustomActionsScreen = ({
     setDeleteTarget(null)
   }
 
-  const reorderActions = async (sourceId: number, targetId: number) => {
-    const reordered = moveItemByKey(orderedActions, (action) => action.id, sourceId, targetId)
+  const reorderActions = async (sourceId: number, targetId: number, position: DropPosition) => {
+    const reordered = moveItemByKey(orderedActions, (action) => action.id, sourceId, targetId, position)
     await db.transaction('rw', [db.customActions], async () => {
       await Promise.all(
         reordered.map((action, index) =>
@@ -708,7 +708,7 @@ export const ManageCustomActionsScreen = ({
       )
     })
   }
-  const actionDrag = useDragReorder(orderedActions.map((action) => action.id as number), (source, target) => void reorderActions(source, target))
+  const actionDrag = useDragReorder(orderedActions.map((action) => action.id as number), (source, target, position) => void reorderActions(source, target, position))
 
   const triggerTagName = (action: CustomAction): string => {
     if (action.triggerTagId === undefined) return 'no tag configured'
@@ -744,7 +744,7 @@ export const ManageCustomActionsScreen = ({
               className={cn(
                 'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-2 transition-shadow',
                 actionDrag.isDragging(action.id as number) && 'opacity-50',
-                actionDrag.isDropTarget(action.id as number) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                dropIndicatorClassName(actionDrag.dropIndicator(action.id as number)),
               )}
               {...actionDrag.getItemProps(action.id as number)}
             >
@@ -902,7 +902,8 @@ export const ManageCustomActionsScreen = ({
                       key={condition.id}
                       className={cn(
                         conditionDrag.isDragging(condition.id) && 'opacity-50',
-                        conditionDrag.isDropTarget(condition.id) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent rounded-xl',
+                        conditionDrag.dropIndicator(condition.id) && 'rounded-xl',
+                        dropIndicatorClassName(conditionDrag.dropIndicator(condition.id)),
                       )}
                       {...conditionDrag.getItemProps(condition.id)}
                     >

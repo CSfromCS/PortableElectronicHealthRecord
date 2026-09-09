@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
-import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { cn } from '@/lib/utils'
 import { BulkTagPicker } from '@/features/tags/BulkTagPicker'
 import { TagChip } from '@/features/tags/TagChip'
@@ -108,8 +108,8 @@ export const ManageCustomViewsScreen = ({
     setDeleteTarget(null)
   }
 
-  const reorderViews = async (sourceId: number, targetId: number) => {
-    const reordered = moveItemByKey(orderedViews, (view) => view.id, sourceId, targetId)
+  const reorderViews = async (sourceId: number, targetId: number, position: DropPosition) => {
+    const reordered = moveItemByKey(orderedViews, (view) => view.id, sourceId, targetId, position)
     await db.transaction('rw', [db.customViews], async () => {
       await Promise.all(
         reordered.map((view, index) =>
@@ -118,7 +118,7 @@ export const ManageCustomViewsScreen = ({
       )
     })
   }
-  const viewDrag = useDragReorder(orderedViews.map((view) => view.id as number), (source, target) => void reorderViews(source, target))
+  const viewDrag = useDragReorder(orderedViews.map((view) => view.id as number), (source, target, position) => void reorderViews(source, target, position))
 
   return (
     <Card className='bg-white/80 border-clay/25 shadow-sm'>
@@ -148,7 +148,7 @@ export const ManageCustomViewsScreen = ({
                 className={cn(
                   'rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-2 transition-shadow',
                   viewDrag.isDragging(view.id as number) && 'opacity-50',
-                  viewDrag.isDropTarget(view.id as number) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                  dropIndicatorClassName(viewDrag.dropIndicator(view.id as number)),
                 )}
                 {...viewDrag.getItemProps(view.id as number)}
               >

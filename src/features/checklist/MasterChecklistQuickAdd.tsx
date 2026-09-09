@@ -48,7 +48,7 @@ export const MasterChecklistQuickAdd = ({ options, onAdd }: MasterChecklistQuick
     setSelectedOptionId(option.id)
     setOptionQuery('')
     setIsOptionListOpen(false)
-    window.setTimeout(() => itemInputRef.current?.focus(), 0)
+    window.setTimeout(() => itemInputRef.current?.focus({ preventScroll: true }), 0)
   }
 
   const submitItem = () => {
@@ -56,7 +56,10 @@ export const MasterChecklistQuickAdd = ({ options, onAdd }: MasterChecklistQuick
     if (!nextText || selectedOptionId == null) return
     onAdd(selectedOptionId, nextText)
     setItemText('')
-    itemInputRef.current?.focus()
+    // preventScroll: this refocuses the same already-visible input right after adding an item —
+    // no need for the browser's automatic scroll-into-view, which for rapid successive adds
+    // otherwise reads as an unprompted jolt (see TapToEditField's own note on the same issue).
+    itemInputRef.current?.focus({ preventScroll: true })
   }
 
   const handleOptionKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {

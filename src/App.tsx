@@ -52,7 +52,7 @@ import { DragHandle } from '@/lib/dnd/DragHandle'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
-import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { useEntrySelection } from '@/lib/useEntrySelection'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
@@ -739,7 +739,7 @@ function App() {
   const [medicationForm, setMedicationForm] = useState<MedicationFormState>(() => initialMedicationForm())
   const [editingMedicationId, setEditingMedicationId] = useState<number | null>(null)
   const [draggingMedicationIndex, setDraggingMedicationIndex] = useState<number | null>(null)
-  const [touchMedicationTargetIndex, setTouchMedicationTargetIndex] = useState<number | null>(null)
+  const [medicationDropTarget, setMedicationDropTarget] = useState<{ index: number; position: DropPosition } | null>(null)
   const [orderForm, setOrderForm] = useState<OrderFormState>(() => initialOrderForm())
   const [editingOrderId, setEditingOrderId] = useState<number | null>(null)
   const [orderDraftId, setOrderDraftId] = useState<number | null>(null)
@@ -1586,8 +1586,8 @@ function App() {
     setSelectedCensusPatientIds([])
   }
 
-  const reorderCensusPatientSelection = (sourcePatientId: number, targetPatientId: number) => {
-    setSelectedCensusPatientIds((previous) => moveItemByKey(previous, (id) => id, sourcePatientId, targetPatientId))
+  const reorderCensusPatientSelection = (sourcePatientId: number, targetPatientId: number, position: DropPosition) => {
+    setSelectedCensusPatientIds((previous) => moveItemByKey(previous, (id) => id, sourcePatientId, targetPatientId, position))
   }
   const censusPatientDrag = useDragReorder(selectedCensusPatientIds, reorderCensusPatientSelection)
 
@@ -4513,16 +4513,19 @@ function App() {
     setMedicationForm(initialMedicationForm())
   }
 
-  const reorderStructuredMedication = useCallback(async (sourceIndex: number, targetIndex: number) => {
-    if (selectedPatientId === null || sourceIndex === targetIndex) return
+  const reorderStructuredMedication = useCallback(async (sourceIndex: number, targetIndex: number, position: DropPosition) => {
+    if (selectedPatientId === null) return
 
     const sourceEntry = selectedPatientStructuredMeds[sourceIndex]
     const targetEntry = selectedPatientStructuredMeds[targetIndex]
-    if (!sourceEntry || !targetEntry) return
+    if (!sourceEntry || !targetEntry || sourceEntry.id === targetEntry.id) return
 
     const reorderedEntries = [...selectedPatientStructuredMeds]
     const [movedEntry] = reorderedEntries.splice(sourceIndex, 1)
-    reorderedEntries.splice(targetIndex, 0, movedEntry)
+    const targetIndexAfterRemoval = reorderedEntries.findIndex((entry) => entry.id === targetEntry.id)
+    if (targetIndexAfterRemoval === -1) return
+    const insertIndex = position === 'before' ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
+    reorderedEntries.splice(insertIndex, 0, movedEntry)
 
     await db.transaction('rw', [db.medications], async () => {
       await Promise.all(reorderedEntries.map((entry, index) => {
@@ -4541,7 +4544,7 @@ function App() {
 
   const resetMedicationDragState = useCallback(() => {
     setDraggingMedicationIndex(null)
-    setTouchMedicationTargetIndex(null)
+    setMedicationDropTarget(null)
   }, [])
 
   const endMedicationDrag = useCallback(() => {
@@ -4551,7 +4554,7 @@ function App() {
   const startMedicationTouchDrag = useCallback((event: TouchEvent<HTMLButtonElement>, index: number) => {
     event.preventDefault()
     setDraggingMedicationIndex(index)
-    setTouchMedicationTargetIndex(index)
+    setMedicationDropTarget({ index, position: 'after' })
   }, [])
 
   const updateMedicationTouchTarget = useCallback((event: TouchEvent<HTMLButtonElement>) => {
@@ -4563,31 +4566,29 @@ function App() {
     const targetElement = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
     const medicationItemContainer = targetElement?.closest('[data-medication-index]')
     if (!(medicationItemContainer instanceof HTMLElement)) {
-      setTouchMedicationTargetIndex(null)
+      setMedicationDropTarget(null)
       return
     }
 
     const parsedTargetIndex = Number.parseInt(medicationItemContainer.dataset.medicationIndex ?? '', 10)
     if (!Number.isInteger(parsedTargetIndex)) {
-      setTouchMedicationTargetIndex(null)
+      setMedicationDropTarget(null)
       return
     }
 
     event.preventDefault()
-    setTouchMedicationTargetIndex(parsedTargetIndex)
+    const rect = medicationItemContainer.getBoundingClientRect()
+    const position: DropPosition = touchPoint.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setMedicationDropTarget({ index: parsedTargetIndex, position })
   }, [draggingMedicationIndex])
 
   const endMedicationTouchDrag = useCallback(() => {
-    if (
-      draggingMedicationIndex !== null
-      && touchMedicationTargetIndex !== null
-      && draggingMedicationIndex !== touchMedicationTargetIndex
-    ) {
-      void reorderStructuredMedication(draggingMedicationIndex, touchMedicationTargetIndex)
+    if (draggingMedicationIndex !== null && medicationDropTarget !== null && draggingMedicationIndex !== medicationDropTarget.index) {
+      void reorderStructuredMedication(draggingMedicationIndex, medicationDropTarget.index, medicationDropTarget.position)
     }
 
     resetMedicationDragState()
-  }, [draggingMedicationIndex, reorderStructuredMedication, resetMedicationDragState, touchMedicationTargetIndex])
+  }, [draggingMedicationIndex, medicationDropTarget, reorderStructuredMedication, resetMedicationDragState])
 
   const cancelMedicationTouchDrag = useCallback(() => {
     resetMedicationDragState()
@@ -4598,6 +4599,9 @@ function App() {
 
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setMedicationDropTarget((previous) => (previous?.index === targetIndex && previous.position === position ? previous : { index: targetIndex, position }))
   }, [draggingMedicationIndex])
 
   const dropMedicationItem = useCallback((event: DragEvent<HTMLLIElement>, targetIndex: number) => {
@@ -4607,7 +4611,9 @@ function App() {
       return
     }
 
-    void reorderStructuredMedication(draggingMedicationIndex, targetIndex)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    void reorderStructuredMedication(draggingMedicationIndex, targetIndex, position)
     resetMedicationDragState()
   }, [draggingMedicationIndex, reorderStructuredMedication, resetMedicationDragState])
 
@@ -4615,7 +4621,7 @@ function App() {
     const targetIndex = direction === 'up' ? index - 1 : index + 1
     if (targetIndex < 0 || targetIndex >= selectedPatientStructuredMeds.length) return
 
-    void reorderStructuredMedication(index, targetIndex)
+    void reorderStructuredMedication(index, targetIndex, direction === 'up' ? 'before' : 'after')
   }, [reorderStructuredMedication, selectedPatientStructuredMeds.length])
 
   const addStructuredLab = async () => {
@@ -5660,6 +5666,18 @@ function App() {
                     size='sm'
                     variant='outline'
                     className='h-7 text-xs'
+                    onClick={() => {
+                      const ids = visiblePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined)
+                      const allSelected = ids.length > 0 && ids.every((id) => selectedPatientIdsForTagging.has(id))
+                      setSelectedPatientIdsForTagging(allSelected ? new Set() : new Set(ids))
+                    }}
+                  >
+                    {visiblePatients.length > 0 && visiblePatients.every((patient) => patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id)) ? 'Deselect All' : 'Select All'}
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 text-xs'
                     disabled={selectedPatientIdsForTagging.size === 0}
                     onClick={() => openBulkTagDialog('add')}
                   >
@@ -6033,7 +6051,7 @@ function App() {
                                       className={cn(
                                         'flex items-center gap-2 rounded border border-clay/30 bg-warm-ivory px-2 py-1 transition-shadow',
                                         censusPatientDrag.isDragging(patientId) && 'opacity-50',
-                                        censusPatientDrag.isDropTarget(patientId) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                                        dropIndicatorClassName(censusPatientDrag.dropIndicator(patientId)),
                                       )}
                                       {...censusPatientDrag.getItemProps(patientId)}
                                     >
@@ -6391,18 +6409,31 @@ function App() {
                           />
                         </TabsContent>
                         <TabsContent value='discharge'>
-                          <ServiceDiagnosisFields
-                            patient={selectedPatient}
-                            tagsById={tagsById}
-                            unassigned={profileForm.dischargeDiagnosisUnassigned}
-                            byService={profileForm.dischargeDiagnosisByService}
-                            onChangeUnassigned={(text) => updateProfileField('dischargeDiagnosisUnassigned', text)}
-                            onChangeService={(serviceId, text) => updateProfileField('dischargeDiagnosisByService', { ...profileForm.dischargeDiagnosisByService, [serviceId]: text })}
-                            label='Discharge Diagnosis'
-                            mentionableAttachments={mentionableAttachments}
-                            attachmentByTitle={mentionableAttachmentByTitle}
-                            onOpenPhotoById={openPhotoById}
-                          />
+                          <div className='space-y-2'>
+                            <Button
+                              type='button'
+                              size='sm'
+                              variant='outline'
+                              onClick={() => {
+                                updateProfileField('dischargeDiagnosisUnassigned', profileForm.admissionDiagnosisUnassigned)
+                                updateProfileField('dischargeDiagnosisByService', { ...profileForm.dischargeDiagnosisByService, ...profileForm.admissionDiagnosisByService })
+                              }}
+                            >
+                              Copy Admission Diagnosis
+                            </Button>
+                            <ServiceDiagnosisFields
+                              patient={selectedPatient}
+                              tagsById={tagsById}
+                              unassigned={profileForm.dischargeDiagnosisUnassigned}
+                              byService={profileForm.dischargeDiagnosisByService}
+                              onChangeUnassigned={(text) => updateProfileField('dischargeDiagnosisUnassigned', text)}
+                              onChangeService={(serviceId, text) => updateProfileField('dischargeDiagnosisByService', { ...profileForm.dischargeDiagnosisByService, [serviceId]: text })}
+                              label='Discharge Diagnosis'
+                              mentionableAttachments={mentionableAttachments}
+                              attachmentByTitle={mentionableAttachmentByTitle}
+                              onOpenPhotoById={openPhotoById}
+                            />
+                          </div>
                         </TabsContent>
                       </Tabs>
                     </div>
@@ -6774,6 +6805,9 @@ function App() {
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{vitalsSelection.selectedIds.size} selected</p>
                                 <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => vitalsSelection.toggleSelectAll(patientVitals?.map((entry) => entry.id) ?? [])}>
+                                    {patientVitals && patientVitals.length > 0 && patientVitals.every((entry) => vitalsSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
+                                  </Button>
                                   <Button
                                     size='sm'
                                     variant='destructive'
@@ -6994,6 +7028,9 @@ function App() {
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{medicationsSelection.selectedIds.size} selected</p>
                                 <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => medicationsSelection.toggleSelectAll(selectedPatientStructuredMeds.map((entry) => entry.id))}>
+                                    {selectedPatientStructuredMeds.length > 0 && selectedPatientStructuredMeds.every((entry) => medicationsSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
+                                  </Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('active')}>Mark Active</Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('discontinued')}>Mark Discontinued</Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={medicationsSelection.selectedIds.size === 0} onClick={() => void setSelectedMedicationsStatus('completed')}>Mark Completed</Button>
@@ -7023,7 +7060,7 @@ function App() {
                                   'flex items-center gap-2 rounded-sm border-b border-clay/30 py-1 text-sm last:border-0',
                                   !medicationsSelection.selectionMode && 'justify-between',
                                   draggingMedicationIndex === index && 'opacity-60',
-                                  touchMedicationTargetIndex === index && draggingMedicationIndex !== null && 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent',
+                                  dropIndicatorClassName(medicationDropTarget?.index === index && draggingMedicationIndex !== null ? medicationDropTarget.position : null),
                                 )}
                                 onDragOver={(event) => allowMedicationDrop(event, index)}
                                 onDrop={(event) => dropMedicationItem(event, index)}
@@ -7381,6 +7418,9 @@ function App() {
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{labsSelection.selectedIds.size} selected</p>
                                 <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => labsSelection.toggleSelectAll(selectedPatientStructuredLabs.map((entry) => entry.id))}>
+                                    {selectedPatientStructuredLabs.length > 0 && selectedPatientStructuredLabs.every((entry) => labsSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
+                                  </Button>
                                   <Button
                                     size='sm'
                                     variant='destructive'
@@ -7569,6 +7609,9 @@ function App() {
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{ordersSelection.selectedIds.size} selected</p>
                                 <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                                  <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => ordersSelection.toggleSelectAll(selectedPatientOrders.map((entry) => entry.id))}>
+                                    {selectedPatientOrders.length > 0 && selectedPatientOrders.every((entry) => ordersSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
+                                  </Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('active')}>Mark Active</Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('carriedOut')}>Mark Carried Out</Button>
                                   <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('discontinued')}>Mark Discontinued</Button>
@@ -7766,6 +7809,20 @@ function App() {
                           <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                             <p className='text-xs font-semibold text-espresso'>{photosSelection.selectedIds.size} selected</p>
                             <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                className='h-7 text-xs'
+                                onClick={() => {
+                                  const allPhotoIds = selectedPatientExpandedPhotoSections.flatMap((section) => section.entries.map((entry) => entry.id))
+                                  photosSelection.toggleSelectAll(allPhotoIds)
+                                }}
+                              >
+                                {(() => {
+                                  const allPhotoIds = selectedPatientExpandedPhotoSections.flatMap((section) => section.entries.map((entry) => entry.id))
+                                  return allPhotoIds.length > 0 && allPhotoIds.every((id) => photosSelection.isSelected(id)) ? 'Deselect All' : 'Select All'
+                                })()}
+                              </Button>
                               <Button
                                 size='sm'
                                 variant='destructive'

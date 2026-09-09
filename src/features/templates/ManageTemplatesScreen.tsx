@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { DragHandle } from '@/lib/dnd/DragHandle'
-import { useDragReorder } from '@/lib/dnd/useDragReorder'
+import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { toLocalISODate, toLocalTime } from '@/lib/dateTime'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
@@ -1752,15 +1752,15 @@ export const ManageTemplatesScreen = ({
     setDeleteTarget(null)
   }
 
-  const reorderTemplates = async (sourceId: number, targetId: number) => {
-    const reordered = moveItemByKey(ordered, (template) => template.id, sourceId, targetId)
+  const reorderTemplates = async (sourceId: number, targetId: number, position: DropPosition) => {
+    const reordered = moveItemByKey(ordered, (template) => template.id, sourceId, targetId, position)
     await Promise.all(
       reordered.map((template, index) =>
         template.id === undefined || template.sortOrder === index ? Promise.resolve() : db.reportTemplates.update(template.id, { sortOrder: index }),
       ),
     )
   }
-  const templateDrag = useDragReorder(ordered.map((template) => template.id as number), (source, target) => void reorderTemplates(source, target))
+  const templateDrag = useDragReorder(ordered.map((template) => template.id as number), (source, target, position) => void reorderTemplates(source, target, position))
 
   return (
     <Card className='bg-white/80 border-clay/25 shadow-sm'>
@@ -1804,7 +1804,7 @@ export const ManageTemplatesScreen = ({
                     className={cn(
                       'flex items-center gap-2 rounded-lg border border-clay/25 bg-white/70 px-3 py-2 transition-shadow',
                       templateDrag.isDragging(template.id as number) && 'opacity-50',
-                      templateDrag.isDropTarget(template.id as number) && 'ring-2 ring-action-primary/50 ring-offset-1 ring-offset-transparent',
+                      dropIndicatorClassName(templateDrag.dropIndicator(template.id as number)),
                     )}
                     {...templateDrag.getItemProps(template.id as number)}
                   >

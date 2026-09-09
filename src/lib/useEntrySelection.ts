@@ -7,6 +7,9 @@ export type EntrySelectionController = {
   selectedIds: Set<number>
   isSelected: (id: number | undefined) => boolean
   toggle: (id: number | undefined) => void
+  /** Selects every id in `ids` if they aren't ALL already selected; otherwise clears the
+   * selection (a standard "select all" checkbox toggle). Undefined entries are ignored. */
+  toggleSelectAll: (ids: (number | undefined)[]) => void
   exit: () => void
   handleTouchStart: (id: number | undefined) => void
   handleTouchEnd: (event: TouchEvent<HTMLElement>) => void
@@ -43,6 +46,14 @@ export function useEntrySelection(): EntrySelectionController {
     setSelectedIds(new Set())
   }
 
+  const toggleSelectAll = (ids: (number | undefined)[]) => {
+    const definedIds = ids.filter((id): id is number => id !== undefined)
+    setSelectedIds((previous) => {
+      const allAlreadySelected = definedIds.length > 0 && definedIds.every((id) => previous.has(id))
+      return allAlreadySelected ? new Set() : new Set(definedIds)
+    })
+  }
+
   const cancelLongPress = () => {
     if (longPressTimerRef.current !== null) {
       window.clearTimeout(longPressTimerRef.current)
@@ -72,6 +83,7 @@ export function useEntrySelection(): EntrySelectionController {
     selectedIds,
     isSelected: (id) => id !== undefined && selectedIds.has(id),
     toggle,
+    toggleSelectAll,
     exit,
     handleTouchStart,
     handleTouchEnd,
