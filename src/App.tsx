@@ -59,7 +59,6 @@ import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import {
   formatDateShortMonthDay,
   formatCalculatedNumber,
-  getEffectiveAdmitDate,
   parseNumericInput,
   toLocalISODate,
   toLocalTime,
@@ -148,7 +147,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { ManageCustomViewsScreen } from './features/filters/ManageCustomViewsScreen'
@@ -200,6 +199,9 @@ import {
 } from './features/filters/patientFilterUtils'
 import type { DateTimeWindow, PatientPoolCriterion, TagWardFilterState } from './features/filters/patientFilterUtils'
 import { loadTagFilterMode, saveTagFilterMode } from './features/filters/filterSettings'
+import { PatientSortConfigDialog } from './features/patients/PatientSortConfigDialog'
+import { TemplateRunActionDialog } from './features/customActions/TemplateRunActionDialog'
+import { DEFAULT_PATIENT_SORT_CONFIG, sortPatientsByConfig, type PatientSortConfig } from './features/patients/patientSort'
 import {
   addMainServiceTagToPatient,
   addReferralServiceTagToPatient,
@@ -662,7 +664,22 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [isAddPatientCollapsed, setIsAddPatientCollapsed] = useState(() => loadAddPatientCollapsed())
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
-  const [sortBy, setSortBy] = useState<'room' | 'name' | 'admitDate'>('room')
+  // Shared multi-level patient sort (issue #129) — one config, edited from any of the Patients
+  // list, Master Checklist, or Reports patient picker screens, kept in sync across all three via
+  // this single piece of state rather than each screen computing its own order.
+  const [patientSortConfig, setPatientSortConfig] = useState<PatientSortConfig>(DEFAULT_PATIENT_SORT_CONFIG)
+  const [patientSortDialogOpen, setPatientSortDialogOpen] = useState(false)
+
+  // Independent display-only sort controls for the Medications/Labs/Orders tabs — these never
+  // touch the underlying data (Medications' own manual sortOrder stays intact underneath), they
+  // just decide what order the current tab renders in. Medications' drag-to-reorder only makes
+  // sense while its own manual order is the thing being displayed, hence the extra 'manual' mode.
+  const [medicationSortMode, setMedicationSortMode] = useState<'manual' | 'alphabetical' | 'date'>('manual')
+  const [medicationSortDirection, setMedicationSortDirection] = useState<'asc' | 'desc'>('asc')
+  const [labSortMode, setLabSortMode] = useState<'time' | 'labType'>('time')
+  const [labSortDirection, setLabSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [orderSortMode, setOrderSortMode] = useState<'time' | 'service'>('time')
+  const [orderSortDirection, setOrderSortDirection] = useState<'asc' | 'desc'>('desc')
 
   // Issue #81: independent Tag+Ward filters for the Patients list, Master Checklist, and the
   // census/vitals patient picker (this app's closest analog to a "Reporting" multi-patient view —
@@ -862,6 +879,9 @@ function App() {
   const [bulkCustomActionTarget, setBulkCustomActionTarget] = useState<CustomAction | null>(null)
   const [isBulkCustomActionApplying, setIsBulkCustomActionApplying] = useState(false)
   const [customActionResolveState, setCustomActionResolveState] = useState<{ action: CustomAction; patient: Patient } | null>(null)
+  // The general "run a template" action currently being reviewed before generating (issue #129)
+  // — its saved filter pre-selects matching patients, adjustable before the user hits Generate.
+  const [templateRunReviewAction, setTemplateRunReviewAction] = useState<CustomAction | null>(null)
   const censusSelectionInitializedRef = useRef(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const onboardingAutoInstallAttemptedRef = useRef(false)
@@ -1526,15 +1546,11 @@ function App() {
     [censusPoolUseWindow, censusResolvedWindow],
   )
   const censusSelectablePatients = useMemo(() => {
-    return (patients ?? [])
+    const filtered = (patients ?? [])
       .filter((patient) => matchesTagWardFilter(patient, censusFilter))
       .filter((patient) => matchesPatientPool(patient, censusPoolCriteria, censusEffectiveWindow, patientPoolContext))
-      .sort((a, b) => {
-        const byRoom = a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-        if (byRoom !== 0) return byRoom
-        return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
-      })
-  }, [patients, censusFilter, censusPoolCriteria, censusEffectiveWindow, patientPoolContext])
+    return sortPatientsByConfig(filtered, patientSortConfig)
+  }, [patients, censusFilter, censusPoolCriteria, censusEffectiveWindow, patientPoolContext, patientSortConfig])
   const censusSelectablePatientIds = useMemo(
     () => censusSelectablePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined),
     [censusSelectablePatients],
@@ -1626,6 +1642,21 @@ function App() {
     return structuredMedsByPatient.get(selectedPatientId) ?? []
   }, [selectedPatientId, structuredMedsByPatient])
 
+  // Display order only — the drag handle (and the index math it relies on) is only shown while
+  // sort mode is 'manual', at which point this is just selectedPatientStructuredMeds unchanged,
+  // so dragging always operates on the same order it's rendering.
+  const displayedPatientStructuredMeds = useMemo(() => {
+    if (medicationSortMode === 'manual') return selectedPatientStructuredMeds
+    const sorted = [...selectedPatientStructuredMeds]
+    sorted.sort((a, b) => {
+      const comparison = medicationSortMode === 'alphabetical'
+        ? a.medication.localeCompare(b.medication)
+        : a.createdAt.localeCompare(b.createdAt)
+      return medicationSortDirection === 'asc' ? comparison : -comparison
+    })
+    return sorted
+  }, [selectedPatientStructuredMeds, medicationSortMode, medicationSortDirection])
+
   const structuredLabsByPatient = useMemo(() => {
     const grouped = new Map<number, LabEntry[]>()
     ;(labs ?? []).forEach((entry) => {
@@ -1660,6 +1691,17 @@ function App() {
     () => new Map(LAB_TEMPLATES.map((template) => [template.id, template] as const)),
     [],
   )
+
+  const displayedPatientStructuredLabs = useMemo(() => {
+    const sorted = [...selectedPatientStructuredLabs]
+    sorted.sort((a, b) => {
+      const comparison = labSortMode === 'labType'
+        ? (labTemplatesById.get(a.templateId)?.name ?? a.templateId).localeCompare(labTemplatesById.get(b.templateId)?.name ?? b.templateId)
+        : `${a.date}T${a.time ?? ''}`.localeCompare(`${b.date}T${b.time ?? ''}`)
+      return labSortDirection === 'asc' ? comparison : -comparison
+    })
+    return sorted
+  }, [selectedPatientStructuredLabs, labSortMode, labSortDirection, labTemplatesById])
 
   const selectedLabTemplate = useMemo(
     () => LAB_TEMPLATES.find((template) => template.id === selectedLabTemplateId) ?? LAB_TEMPLATES[0],
@@ -1773,6 +1815,17 @@ function App() {
     return structuredOrdersByPatient.get(selectedPatientId) ?? []
   }, [selectedPatientId, structuredOrdersByPatient])
 
+  const displayedPatientOrders = useMemo(() => {
+    const sorted = [...selectedPatientOrders]
+    sorted.sort((a, b) => {
+      const comparison = orderSortMode === 'service'
+        ? a.service.localeCompare(b.service)
+        : `${a.orderDate}T${a.orderTime}`.localeCompare(`${b.orderDate}T${b.orderTime}`)
+      return orderSortDirection === 'asc' ? comparison : -comparison
+    })
+    return sorted
+  }, [selectedPatientOrders, orderSortMode, orderSortDirection])
+
   const patientsById = useMemo(() => {
     const map = new Map<number, Patient>()
     ;(patients ?? []).forEach((patient) => {
@@ -1801,13 +1854,10 @@ function App() {
   }, [allDailyUpdates])
 
   const masterChecklistItems = useMemo<MasterChecklistItem[]>(() => {
-    const sortedPatients = (patients ?? [])
-      .filter((patient) => isPatientActive(patient, tagsById))
-      .sort((a, b) => {
-      const byRoom = a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-      if (byRoom !== 0) return byRoom
-      return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
-    })
+    const sortedPatients = sortPatientsByConfig(
+      (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)),
+      patientSortConfig,
+    )
 
     const items: MasterChecklistItem[] = [
       ...buildMasterChecklistItemsForSource(
@@ -1832,7 +1882,7 @@ function App() {
     })
 
     return items
-  }, [dailyUpdatesByPatient, masterChecklistDate, patients, tagsById])
+  }, [dailyUpdatesByPatient, masterChecklistDate, patients, tagsById, patientSortConfig])
 
   const reviewablePhotoAttachments = useMemo(() => {
     return (photoAttachments ?? [])
@@ -2266,10 +2316,7 @@ function App() {
         .includes(query)
     }
 
-    const compareByRoom = (a: Patient, b: Patient) =>
-      a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-
-    return (patients ?? [])
+    const filtered = (patients ?? [])
       .filter((patient) => {
         if (statusFilter === 'all') return true
         const active = isPatientActive(patient, tagsById)
@@ -2277,16 +2324,9 @@ function App() {
       })
       .filter(matchesQuery)
       .filter((patient) => matchesTagWardFilter(patient, patientListFilter))
-      .sort((a, b) => {
-        if (sortBy === 'name') {
-          return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
-        }
-        if (sortBy === 'admitDate') {
-          return getEffectiveAdmitDate(b.admitDate, b.createdAt).localeCompare(getEffectiveAdmitDate(a.admitDate, a.createdAt))
-        }
-        return compareByRoom(a, b)
-      })
-  }, [patients, searchQuery, sortBy, statusFilter, tagsById, patientListFilter])
+
+    return sortPatientsByConfig(filtered, patientSortConfig)
+  }, [patients, searchQuery, statusFilter, tagsById, patientListFilter, patientSortConfig])
 
   const quickSwitchPatients = useMemo(() => {
     const compareByRoom = (a: Patient, b: Patient) =>
@@ -3339,18 +3379,44 @@ function App() {
   // day-of-week/month condition that doesn't match today simply isn't offered by the button being
   // disabled-free (it always runs whatever currently applies), and an action with nothing
   // applicable today just reports that in a notice instead.
-  const triggerGeneralCustomAction = useCallback(async (action: CustomAction) => {
+  // Runs a general action's checklist items/tag effects immediately (if it has any that apply
+  // today), then — if it also has a template configured — opens the review dialog so the
+  // pre-selected patient list can be adjusted before generating (issue #129). The template run is
+  // additive: it happens after the checklist/tag effects, not instead of them.
+  const runGeneralCustomAction = useCallback(async (action: CustomAction) => {
     if (action.id === undefined) return
 
     const matched = resolveMatchingGeneralConditions(action)
-    if (!actionHasApplicableGeneralEffect(action, matched)) {
-      setNotice(`"${action.name}" has nothing to add today.`)
-      return
+    const hasEffect = actionHasApplicableGeneralEffect(action, matched)
+    if (hasEffect) {
+      await applyGeneralCustomActionEffects(action, matched, (items) => appendCustomActionChecklistItems(GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate, items))
     }
 
-    await applyGeneralCustomActionEffects(action, matched, (items) => appendCustomActionChecklistItems(GENERAL_CHECKLIST_PATIENT_ID, masterChecklistDate, items))
-    setNotice(`Ran "${action.name}".`)
+    if (action.templateRunTemplateId !== undefined) {
+      setTemplateRunReviewAction(action)
+    } else if (hasEffect) {
+      setNotice(`Ran "${action.name}".`)
+    } else {
+      setNotice(`"${action.name}" has nothing to add today.`)
+    }
   }, [appendCustomActionChecklistItems, masterChecklistDate])
+
+  const templateRunReviewTemplate = useMemo(() => {
+    if (!templateRunReviewAction) return null
+    return (reportTemplates ?? []).find((template) => template.id === templateRunReviewAction.templateRunTemplateId) ?? null
+  }, [templateRunReviewAction, reportTemplates])
+
+  const templateRunReviewPatients = useMemo(() => {
+    if (!templateRunReviewAction) return []
+    const filter: TagWardFilterState = {
+      tagIds: templateRunReviewAction.templateRunFilterTagIds ?? [],
+      tagMode: templateRunReviewAction.templateRunFilterTagMode ?? 'OR',
+      wards: templateRunReviewAction.templateRunFilterWards ?? [],
+    }
+    const filtered = (patients ?? []).filter((patient) => matchesTagWardFilter(patient, filter))
+    return sortPatientsByConfig(filtered, patientSortConfig)
+  }, [templateRunReviewAction, patients, patientSortConfig])
+
 
   // Resolves the "zero conditions matched" dialog opened above: skip does nothing (the button
   // stays enabled so the patient can be retried later), while picking a condition adds just its
@@ -4020,38 +4086,63 @@ function App() {
     [selectedReportTemplate],
   )
 
+  // Shared by the Reports tab and the "run a template" custom action (issue #129) — renders
+  // `template` across `patientsForBody` (ignored for a Prints-Once template, which only ever
+  // produces one block) and stitches on the header/footer.
+  const generateTemplateOutput = (template: ReportTemplate, patientsForBody: Patient[]): string => {
+    const ctx = {
+      tagsById,
+      tagGroups: tagGroups ?? [],
+      vitalsByPatient: structuredVitalsByPatient,
+      labsByPatient: structuredLabsByPatient,
+      ordersByPatient: structuredOrdersByPatient,
+      medicationsByPatient: structuredMedsByPatient,
+      dailyUpdatesByPatient: dailyUpdatesByPatientAllDates,
+      dateTimeFormatsById,
+      allPatients: patients ?? [],
+      poolContext: patientPoolContext,
+      ...buildCurrentDateTimeText(),
+    }
+    const bodyText = classifyTemplateRepeatMode(template) === 'prints-once'
+      ? renderTemplateForPatient(template, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
+      : patientsForBody
+        .map((patient) => renderTemplateForPatient(template, patient, ctx))
+        .join(resolveJoinString(template.patientSeparator, template.customPatientSeparator))
+    const headerText = template.headerPatternText
+      ? renderTemplateForPatient({ patternText: template.headerPatternText, variables: template.headerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
+      : ''
+    const footerText = template.footerPatternText
+      ? renderTemplateForPatient({ patternText: template.footerPatternText, variables: template.footerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
+      : ''
+    return [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
+  }
+
   const handleGenerateReport = () => {
     if (!selectedReportTemplate) return
     try {
-      const ctx = {
-        tagsById,
-        tagGroups: tagGroups ?? [],
-        vitalsByPatient: structuredVitalsByPatient,
-        labsByPatient: structuredLabsByPatient,
-        ordersByPatient: structuredOrdersByPatient,
-        medicationsByPatient: structuredMedsByPatient,
-        dailyUpdatesByPatient: dailyUpdatesByPatientAllDates,
-        dateTimeFormatsById,
-        allPatients: patients ?? [],
-        poolContext: patientPoolContext,
-        ...buildCurrentDateTimeText(),
-      }
-      const bodyText = reportRepeatMode === 'prints-once'
-        ? renderTemplateForPatient(selectedReportTemplate, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
-        : selectedCensusPatients
-          .map((patient) => renderTemplateForPatient(selectedReportTemplate, patient, ctx))
-          .join(resolveJoinString(selectedReportTemplate.patientSeparator, selectedReportTemplate.customPatientSeparator))
-      const headerText = selectedReportTemplate.headerPatternText
-        ? renderTemplateForPatient({ patternText: selectedReportTemplate.headerPatternText, variables: selectedReportTemplate.headerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
-        : ''
-      const footerText = selectedReportTemplate.footerPatternText
-        ? renderTemplateForPatient({ patternText: selectedReportTemplate.footerPatternText, variables: selectedReportTemplate.footerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
-        : ''
-      const text = [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
+      const text = generateTemplateOutput(selectedReportTemplate, selectedCensusPatients)
       openCopyModal(text, selectedReportTemplate.name)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to generate report.')
     }
+  }
+
+  // Unlike the Reports tab above (preview first, copy is a deliberate extra click), a "run a
+  // template" custom action copies to the clipboard immediately as part of running it (issue #129).
+  const runTemplateActionForPatients = async (template: ReportTemplate, patientsForBody: Patient[]) => {
+    try {
+      const text = generateTemplateOutput(template, patientsForBody)
+      openCopyModal(text, template.name)
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        setClipboardCopied(true)
+        setNotice('Generated and copied to clipboard.')
+        window.setTimeout(() => setClipboardCopied(false), 2200)
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to generate report.')
+    }
+    setTemplateRunReviewAction(null)
   }
 
   const copyPreviewToClipboard = async () => {
@@ -5460,12 +5551,14 @@ function App() {
       grouped.set(GENERAL_CHECKLIST_PATIENT_ID, { patientIdentifier: GENERAL_CHECKLIST_LABEL, items: [] })
     }
 
+    // Only pins General first — every other group is already in masterChecklistItems' sorted
+    // order (patientSortConfig), preserved here via Map insertion order + a stable sort.
     return Array.from(grouped.entries())
       .map(([patientId, value]) => ({ patientId, ...value }))
       .sort((a, b) => {
         if (a.patientId === GENERAL_CHECKLIST_PATIENT_ID) return -1
         if (b.patientId === GENERAL_CHECKLIST_PATIENT_ID) return 1
-        return a.patientIdentifier.localeCompare(b.patientIdentifier, undefined, { numeric: true, sensitivity: 'base' })
+        return 0
       })
   }, [masterChecklistItems])
 
@@ -5564,6 +5657,8 @@ function App() {
             customActions={customActions ?? []}
             tags={tagDefinitions ?? []}
             groups={tagGroups ?? []}
+            reportTemplates={reportTemplates ?? []}
+            wards={distinctWards}
             onBack={() => setView('settings')}
           />
         ) : view === 'manageCustomViews' ? (
@@ -5655,14 +5750,10 @@ function App() {
                         <SelectItem value='all'>All</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Select value={sortBy} onValueChange={(v) => setSortBy(v as 'room' | 'name' | 'admitDate')}>
-                      <SelectTrigger className='flex-1'><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value='room'>Sort: Room</SelectItem>
-                        <SelectItem value='name'>Sort: Name</SelectItem>
-                        <SelectItem value='admitDate'>Sort: Admit date</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Button type='button' variant='outline' size='sm' className='flex-1 gap-1.5' onClick={() => setPatientSortDialogOpen(true)}>
+                      <Layers className='h-3.5 w-3.5' aria-hidden='true' />
+                      Sort
+                    </Button>
                     <FilterButton
                       activeCount={countTagWardSelections(patientListFilter)}
                       onClick={() => setPatientListFilterDialogOpen(true)}
@@ -5925,10 +6016,16 @@ function App() {
                 <CardHeader className='pb-2'>
                   <div className='flex items-center justify-between gap-2'>
                     <CardTitle className='text-base text-espresso'>Master Checklist</CardTitle>
-                    <FilterButton
-                      activeCount={countTagWardSelections(checklistFilter)}
-                      onClick={() => setChecklistFilterDialogOpen(true)}
-                    />
+                    <div className='flex items-center gap-1.5'>
+                      <Button type='button' variant='outline' size='sm' className='gap-1.5' onClick={() => setPatientSortDialogOpen(true)}>
+                        <Layers className='h-3.5 w-3.5' aria-hidden='true' />
+                        Sort
+                      </Button>
+                      <FilterButton
+                        activeCount={countTagWardSelections(checklistFilter)}
+                        onClick={() => setChecklistFilterDialogOpen(true)}
+                      />
+                    </div>
                   </div>
                   <FilterSummary lines={describeTagWardFilter(checklistFilter, tagsById)} />
                 </CardHeader>
@@ -5969,7 +6066,7 @@ function App() {
                                 size='sm'
                                 variant='outline'
                                 className='h-7 text-xs gap-1'
-                                onClick={() => void triggerGeneralCustomAction(action)}
+                                onClick={() => void runGeneralCustomAction(action)}
                               >
                                 <Zap className='h-3.5 w-3.5' aria-hidden='true' />
                                 {action.name}
@@ -6033,6 +6130,10 @@ function App() {
                               Included: {selectedCensusPatients.length} of {censusSelectablePatients.length} matching patients
                             </p>
                             <div className='flex gap-2'>
+                              <Button type='button' size='sm' variant='outline' className='gap-1.5' onClick={() => setPatientSortDialogOpen(true)}>
+                                <Layers className='h-3.5 w-3.5' aria-hidden='true' />
+                                Sort
+                              </Button>
                               <FilterButton
                                 activeCount={countTagWardSelections(censusFilter) + (censusPoolCriteria.length !== 1 || censusPoolCriteria[0] !== 'active' ? censusPoolCriteria.length : 0)}
                                 onClick={() => setCensusFilterDialogOpen(true)}
@@ -7058,6 +7159,27 @@ function App() {
                                 <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => medicationsSelection.setSelectionMode(true)}>Select</Button>
                               ) : null}
                             </div>
+                            <div className='flex items-center gap-1.5'>
+                              <Select value={medicationSortMode} onValueChange={(v) => setMedicationSortMode(v as typeof medicationSortMode)}>
+                                <SelectTrigger className='h-7 flex-1 text-xs px-2'><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value='manual'>Sort: Manual</SelectItem>
+                                  <SelectItem value='alphabetical'>Sort: Alphabetical</SelectItem>
+                                  <SelectItem value='date'>Sort: Date</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                type='button'
+                                variant='outline'
+                                size='sm'
+                                className='h-7 w-7 shrink-0 p-0'
+                                aria-label={medicationSortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'}
+                                disabled={medicationSortMode === 'manual'}
+                                onClick={() => setMedicationSortDirection((previous) => (previous === 'asc' ? 'desc' : 'asc'))}
+                              >
+                                {medicationSortDirection === 'asc' ? <ArrowUpNarrowWide className='h-3.5 w-3.5' aria-hidden='true' /> : <ArrowDownWideNarrow className='h-3.5 w-3.5' aria-hidden='true' />}
+                              </Button>
+                            </div>
                             {medicationsSelection.selectionMode ? (
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{medicationsSelection.selectedIds.size} selected</p>
@@ -7086,7 +7208,7 @@ function App() {
                               </div>
                             ) : null}
                             <ul className='space-y-1'>
-                              {selectedPatientStructuredMeds.map((entry, index) => (
+                              {displayedPatientStructuredMeds.map((entry, index) => (
                               <li
                                 key={entry.id}
                                 data-medication-index={index}
@@ -7127,26 +7249,28 @@ function App() {
                                     </span>
                                     {!medicationsSelection.selectionMode ? (
                                       <>
-                                        <Button
-                                          type='button'
-                                          variant='ghost'
-                                          className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
-                                          aria-label='Drag medication to reorder'
-                                          draggable
-                                          onDragStart={(event) => startMedicationDrag(event, index)}
-                                          onDragEnd={endMedicationDrag}
-                                          onTouchStart={(event) => { event.stopPropagation(); startMedicationTouchDrag(event, index) }}
-                                          onTouchMove={updateMedicationTouchTarget}
-                                          onTouchEnd={endMedicationTouchDrag}
-                                          onTouchCancel={cancelMedicationTouchDrag}
-                                          onKeyDown={(event) => {
-                                            if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
-                                            event.preventDefault()
-                                            moveMedicationByDirection(index, event.key === 'ArrowUp' ? 'up' : 'down')
-                                          }}
-                                        >
-                                          <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
-                                        </Button>
+                                        {medicationSortMode === 'manual' ? (
+                                          <Button
+                                            type='button'
+                                            variant='ghost'
+                                            className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
+                                            aria-label='Drag medication to reorder'
+                                            draggable
+                                            onDragStart={(event) => startMedicationDrag(event, index)}
+                                            onDragEnd={endMedicationDrag}
+                                            onTouchStart={(event) => { event.stopPropagation(); startMedicationTouchDrag(event, index) }}
+                                            onTouchMove={updateMedicationTouchTarget}
+                                            onTouchEnd={endMedicationTouchDrag}
+                                            onTouchCancel={cancelMedicationTouchDrag}
+                                            onKeyDown={(event) => {
+                                              if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+                                              event.preventDefault()
+                                              moveMedicationByDirection(index, event.key === 'ArrowUp' ? 'up' : 'down')
+                                            }}
+                                          >
+                                            <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
+                                          </Button>
+                                        ) : null}
                                         <Button size='sm' variant='edit' onClick={() => startEditingMedication(entry)}>Edit</Button>
                                       </>
                                     ) : null}
@@ -7448,6 +7572,25 @@ function App() {
                                 <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => labsSelection.setSelectionMode(true)}>Select</Button>
                               ) : null}
                             </div>
+                            <div className='flex items-center gap-1.5'>
+                              <Select value={labSortMode} onValueChange={(v) => setLabSortMode(v as typeof labSortMode)}>
+                                <SelectTrigger className='h-7 flex-1 text-xs px-2'><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value='time'>Sort: Time</SelectItem>
+                                  <SelectItem value='labType'>Sort: Lab type</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                type='button'
+                                variant='outline'
+                                size='sm'
+                                className='h-7 w-7 shrink-0 p-0'
+                                aria-label={labSortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'}
+                                onClick={() => setLabSortDirection((previous) => (previous === 'asc' ? 'desc' : 'asc'))}
+                              >
+                                {labSortDirection === 'asc' ? <ArrowUpNarrowWide className='h-3.5 w-3.5' aria-hidden='true' /> : <ArrowDownWideNarrow className='h-3.5 w-3.5' aria-hidden='true' />}
+                              </Button>
+                            </div>
                             {labsSelection.selectionMode ? (
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{labsSelection.selectedIds.size} selected</p>
@@ -7473,8 +7616,8 @@ function App() {
                               </div>
                             ) : null}
                             <ul className='space-y-1'>
-                              {buildStructuredLabLines(selectedPatientStructuredLabs).map((line, index) => {
-                                const entry = selectedPatientStructuredLabs[index]
+                              {buildStructuredLabLines(displayedPatientStructuredLabs).map((line, index) => {
+                                const entry = displayedPatientStructuredLabs[index]
                                 return (
                                   <li
                                     key={entry.id}
@@ -7639,6 +7782,25 @@ function App() {
                                 <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => ordersSelection.setSelectionMode(true)}>Select</Button>
                               ) : null}
                             </div>
+                            <div className='flex items-center gap-1.5'>
+                              <Select value={orderSortMode} onValueChange={(v) => setOrderSortMode(v as typeof orderSortMode)}>
+                                <SelectTrigger className='h-7 flex-1 text-xs px-2'><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value='time'>Sort: Time</SelectItem>
+                                  <SelectItem value='service'>Sort: Service</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                type='button'
+                                variant='outline'
+                                size='sm'
+                                className='h-7 w-7 shrink-0 p-0'
+                                aria-label={orderSortDirection === 'asc' ? 'Sort ascending' : 'Sort descending'}
+                                onClick={() => setOrderSortDirection((previous) => (previous === 'asc' ? 'desc' : 'asc'))}
+                              >
+                                {orderSortDirection === 'asc' ? <ArrowUpNarrowWide className='h-3.5 w-3.5' aria-hidden='true' /> : <ArrowDownWideNarrow className='h-3.5 w-3.5' aria-hidden='true' />}
+                              </Button>
+                            </div>
                             {ordersSelection.selectionMode ? (
                               <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                                 <p className='text-xs font-semibold text-espresso'>{ordersSelection.selectedIds.size} selected</p>
@@ -7667,7 +7829,7 @@ function App() {
                               </div>
                             ) : null}
                             <ul className='space-y-1'>
-                              {selectedPatientOrders.map((entry) => {
+                              {displayedPatientOrders.map((entry) => {
                                 const orderServiceTag = findServiceTagByName(entry.service, serviceTags)
                                 return (
                                 <li
@@ -8967,6 +9129,26 @@ function App() {
           onSaveView={(name) => void saveCustomView(name, censusFilter)}
           onRenameView={(id, name) => void renameCustomView(id, name)}
           onDeleteView={(id) => void deleteCustomView(id)}
+        />
+
+        <PatientSortConfigDialog
+          open={patientSortDialogOpen}
+          onOpenChange={setPatientSortDialogOpen}
+          config={patientSortConfig}
+          onChange={setPatientSortConfig}
+          tags={tagDefinitions ?? []}
+          groups={tagGroups ?? []}
+        />
+
+        <TemplateRunActionDialog
+          open={templateRunReviewAction !== null}
+          onOpenChange={(open) => { if (!open) setTemplateRunReviewAction(null) }}
+          action={templateRunReviewAction}
+          template={templateRunReviewTemplate}
+          patients={templateRunReviewPatients}
+          onGenerate={(selectedPatients) => {
+            if (templateRunReviewTemplate) void runTemplateActionForPatients(templateRunReviewTemplate, selectedPatients)
+          }}
         />
       </main>
       <nav className={cn(

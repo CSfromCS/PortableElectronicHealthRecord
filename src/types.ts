@@ -155,6 +155,18 @@ export interface CustomAction {
   tagEffects: CustomActionTagEffect[]
   /** Optional additional scoping on top of the unconditional items/effects above — each matching condition's own checklist items and tag effects also apply. */
   conditions: CustomActionCondition[]
+  /** General scope only (issue #129): optionally, ALSO render a single saved template across a
+   * filtered patient list and copy the result to the clipboard, on top of (not instead of) the
+   * checklist items/tag effects/conditions above — runs after them when the action is triggered.
+   * Unset means this action doesn't run a template at all. At most one template per action. */
+  templateRunTemplateId?: number
+  /** The patient filter used to pre-select which patients to include when the template runs,
+   * adjustable at run time. Only meaningful alongside templateRunTemplateId. Flattened rather
+   * than reusing TagWardFilterState, for the same reason as CustomView's own fields (see its
+   * comment). */
+  templateRunFilterTagIds?: number[]
+  templateRunFilterTagMode?: 'AND' | 'OR'
+  templateRunFilterWards?: string[]
   sortOrder: number
   createdAt: string
 }
