@@ -426,11 +426,16 @@ const initialDailyUpdateForm: DailyUpdateFormState = {
 // Once a field has a value, its label recedes so the value itself carries the visual weight.
 const fieldLabelClassName = (hasValue: boolean) => (hasValue ? 'text-xs font-normal text-clay/70 transition-colors' : undefined)
 
-const reorderChecklistItems = (items: DailyChecklistItem[], sourceIndex: number, targetIndex: number) => {
-  if (sourceIndex === targetIndex || !items[sourceIndex] || !items[targetIndex]) return items
+const reorderChecklistItems = (items: DailyChecklistItem[], sourceIndex: number, targetIndex: number, position: DropPosition) => {
+  const sourceItem = items[sourceIndex]
+  const targetItem = items[targetIndex]
+  if (!sourceItem || !targetItem || sourceItem === targetItem) return items
   const nextItems = [...items]
   const [movedItem] = nextItems.splice(sourceIndex, 1)
-  nextItems.splice(targetIndex, 0, movedItem)
+  const targetIndexAfterRemoval = nextItems.indexOf(targetItem)
+  if (targetIndexAfterRemoval === -1) return items
+  const insertIndex = position === 'before' ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
+  nextItems.splice(insertIndex, 0, movedItem)
   return nextItems
 }
 
@@ -716,9 +721,9 @@ function App() {
   const [dailyUpdateForm, setDailyUpdateForm] = useState<DailyUpdateFormState>(initialDailyUpdateForm)
   const [dailyUpdateId, setDailyUpdateId] = useState<number | undefined>(undefined)
   const [draggingDailyChecklistItemIndex, setDraggingDailyChecklistItemIndex] = useState<number | null>(null)
-  const [touchDailyChecklistTargetIndex, setTouchDailyChecklistTargetIndex] = useState<number | null>(null)
+  const [dailyChecklistDropTarget, setDailyChecklistDropTarget] = useState<{ index: number; position: DropPosition } | null>(null)
   const [draggingMasterChecklistItem, setDraggingMasterChecklistItem] = useState<{ patientId: number; index: number } | null>(null)
-  const [touchMasterChecklistTarget, setTouchMasterChecklistTarget] = useState<{ patientId: number; index: number } | null>(null)
+  const [masterChecklistDropTarget, setMasterChecklistDropTarget] = useState<{ patientId: number; index: number; position: DropPosition } | null>(null)
   // Continuous-checklist editing (issue #78): which row currently has focus somewhere inside it
   // (reveals its notes line even while empty), and a one-shot request to move the cursor into a
   // specific row/offset right after a split or merge reshapes the list.
@@ -2904,11 +2909,11 @@ function App() {
     setDailyDirty(true)
   }, [])
 
-  const reorderDailyChecklistItem = useCallback((sourceIndex: number, targetIndex: number) => {
+  const reorderDailyChecklistItem = useCallback((sourceIndex: number, targetIndex: number, position: DropPosition) => {
     setDailyUpdateForm((previous) => {
       return {
         ...previous,
-        checklist: reorderChecklistItems(previous.checklist, sourceIndex, targetIndex),
+        checklist: reorderChecklistItems(previous.checklist, sourceIndex, targetIndex, position),
       }
     })
     setDailyDirty(true)
@@ -2921,7 +2926,7 @@ function App() {
 
   const resetDailyChecklistDragState = useCallback(() => {
     setDraggingDailyChecklistItemIndex(null)
-    setTouchDailyChecklistTargetIndex(null)
+    setDailyChecklistDropTarget(null)
   }, [])
 
   const endDailyChecklistDrag = useCallback(() => {
@@ -2931,7 +2936,7 @@ function App() {
   const startDailyChecklistTouchDrag = useCallback((event: TouchEvent<HTMLButtonElement>, index: number) => {
     event.preventDefault()
     setDraggingDailyChecklistItemIndex(index)
-    setTouchDailyChecklistTargetIndex(index)
+    setDailyChecklistDropTarget({ index, position: 'after' })
   }, [])
 
   const updateDailyChecklistTouchTarget = useCallback((event: TouchEvent<HTMLButtonElement>) => {
@@ -2943,38 +2948,36 @@ function App() {
     const targetElement = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
     const checklistItemContainer = targetElement?.closest('[data-daily-checklist-index]')
     if (!(checklistItemContainer instanceof HTMLElement)) {
-      setTouchDailyChecklistTargetIndex(null)
+      setDailyChecklistDropTarget(null)
       return
     }
 
     const parsedTargetIndex = Number.parseInt(checklistItemContainer.dataset.dailyChecklistIndex ?? '', 10)
     if (!Number.isInteger(parsedTargetIndex)) {
-      setTouchDailyChecklistTargetIndex(null)
+      setDailyChecklistDropTarget(null)
       return
     }
 
     const sourceItem = dailyUpdateForm.checklist[draggingDailyChecklistItemIndex]
     const targetItem = dailyUpdateForm.checklist[parsedTargetIndex]
     if (!sourceItem || !targetItem) {
-      setTouchDailyChecklistTargetIndex(null)
+      setDailyChecklistDropTarget(null)
       return
     }
 
     event.preventDefault()
-    setTouchDailyChecklistTargetIndex(parsedTargetIndex)
+    const rect = checklistItemContainer.getBoundingClientRect()
+    const position: DropPosition = touchPoint.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setDailyChecklistDropTarget({ index: parsedTargetIndex, position })
   }, [dailyUpdateForm.checklist, draggingDailyChecklistItemIndex])
 
   const endDailyChecklistTouchDrag = useCallback(() => {
-    if (
-      draggingDailyChecklistItemIndex !== null
-      && touchDailyChecklistTargetIndex !== null
-      && draggingDailyChecklistItemIndex !== touchDailyChecklistTargetIndex
-    ) {
-      reorderDailyChecklistItem(draggingDailyChecklistItemIndex, touchDailyChecklistTargetIndex)
+    if (draggingDailyChecklistItemIndex !== null && dailyChecklistDropTarget !== null && draggingDailyChecklistItemIndex !== dailyChecklistDropTarget.index) {
+      reorderDailyChecklistItem(draggingDailyChecklistItemIndex, dailyChecklistDropTarget.index, dailyChecklistDropTarget.position)
     }
 
     resetDailyChecklistDragState()
-  }, [draggingDailyChecklistItemIndex, reorderDailyChecklistItem, resetDailyChecklistDragState, touchDailyChecklistTargetIndex])
+  }, [dailyChecklistDropTarget, draggingDailyChecklistItemIndex, reorderDailyChecklistItem, resetDailyChecklistDragState])
 
   const cancelDailyChecklistTouchDrag = useCallback(() => {
     resetDailyChecklistDragState()
@@ -2989,6 +2992,9 @@ function App() {
 
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setDailyChecklistDropTarget((previous) => (previous?.index === targetIndex && previous.position === position ? previous : { index: targetIndex, position }))
   }, [dailyUpdateForm.checklist, draggingDailyChecklistItemIndex])
 
   const dropDailyChecklistItem = useCallback((event: DragEvent<HTMLDivElement>, targetIndex: number) => {
@@ -2998,14 +3004,16 @@ function App() {
       return
     }
 
-    reorderDailyChecklistItem(draggingDailyChecklistItemIndex, targetIndex)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    reorderDailyChecklistItem(draggingDailyChecklistItemIndex, targetIndex, position)
     resetDailyChecklistDragState()
   }, [draggingDailyChecklistItemIndex, reorderDailyChecklistItem, resetDailyChecklistDragState])
 
   const moveDailyChecklistItemByDirection = useCallback((index: number, direction: 'up' | 'down') => {
     const targetIndex = direction === 'up' ? index - 1 : index + 1
     if (targetIndex < 0 || targetIndex >= dailyUpdateForm.checklist.length) return
-    reorderDailyChecklistItem(index, targetIndex)
+    reorderDailyChecklistItem(index, targetIndex, direction === 'up' ? 'before' : 'after')
   }, [dailyUpdateForm.checklist, reorderDailyChecklistItem])
 
   // The blank draft line at the end of the list (see withTrailingBlankChecklistItem) commits
@@ -3026,7 +3034,12 @@ function App() {
     <div
       key={`checklist-${index}`}
       data-daily-checklist-index={index}
-      className={`flex flex-col gap-0.5 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingDailyChecklistItemIndex === index ? 'opacity-60' : ''} ${touchDailyChecklistTargetIndex === index && draggingDailyChecklistItemIndex !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
+      className={cn(
+        'flex flex-col gap-0.5 rounded-md px-2 py-1.5',
+        item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory',
+        draggingDailyChecklistItemIndex === index && 'opacity-60',
+        dropIndicatorClassName(dailyChecklistDropTarget?.index === index && draggingDailyChecklistItemIndex !== null ? dailyChecklistDropTarget.position : null),
+      )}
       onDragOver={(event) => allowDailyChecklistDrop(event, index)}
       onDrop={(event) => dropDailyChecklistItem(event, index)}
       // Deferred to a macrotask: firing this synchronously (as focus/blur normally do) can land
@@ -3156,7 +3169,7 @@ function App() {
         ) : null}
       </div>
     </div>
-  ), [activeDailyChecklistIndex, allowDailyChecklistDrop, appendDailyChecklistItemAtEnd, cancelDailyChecklistTouchDrag, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, insertBlankDailyChecklistItemAfter, mergeDailyChecklistItemWithPrevious, moveDailyChecklistItemByDirection, pendingDailyChecklistFocus, removeDailyChecklistItem, requestDeleteConfirmation, splitDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, touchDailyChecklistTargetIndex, updateDailyChecklistItemCompletion, updateDailyChecklistItemNotes, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
+  ), [activeDailyChecklistIndex, allowDailyChecklistDrop, appendDailyChecklistItemAtEnd, cancelDailyChecklistTouchDrag, dailyChecklistDropTarget, draggingDailyChecklistItemIndex, dropDailyChecklistItem, endDailyChecklistDrag, endDailyChecklistTouchDrag, insertBlankDailyChecklistItemAfter, mergeDailyChecklistItemWithPrevious, moveDailyChecklistItemByDirection, pendingDailyChecklistFocus, removeDailyChecklistItem, requestDeleteConfirmation, splitDailyChecklistItem, startDailyChecklistDrag, startDailyChecklistTouchDrag, updateDailyChecklistItemCompletion, updateDailyChecklistItemNotes, updateDailyChecklistItemText, updateDailyChecklistTouchTarget])
 
   const addMasterChecklistItem = useCallback((patientId: number, text: string) => {
     const nextText = text.trim()
@@ -3364,17 +3377,17 @@ function App() {
     void updateMasterChecklist(patientId, (previous) => {
       const targetIndex = direction === 'up' ? index - 1 : index + 1
       if (targetIndex < 0 || targetIndex >= previous.length) return previous
-      return reorderChecklistItems(previous, index, targetIndex)
+      return reorderChecklistItems(previous, index, targetIndex, direction === 'up' ? 'before' : 'after')
     })
   }, [updateMasterChecklist])
 
-  const reorderMasterChecklistItem = useCallback((patientId: number, sourceIndex: number, targetIndex: number) => {
-    void updateMasterChecklist(patientId, (previous) => reorderChecklistItems(previous, sourceIndex, targetIndex))
+  const reorderMasterChecklistItem = useCallback((patientId: number, sourceIndex: number, targetIndex: number, position: DropPosition) => {
+    void updateMasterChecklist(patientId, (previous) => reorderChecklistItems(previous, sourceIndex, targetIndex, position))
   }, [updateMasterChecklist])
 
   const resetMasterChecklistDragState = useCallback(() => {
     setDraggingMasterChecklistItem(null)
-    setTouchMasterChecklistTarget(null)
+    setMasterChecklistDropTarget(null)
   }, [])
 
   const startMasterChecklistDrag = useCallback((event: DragEvent<HTMLButtonElement>, patientId: number, index: number) => {
@@ -3389,7 +3402,7 @@ function App() {
   const startMasterChecklistTouchDrag = useCallback((event: TouchEvent<HTMLButtonElement>, patientId: number, index: number) => {
     event.preventDefault()
     setDraggingMasterChecklistItem({ patientId, index })
-    setTouchMasterChecklistTarget({ patientId, index })
+    setMasterChecklistDropTarget({ patientId, index, position: 'after' })
   }, [])
 
   const updateMasterChecklistTouchTarget = useCallback((event: TouchEvent<HTMLButtonElement>) => {
@@ -3401,14 +3414,14 @@ function App() {
     const targetElement = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)
     const checklistItemContainer = targetElement?.closest('[data-master-checklist-patient-id][data-master-checklist-index]')
     if (!(checklistItemContainer instanceof HTMLElement)) {
-      setTouchMasterChecklistTarget(null)
+      setMasterChecklistDropTarget(null)
       return
     }
 
     const parsedPatientId = Number.parseInt(checklistItemContainer.dataset.masterChecklistPatientId ?? '', 10)
     const parsedTargetIndex = Number.parseInt(checklistItemContainer.dataset.masterChecklistIndex ?? '', 10)
     if (!Number.isInteger(parsedPatientId) || !Number.isInteger(parsedTargetIndex)) {
-      setTouchMasterChecklistTarget(null)
+      setMasterChecklistDropTarget(null)
       return
     }
 
@@ -3417,32 +3430,35 @@ function App() {
     ))
     const targetItem = masterChecklistItems.find((item) => item.patientId === parsedPatientId && item.index === parsedTargetIndex)
     if (!sourceItem || !targetItem || sourceItem.patientId !== targetItem.patientId) {
-      setTouchMasterChecklistTarget(null)
+      setMasterChecklistDropTarget(null)
       return
     }
 
     event.preventDefault()
-    setTouchMasterChecklistTarget({ patientId: parsedPatientId, index: parsedTargetIndex })
+    const rect = checklistItemContainer.getBoundingClientRect()
+    const position: DropPosition = touchPoint.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setMasterChecklistDropTarget({ patientId: parsedPatientId, index: parsedTargetIndex, position })
   }, [draggingMasterChecklistItem, masterChecklistItems])
 
   const endMasterChecklistTouchDrag = useCallback(() => {
     if (
       draggingMasterChecklistItem
-      && touchMasterChecklistTarget
+      && masterChecklistDropTarget
       && (
-        draggingMasterChecklistItem.patientId !== touchMasterChecklistTarget.patientId
-        || draggingMasterChecklistItem.index !== touchMasterChecklistTarget.index
+        draggingMasterChecklistItem.patientId !== masterChecklistDropTarget.patientId
+        || draggingMasterChecklistItem.index !== masterChecklistDropTarget.index
       )
     ) {
       reorderMasterChecklistItem(
         draggingMasterChecklistItem.patientId,
         draggingMasterChecklistItem.index,
-        touchMasterChecklistTarget.index,
+        masterChecklistDropTarget.index,
+        masterChecklistDropTarget.position,
       )
     }
 
     resetMasterChecklistDragState()
-  }, [draggingMasterChecklistItem, reorderMasterChecklistItem, resetMasterChecklistDragState, touchMasterChecklistTarget])
+  }, [draggingMasterChecklistItem, masterChecklistDropTarget, reorderMasterChecklistItem, resetMasterChecklistDragState])
 
   const cancelMasterChecklistTouchDrag = useCallback(() => {
     resetMasterChecklistDragState()
@@ -3457,6 +3473,13 @@ function App() {
 
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setMasterChecklistDropTarget((previous) => (
+      previous?.patientId === patientId && previous.index === targetIndex && previous.position === position
+        ? previous
+        : { patientId, index: targetIndex, position }
+    ))
   }, [draggingMasterChecklistItem])
 
   const dropMasterChecklistItem = useCallback((event: DragEvent<HTMLDivElement>, patientId: number, targetIndex: number) => {
@@ -3470,7 +3493,9 @@ function App() {
       return
     }
 
-    reorderMasterChecklistItem(patientId, draggingMasterChecklistItem.index, targetIndex)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const position: DropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    reorderMasterChecklistItem(patientId, draggingMasterChecklistItem.index, targetIndex, position)
     resetMasterChecklistDragState()
   }, [draggingMasterChecklistItem, reorderMasterChecklistItem, resetMasterChecklistDragState])
 
@@ -3479,7 +3504,16 @@ function App() {
       key={key}
       data-master-checklist-patient-id={item.patientId}
       data-master-checklist-index={item.index}
-      className={`space-y-1 rounded-md px-2 py-1.5 ${item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory'} ${draggingMasterChecklistItem?.patientId === item.patientId && draggingMasterChecklistItem.index === item.index ? 'opacity-60' : ''} ${touchMasterChecklistTarget?.patientId === item.patientId && touchMasterChecklistTarget.index === item.index && draggingMasterChecklistItem !== null ? 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent' : ''}`}
+      className={cn(
+        'space-y-1 rounded-md px-2 py-1.5',
+        item.completed ? 'border border-clay/20 bg-warm-ivory/70' : 'border border-clay/30 bg-warm-ivory',
+        draggingMasterChecklistItem?.patientId === item.patientId && draggingMasterChecklistItem.index === item.index && 'opacity-60',
+        dropIndicatorClassName(
+          masterChecklistDropTarget?.patientId === item.patientId && masterChecklistDropTarget.index === item.index && draggingMasterChecklistItem !== null
+            ? masterChecklistDropTarget.position
+            : null,
+        ),
+      )}
       onDragOver={(event) => allowMasterChecklistDrop(event, item.patientId, item.index)}
       onDrop={(event) => dropMasterChecklistItem(event, item.patientId, item.index)}
       // Deferred to a macrotask: see the matching comment on the per-patient row (issue #122) —
@@ -3618,7 +3652,7 @@ function App() {
         </Button>
       </div>
     </div>
-    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, commitMasterChecklistItemNotesAndInsertBlankAfter, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, touchMasterChecklistTarget, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
+    ), [activeMasterChecklistRow, allowMasterChecklistDrop, cancelMasterChecklistTouchDrag, commitMasterChecklistItemNotesAndInsertBlankAfter, draggingMasterChecklistItem, dropMasterChecklistItem, endMasterChecklistDrag, endMasterChecklistTouchDrag, masterChecklistDropTarget, mergeMasterChecklistItemWithPrevious, moveMasterChecklistItem, pendingMasterChecklistFocus, removeMasterChecklistItem, requestDeleteConfirmation, splitMasterChecklistItem, startMasterChecklistDrag, startMasterChecklistTouchDrag, updateMasterChecklistItemCompletion, updateMasterChecklistItemNotes, updateMasterChecklistItemText, updateMasterChecklistTouchTarget])
 
   const updateLabTemplateValue = useCallback((testKey: string, value: string) => {
     setLabTemplateValues((previous) => ({ ...previous, [testKey]: value }))
