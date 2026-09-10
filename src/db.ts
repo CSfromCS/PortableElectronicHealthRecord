@@ -153,6 +153,9 @@ const seedDefaultTagGroupsAndTags = async (
     const id = await addTag({
       name: seed.name,
       displayType: seed.displayType,
+      emoji: seed.emoji,
+      color: seed.color,
+      displayText: seed.displayText,
       groupId: groupIdByName.get(seed.group),
       sortOrder: index,
       visibleOnPatientCard: true,
