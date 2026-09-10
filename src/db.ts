@@ -1157,7 +1157,7 @@ db.version(25).stores({
       groupSelectionMode: 'automatic',
       groupTagIds: legacyConfig.tagIds,
       groupCombineMode: legacyConfig.groupCombineMode,
-      groupTagLabelSeparator: ', ',
+      groupAutomaticLabels: [],
       groupManualCombos: [],
       groupLookbackHours: legacyConfig.lookbackHours,
       groupListOpenText: legacyConfig.listOpenText,

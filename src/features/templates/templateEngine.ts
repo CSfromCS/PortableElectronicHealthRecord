@@ -14,6 +14,7 @@ import {
   toLocalTime,
 } from '@/lib/dateTime'
 import type {
+  AutomaticGroupLabelOverride,
   BlockJoinMode,
   BlockVariableConfig,
   BlockVariableId,
@@ -1012,23 +1013,22 @@ export const describeGroupVariableInstance = (instance: GroupVariableInstance): 
   return GROUP_FIELD_LABELS[fieldId]
 }
 
-/** Buckets patients into Tag Combo Grouping's output groups. Automatic mode: with no selected tags
- * spanning more than one Tag Group (or only one selected tag), each tag is simply its own group;
- * otherwise `groupCombineMode` decides — 'OR' unions every selected tag into its own group
- * regardless of origin, 'AND' cross-combines instead, producing one group per combination of one
- * tag from each represented Tag Group (a Cartesian product), joining each combo's tag names with
- * `groupTagLabelSeparator`. Manual mode just maps `groupManualCombos` (sorted by `sortOrder`)
- * straight across, using each combo's own hand-typed label. */
-const buildOutputGroups = (
-  template: Pick<ReportTemplate, 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupTagLabelSeparator' | 'groupManualCombos'>,
-  tagsById: Map<number, TagDefinition>,
-): { label: string; tagIds: number[] }[] => {
-  if (template.groupSelectionMode === 'manual') {
-    return [...template.groupManualCombos]
-      .sort((a, b) => a.sortOrder - b.sortOrder)
-      .map((combo) => ({ label: combo.label, tagIds: combo.tagIds }))
-  }
+/** Order-independent identity for an automatic-mode combo — the same set of tag ids always
+ * produces the same key regardless of selection/Cartesian-product order, so
+ * `AutomaticGroupLabelOverride` entries keep matching their combo across re-derivations. */
+export const canonicalComboKey = (tagIds: number[]): string => [...tagIds].sort((a, b) => a - b).join(',')
 
+/** Derives automatic mode's output combos straight from `groupTagIds`/`groupCombineMode`, with no
+ * label overrides applied yet (see `mergeAutomaticGroupLabels`) — natural order, and a plain
+ * ", "-joined `defaultLabel`. With no selected tags spanning more than one Tag Group (or only one
+ * selected tag), each tag is simply its own combo; otherwise `groupCombineMode` decides — 'OR'
+ * unions every selected tag into its own combo regardless of origin, 'AND' cross-combines instead,
+ * producing one combo per combination of one tag from each represented Tag Group (a Cartesian
+ * product). */
+export const computeAutomaticGroupCombos = (
+  template: Pick<ReportTemplate, 'groupTagIds' | 'groupCombineMode'>,
+  tagsById: Map<number, TagDefinition>,
+): { comboKey: string; tagIds: number[]; defaultLabel: string }[] => {
   const selectedTags = template.groupTagIds.map((id) => tagsById.get(id)).filter((tag): tag is TagDefinition => tag !== undefined)
   if (selectedTags.length === 0) return []
 
@@ -1041,18 +1041,59 @@ const buildOutputGroups = (
   })
   const perOriginGroup = [...tagsByOriginGroup.values()]
 
-  if (perOriginGroup.length <= 1 || template.groupCombineMode === 'OR') {
-    return selectedTags.map((tag) => ({ label: tag.name, tagIds: tag.id === undefined ? [] : [tag.id] }))
+  const combos = perOriginGroup.length <= 1 || template.groupCombineMode === 'OR'
+    ? selectedTags.map((tag) => [tag])
+    : perOriginGroup.reduce<TagDefinition[][]>(
+      (combosSoFar, tagsInOneOriginGroup) => combosSoFar.flatMap((combo) => tagsInOneOriginGroup.map((tag) => [...combo, tag])),
+      [[]],
+    )
+
+  return combos.map((combo) => {
+    const tagIds = combo.map((tag) => tag.id).filter((id): id is number => id !== undefined)
+    return { comboKey: canonicalComboKey(tagIds), tagIds, defaultLabel: combo.map((tag) => tag.name).join(', ') }
+  })
+}
+
+/** Applies automatic mode's user-authored label/order overrides on top of the freshly-derived
+ * combos: a combo with a matching `comboKey` in `overrides` uses that override's `label` and
+ * `sortOrder` verbatim; every other combo falls back to its `defaultLabel` and sorts after every
+ * overridden combo, in natural relative order. Shared by the grouping editor (to render the
+ * automatic-mode group list) and `buildOutputGroups` (to render the actual report), so both always
+ * agree on label and order. */
+export const mergeAutomaticGroupLabels = (
+  combos: { comboKey: string; tagIds: number[]; defaultLabel: string }[],
+  overrides: AutomaticGroupLabelOverride[],
+): { comboKey: string; tagIds: number[]; label: string; sortOrder: number }[] => {
+  const overrideByKey = new Map(overrides.map((override) => [override.comboKey, override]))
+  const maxOverrideOrder = overrides.reduce((max, override) => Math.max(max, override.sortOrder), -1)
+  let nextFallbackOrder = maxOverrideOrder + 1
+
+  const merged = combos.map((combo) => {
+    const override = overrideByKey.get(combo.comboKey)
+    if (override) return { comboKey: combo.comboKey, tagIds: combo.tagIds, label: override.label, sortOrder: override.sortOrder }
+    return { comboKey: combo.comboKey, tagIds: combo.tagIds, label: combo.defaultLabel, sortOrder: nextFallbackOrder++ }
+  })
+  return merged.sort((a, b) => a.sortOrder - b.sortOrder)
+}
+
+/** Buckets patients into Tag Combo Grouping's output groups. Automatic mode: see
+ * `computeAutomaticGroupCombos`/`mergeAutomaticGroupLabels`. Manual mode just maps
+ * `groupManualCombos` (sorted by `sortOrder`) straight across, using each combo's own hand-typed
+ * label. */
+const buildOutputGroups = (
+  template: Pick<ReportTemplate, 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupAutomaticLabels' | 'groupManualCombos'>,
+  tagsById: Map<number, TagDefinition>,
+): { label: string; tagIds: number[] }[] => {
+  // Defensive fallback: a template persisted by a build from before these fields existed (stale
+  // local dev IndexedDB, mid-deploy client) would otherwise crash report generation entirely.
+  if (template.groupSelectionMode === 'manual') {
+    return [...(template.groupManualCombos ?? [])]
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((combo) => ({ label: combo.label, tagIds: combo.tagIds }))
   }
 
-  const combinations = perOriginGroup.reduce<TagDefinition[][]>(
-    (combosSoFar, tagsInOneOriginGroup) => combosSoFar.flatMap((combo) => tagsInOneOriginGroup.map((tag) => [...combo, tag])),
-    [[]],
-  )
-  return combinations.map((combo) => ({
-    label: combo.map((tag) => tag.name).join(template.groupTagLabelSeparator),
-    tagIds: combo.map((tag) => tag.id).filter((id): id is number => id !== undefined),
-  }))
+  const combos = computeAutomaticGroupCombos(template, tagsById)
+  return mergeAutomaticGroupLabels(combos, template.groupAutomaticLabels ?? []).map((group) => ({ label: group.label, tagIds: group.tagIds }))
 }
 
 /** Renders a list of patients through the template's own per-patient Format Pattern (the same one
@@ -1079,7 +1120,7 @@ const renderGroupPatientList = (
 export type GroupRenderTemplate = Pick<
   ReportTemplate,
   | 'patternText' | 'variables' | 'patientSeparator' | 'customPatientSeparator'
-  | 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupTagLabelSeparator' | 'groupManualCombos'
+  | 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupAutomaticLabels' | 'groupManualCombos'
   | 'groupLookbackHours' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'
   | 'groupPatternText' | 'groupVariables' | 'groupSeparator' | 'customGroupSeparator'
 >
@@ -1155,7 +1196,10 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
     const patientsInGroup = patientsForBody.filter((patient) =>
       group.tagIds.every((tagId) => (patient.tagIds ?? []).includes(tagId)),
     )
-    const hours = Math.max(0, template.groupLookbackHours)
+    // Defensive fallback: a template persisted before this field existed (stale local dev
+    // IndexedDB) would otherwise carry `undefined` here, producing an Invalid Date below and
+    // crashing report generation entirely.
+    const hours = Number.isFinite(template.groupLookbackHours) ? Math.max(0, template.groupLookbackHours) : 12
     const windowStart = new Date(ctx.nowDate.getTime() - hours * 3_600_000)
     const window: DateTimeWindow = {
       dateFrom: toLocalISODate(windowStart),
