@@ -111,6 +111,23 @@ export const resolveDefaultPhotoBatchTitle = (
   }
 }
 
+const PHOTO_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+}
+
+/** Shared by export (download) and share (Web Share API) — both need a safe, human-readable
+ * filename for a stored attachment's blob. */
+export const buildPhotoFileName = (attachment: { id: number; title: string; mimeType: string }) => {
+  const inferredExtension = PHOTO_EXTENSION_BY_MIME_TYPE[attachment.mimeType] ?? 'bin'
+  const title = attachment.title.trim().length > 0 ? attachment.title.trim() : `photo-${attachment.id}`
+  const safeTitle = title.replace(/[^a-zA-Z0-9-_]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || `photo-${attachment.id}`
+  return `${safeTitle}.${inferredExtension}`
+}
+
 export const buildPhotoUploadGroupId = () => {
   const randomToken = Math.random().toString(36).slice(2, 10)
   return `group-${Date.now()}-${randomToken}`
