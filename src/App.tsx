@@ -967,7 +967,6 @@ function App() {
   const medications = useLiveQuery(() => db.medications.toArray(), [])
   const labs = useLiveQuery(() => db.labs.toArray(), [])
   const orders = useLiveQuery(() => db.orders.toArray(), [])
-  const photoAttachments = useLiveQuery(() => db.photoAttachments.toArray(), [])
   const tagGroups = useLiveQuery(() => db.tagGroups.toArray(), [])
   const tagDefinitions = useLiveQuery(() => db.tagDefinitions.toArray(), [])
   const allTagEvents = useLiveQuery(() => db.tagEvents.toArray(), [])
@@ -1897,11 +1896,20 @@ function App() {
     return items
   }, [dailyUpdatesByPatient, masterChecklistDate, patients, tagsById, patientSortConfig])
 
-  const reviewablePhotoAttachments = useMemo(() => {
-    return (photoAttachments ?? [])
+  // The cross-patient Review dialog is the only place that needs every patient's photos (blobs
+  // included) at once — everywhere else only ever needs the currently selected patient's own
+  // photos (see selectedPatientAllAttachments below). Scanning and loading the whole table
+  // regardless of whether that dialog is even open doesn't scale with total photo count across
+  // the whole system, so gate it behind the dialog's visibility (also covers the photo viewer
+  // stacked on top of it, which still needs this data while browsing a review-sourced photo).
+  const reviewablePhotoAttachmentsQuery = useLiveQuery(async () => {
+    if (!showPhotoReviewDialog && attachmentViewerSource !== 'review') return [] as ReviewablePhotoAttachment[]
+    const entries = await db.photoAttachments.toArray()
+    return entries
       .filter((entry): entry is ReviewablePhotoAttachment => entry.id !== undefined)
       .sort(comparePhotosByNewest)
-  }, [photoAttachments])
+  }, [showPhotoReviewDialog, attachmentViewerSource])
+  const reviewablePhotoAttachments = useMemo(() => reviewablePhotoAttachmentsQuery ?? [], [reviewablePhotoAttachmentsQuery])
 
   const reviewablePhotoGroups = useMemo(() => {
     const groupsById = new Map<string, PhotoAttachmentGroup & { patientId: number }>()
@@ -1934,13 +1942,15 @@ function App() {
       .sort(comparePhotoGroupsByNewest)
   }, [reviewablePhotoAttachments])
 
-  const selectedPatientAllAttachments = useMemo(() => {
+  // Scoped to just this patient via an indexed query (mirrors patientVitals/patientTagEvents
+  // below) instead of filtering a table-wide load — the everyday per-patient Photos tab has no
+  // need to pull every other patient's photo blobs into memory just to discard them.
+  const selectedPatientAttachmentsQuery = useLiveQuery(async () => {
     if (selectedPatientId === null) return [] as PhotoAttachment[]
-
-    return (photoAttachments ?? [])
-      .filter((entry) => entry.patientId === selectedPatientId)
-      .sort(comparePhotosByNewest)
-  }, [photoAttachments, selectedPatientId])
+    const entries = await db.photoAttachments.where('patientId').equals(selectedPatientId).toArray()
+    return entries.sort(comparePhotosByNewest)
+  }, [selectedPatientId])
+  const selectedPatientAllAttachments = useMemo(() => selectedPatientAttachmentsQuery ?? [], [selectedPatientAttachmentsQuery])
 
   const selectedPatientAttachmentGroups = useMemo(() => {
     const scopedAttachments = selectedPatientAllAttachments
@@ -2362,6 +2372,27 @@ function App() {
 
     return sortPatientsByConfig(filtered, patientSortConfig)
   }, [patients, searchQuery, statusFilter, tagsById, patientListFilter, patientSortConfig])
+
+  // Precomputes each visible patient's card data (active state, tags, service tags, ambiguity)
+  // once per actual data change, rather than recomputing it inline in the Patients list's render
+  // body — which otherwise reruns for every patient on every render of this component (e.g.
+  // typing in an unrelated field), not just when patients/tags actually change.
+  const visiblePatientCards = useMemo(() => {
+    return visiblePatients.map((patient) => {
+      const mainServiceTags = resolveServiceTags(patient.mainServiceTagIds, tagsById)
+      const referralServiceTags = resolveServiceTags(patient.referralServiceTagIds, tagsById)
+      return {
+        patient,
+        active: isPatientActive(patient, tagsById),
+        visibleTags: getVisiblePatientTags(patient, tagsById, tagGroups ?? []),
+        ambiguity: findTagAmbiguities(patient, tagsById),
+        mainServiceTags,
+        referralServiceTags,
+        visibleMainServiceTags: mainServiceTags.filter((tag) => tag.visibleOnPatientCard),
+        visibleReferralServiceTags: referralServiceTags.filter((tag) => tag.visibleOnPatientCard),
+      }
+    })
+  }, [visiblePatients, tagsById, tagGroups])
 
   const quickSwitchPatients = useMemo(() => {
     const compareByRoom = (a: Patient, b: Patient) =>
@@ -3861,9 +3892,9 @@ function App() {
         const baseTitle = buildDefaultPhotoTitle(attachmentCategory, now)
         const today = toLocalISODate(now)
         const sameDayDefaultBatches = new Map<string, DefaultTitledPhotoBatch>()
-        ;(photoAttachments ?? []).forEach((entry) => {
+        // Already scoped to selectedPatientId (see selectedPatientAllAttachments above).
+        selectedPatientAllAttachments.forEach((entry) => {
           if (
-            entry.patientId !== selectedPatientId ||
             entry.category !== attachmentCategory ||
             !entry.isDefaultTitle ||
             !entry.uploadGroupId ||
@@ -3968,7 +3999,9 @@ function App() {
 
   const deletePhotoAttachment = async (attachmentId?: number) => {
     if (attachmentId === undefined) return
-    const removedAttachment = photoAttachments?.find((attachment) => attachment.id === attachmentId)
+    // A direct keyed lookup rather than scanning an in-memory list — this can be called from the
+    // cross-patient Review dialog, so it can't assume the attachment belongs to selectedPatientId.
+    const removedAttachment = await db.photoAttachments.get(attachmentId)
     await db.photoAttachments.delete(attachmentId)
     await touchPatientLastModified(removedAttachment?.patientId)
     if (selectedAttachmentId === attachmentId) {
@@ -5721,6 +5754,18 @@ function App() {
     [masterChecklistGroupedByPatient, patientsById, checklistFilter],
   )
 
+  // Precomputed once per actual data change instead of inline per render (same reasoning as
+  // visiblePatientCards above) — keyed by patientId since each group here is one patient's items.
+  const masterChecklistVisibleTagsByPatientId = useMemo(() => {
+    const byPatientId = new Map<number, TagDefinition[]>()
+    filteredMasterChecklistGroupedByPatient.forEach((group) => {
+      if (group.patientId === GENERAL_CHECKLIST_PATIENT_ID) return
+      const groupPatient = patientsById.get(group.patientId)
+      if (groupPatient) byPatientId.set(group.patientId, getVisiblePatientTags(groupPatient, tagsById, tagGroups ?? []))
+    })
+    return byPatientId
+  }, [filteredMasterChecklistGroupedByPatient, patientsById, tagsById, tagGroups])
+
   return (
     <div className='min-h-screen pb-20 sm:pb-0'>
       {/* Brand accent bar */}
@@ -5999,14 +6044,16 @@ function App() {
             ) : null}
 
             <div className='flex flex-col gap-2'>
-              {visiblePatients.map((patient) => {
-                const patientActive = isPatientActive(patient, tagsById)
-                const visibleTags = getVisiblePatientTags(patient, tagsById, tagGroups ?? [])
-                const ambiguity = findTagAmbiguities(patient, tagsById)
-                const cardMainServiceTags = resolveServiceTags(patient.mainServiceTagIds, tagsById)
-                const cardReferralServiceTags = resolveServiceTags(patient.referralServiceTagIds, tagsById)
-                const visibleMainServiceTags = cardMainServiceTags.filter((tag) => tag.visibleOnPatientCard)
-                const visibleReferralServiceTags = cardReferralServiceTags.filter((tag) => tag.visibleOnPatientCard)
+              {visiblePatientCards.map(({
+                patient,
+                active: patientActive,
+                visibleTags,
+                ambiguity,
+                mainServiceTags: cardMainServiceTags,
+                referralServiceTags: cardReferralServiceTags,
+                visibleMainServiceTags,
+                visibleReferralServiceTags,
+              }) => {
                 const hasAnyServiceTags = cardMainServiceTags.length > 0 || cardReferralServiceTags.length > 0
                 const hasVisibleServiceTags = visibleMainServiceTags.length > 0 || visibleReferralServiceTags.length > 0
                 const isPatientSelectedForTagging = patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id)
@@ -6194,8 +6241,7 @@ function App() {
                   <div className='space-y-3'>
                     {filteredMasterChecklistGroupedByPatient.map((group) => {
                       const isGeneral = group.patientId === GENERAL_CHECKLIST_PATIENT_ID
-                      const groupPatient = isGeneral ? undefined : patientsById.get(group.patientId)
-                      const groupVisibleTags = groupPatient ? getVisiblePatientTags(groupPatient, tagsById, tagGroups ?? []) : []
+                      const groupVisibleTags = masterChecklistVisibleTagsByPatientId.get(group.patientId) ?? []
                       return (
                       <div
                         key={`master-patient-${group.patientId}`}
