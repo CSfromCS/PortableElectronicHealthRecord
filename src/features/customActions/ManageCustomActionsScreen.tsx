@@ -1,5 +1,5 @@
-import { useState, type DragEvent, type TouchEvent } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, GripVertical, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { useState } from 'react'
+import { ChevronDown, ChevronLeft, ChevronRight, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -146,7 +146,57 @@ const describeConditionSummary = (condition: ConditionFormState, tagsById: Map<n
   return parts.join(' · ')
 }
 
-/** Checklist item list for one Condition — drag to reorder, tap to edit in place, delete with confirmation, mirroring the Checklist tab and Problems list elsewhere in the app. */
+/** One-past-the-end split target, and a single trailing blank line to type new items into — a
+ * ChecklistItemDraft-shaped stand-in for checklistUtils.splitChecklistItemAtCursor/
+ * withTrailingBlankChecklistItem, which are typed against the real (completed/notes-bearing)
+ * ChecklistItem used by the Checklist tab. Drafts here are just text plus a stable drag/React key,
+ * with no completed state or notes to carry — otherwise the same split-into-new-item-on-Enter and
+ * merge-into-previous-on-Backspace-at-start behavior. */
+const DRAFT_ROW_ID = '__draft__'
+
+const withTrailingBlankChecklistItemDraft = (items: ChecklistItemDraft[]): ChecklistItemDraft[] => {
+  const lastItem = items[items.length - 1]
+  if (lastItem && lastItem.text.trim().length === 0) return items
+  return [...items, { id: DRAFT_ROW_ID, text: '' }]
+}
+
+const splitChecklistItemDraftAtCursor = (
+  items: ChecklistItemDraft[],
+  index: number,
+  fieldValue: string,
+  caretOffset: number,
+): { items: ChecklistItemDraft[]; focusId: string | null } => {
+  const before = fieldValue.slice(0, caretOffset).trim()
+  const after = fieldValue.slice(caretOffset).trim()
+  const existing = items[index]
+  if (!existing && !before && !after) return { items, focusId: null }
+
+  const beforeItem: ChecklistItemDraft = { id: existing?.id ?? createChecklistItemId(), text: before }
+  const afterItem: ChecklistItemDraft = { id: createChecklistItemId(), text: after }
+  const next = [...items]
+  next[index] = beforeItem
+  next.splice(index + 1, 0, afterItem)
+  return { items: next, focusId: afterItem.id }
+}
+
+const mergeChecklistItemDraftIntoPrevious = (
+  items: ChecklistItemDraft[],
+  index: number,
+  currentText: string,
+): { items: ChecklistItemDraft[]; focusId: string; caretOffset: number } | null => {
+  if (index <= 0 || index >= items.length) return null
+  const previous = items[index - 1]
+  if (!previous) return null
+  const next = [...items]
+  next.splice(index - 1, 2, { id: previous.id, text: previous.text + currentText })
+  return { items: next, focusId: previous.id, caretOffset: previous.text.length }
+}
+
+/** Checklist item list for one Condition — same continuous-list editing as the Checklist tab and
+ * Problems list elsewhere in the app: drag to reorder (before/after insertion, keyboard-accessible
+ * via the shared useDragReorder hook), tap any line to edit it in place, type into the trailing
+ * blank line to add a new one, Enter splits at the cursor into a new item, Backspace at the start
+ * of a line merges it back into the one above. */
 const ConditionChecklistItemsEditor = ({
   items,
   onChange,
@@ -154,20 +204,23 @@ const ConditionChecklistItemsEditor = ({
   items: ChecklistItemDraft[]
   onChange: (items: ChecklistItemDraft[]) => void
 }) => {
-  const [draft, setDraft] = useState('')
   const [pendingRemovalId, setPendingRemovalId] = useState<string | null>(null)
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
-  const [touchTargetIndex, setTouchTargetIndex] = useState<number | null>(null)
+  const [pendingFocus, setPendingFocus] = useState<{ id: string; caretOffset: number } | null>(null)
 
-  const addItem = () => {
-    const text = draft.trim()
-    if (!text) return
-    onChange([...items, { id: createChecklistItemId(), text }])
-    setDraft('')
+  const reorderItems = (sourceId: string, targetId: string, position: DropPosition) => {
+    onChange(moveItemByKey(items, (item) => item.id, sourceId, targetId, position))
   }
+  const itemDrag = useDragReorder(items.map((item) => item.id), reorderItems)
 
   const updateItemText = (id: string, text: string) => {
-    onChange(items.map((item) => (item.id === id ? { ...item, text } : item)))
+    const nextText = text.trim()
+    onChange(nextText ? items.map((item) => (item.id === id ? { ...item, text: nextText } : item)) : items.filter((item) => item.id !== id))
+  }
+
+  const appendAtEnd = (text: string) => {
+    const nextText = text.trim()
+    if (!nextText) return
+    onChange([...items, { id: createChecklistItemId(), text: nextText }])
   }
 
   const removeItem = (id: string) => {
@@ -175,125 +228,81 @@ const ConditionChecklistItemsEditor = ({
     setPendingRemovalId(null)
   }
 
-  const moveItem = (sourceIndex: number, targetIndex: number) => {
-    if (sourceIndex === targetIndex || !items[sourceIndex] || !items[targetIndex]) return
-    const next = [...items]
-    const [moved] = next.splice(sourceIndex, 1)
-    next.splice(targetIndex, 0, moved)
-    onChange(next)
+  const splitItem = (index: number, fieldValue: string, caretOffset: number) => {
+    const result = splitChecklistItemDraftAtCursor(items, index, fieldValue, caretOffset)
+    if (result.focusId !== null) setPendingFocus({ id: result.focusId, caretOffset: 0 })
+    onChange(result.items)
   }
 
-  const resetDragState = () => {
-    setDraggingIndex(null)
-    setTouchTargetIndex(null)
+  const mergeItemWithPrevious = (index: number, fieldValue: string) => {
+    const result = mergeChecklistItemDraftIntoPrevious(items, index, fieldValue)
+    if (!result) return
+    setPendingFocus({ id: result.focusId, caretOffset: result.caretOffset })
+    onChange(result.items)
   }
 
   const pendingRemoval = items.find((item) => item.id === pendingRemovalId) ?? null
+  const displayItems = withTrailingBlankChecklistItemDraft(items)
 
   return (
     <div className='space-y-1.5'>
       <div className='flex flex-col gap-1'>
-        {items.map((item, index) => (
-          <div
-            key={item.id}
-            data-checklist-item-index={index}
-            className={cn(
-              'flex items-center gap-1.5 rounded-md border border-clay/20 bg-warm-ivory px-1.5 py-1 transition-shadow',
-              draggingIndex === index && 'opacity-50',
-              touchTargetIndex === index && draggingIndex !== null && draggingIndex !== index && 'ring-2 ring-action-primary/40 ring-offset-1 ring-offset-transparent',
-            )}
-            onDragOver={(event: DragEvent<HTMLDivElement>) => {
-              if (draggingIndex === null || draggingIndex === index) return
-              event.preventDefault()
-              event.dataTransfer.dropEffect = 'move'
-            }}
-            onDrop={(event: DragEvent<HTMLDivElement>) => {
-              event.preventDefault()
-              if (draggingIndex !== null) moveItem(draggingIndex, index)
-              resetDragState()
-            }}
-          >
-            <Button
-              type='button'
-              variant='ghost'
-              className='h-6 w-6 shrink-0 p-0 text-clay cursor-grab active:cursor-grabbing touch-none'
-              aria-label={`Reorder item ${index + 1}`}
-              draggable
-              onDragStart={(event: DragEvent<HTMLButtonElement>) => {
-                event.dataTransfer.effectAllowed = 'move'
-                setDraggingIndex(index)
-              }}
-              onDragEnd={resetDragState}
-              onTouchStart={(event: TouchEvent<HTMLButtonElement>) => {
-                event.preventDefault()
-                setDraggingIndex(index)
-                setTouchTargetIndex(index)
-              }}
-              onTouchMove={(event: TouchEvent<HTMLButtonElement>) => {
-                if (draggingIndex === null) return
-                const touchPoint = event.touches[0]
-                if (!touchPoint) return
-                const target = document.elementFromPoint(touchPoint.clientX, touchPoint.clientY)?.closest('[data-checklist-item-index]')
-                if (!(target instanceof HTMLElement)) return
-                const targetIndex = Number.parseInt(target.dataset.checklistItemIndex ?? '', 10)
-                if (!Number.isInteger(targetIndex)) return
-                event.preventDefault()
-                setTouchTargetIndex(targetIndex)
-              }}
-              onTouchEnd={() => {
-                if (draggingIndex !== null && touchTargetIndex !== null) moveItem(draggingIndex, touchTargetIndex)
-                resetDragState()
-              }}
-              onTouchCancel={resetDragState}
-              onKeyDown={(event) => {
-                if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
-                event.preventDefault()
-                const targetIndex = event.key === 'ArrowUp' ? index - 1 : index + 1
-                if (targetIndex >= 0 && targetIndex < items.length) moveItem(index, targetIndex)
-              }}
-            >
-              <GripVertical className='h-3.5 w-3.5' aria-hidden='true' />
-            </Button>
-            <TapToEditField
-              className='min-w-0 flex-1 px-1 py-0.5 text-xs'
-              ariaLabel={`Checklist item ${index + 1}`}
-              emptyText='Tap to edit'
-              value={item.text}
-              onCommit={(nextText) => updateItemText(item.id, nextText)}
-              renderView={(text) => <span className='text-espresso'>{text}</span>}
-              renderEditor={({ value, onChange: onEditorChange }) => (
-                <AutoGrowTextField aria-label={`Checklist item ${index + 1}`} value={value} onChange={onEditorChange} className='text-xs' />
+        {displayItems.map((item, index) => {
+          const isDraftRow = index >= items.length
+          return (
+            <div
+              key={item.id}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md border border-clay/20 bg-warm-ivory px-1.5 py-1 transition-shadow',
+                !isDraftRow && itemDrag.isDragging(item.id) && 'opacity-50',
+                !isDraftRow && dropIndicatorClassName(itemDrag.dropIndicator(item.id)),
               )}
-            />
-            <Button
-              type='button'
-              variant='ghost'
-              size='sm'
-              className='h-6 w-6 shrink-0 p-0 text-action-danger'
-              aria-label='Remove item'
-              onClick={() => setPendingRemovalId(item.id)}
+              {...(!isDraftRow ? itemDrag.getItemProps(item.id) : {})}
             >
-              <Trash2 className='h-3.5 w-3.5' />
-            </Button>
-          </div>
-        ))}
-        {items.length === 0 ? <p className='text-[11px] text-clay/70'>No checklist items yet.</p> : null}
-      </div>
-      <div className='flex items-center gap-1.5'>
-        <Input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              addItem()
-            }
-          }}
-          placeholder='Add checklist item'
-          aria-label='Add checklist item'
-          className='h-8 text-xs'
-        />
-        <Button type='button' size='sm' variant='secondary' className='h-8' onClick={addItem}>Add</Button>
+              {!isDraftRow ? (
+                <DragHandle label={`Reorder item ${index + 1}`} dragProps={itemDrag.getHandleProps(item.id)} />
+              ) : (
+                <div className='h-6 w-6 shrink-0' aria-hidden='true' />
+              )}
+              <TapToEditField
+                className='min-w-0 flex-1 px-1 py-0.5 text-xs'
+                ariaLabel={`Checklist item ${index + 1}`}
+                emptyText={isDraftRow ? 'Add checklist item' : 'Tap to edit'}
+                value={item.text}
+                onCommit={(nextText) => (isDraftRow ? appendAtEnd(nextText) : updateItemText(item.id, nextText))}
+                onEditorKeyDown={(event, { fieldValue, caretOffset, forceExit }) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    forceExit()
+                    splitItem(index, fieldValue, caretOffset)
+                  } else if (event.key === 'Backspace' && !isDraftRow && index > 0 && caretOffset === 0) {
+                    event.preventDefault()
+                    forceExit()
+                    mergeItemWithPrevious(index, fieldValue)
+                  }
+                }}
+                autoEnter={pendingFocus?.id === item.id ? { caretOffset: pendingFocus.caretOffset } : null}
+                onAutoEnterHandled={() => setPendingFocus(null)}
+                renderView={(text) => <span className='text-espresso'>{text}</span>}
+                renderEditor={({ value, onChange: onEditorChange }) => (
+                  <AutoGrowTextField aria-label={`Checklist item ${index + 1}`} value={value} onChange={onEditorChange} className='text-xs' />
+                )}
+              />
+              {!isDraftRow ? (
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  className='h-6 w-6 shrink-0 p-0 text-action-danger'
+                  aria-label='Remove item'
+                  onClick={() => setPendingRemovalId(item.id)}
+                >
+                  <Trash2 className='h-3.5 w-3.5' />
+                </Button>
+              ) : null}
+            </div>
+          )
+        })}
       </div>
 
       <Dialog open={pendingRemoval !== null} onOpenChange={(open) => { if (!open) setPendingRemovalId(null) }}>
