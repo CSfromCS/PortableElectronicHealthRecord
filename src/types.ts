@@ -49,8 +49,6 @@ export type TagDisplayType = 'emoji' | 'color'
 
 export type TagAutomationRole =
   | 'none'
-  | 'category-cd'
-  | 'category-pd'
   | 'relationship-main'
   | 'relationship-referral'
   | 'status-discharged'
@@ -426,74 +424,69 @@ export type TemplateVariableInstance =
   | { kind: 'flat'; variableId: FlatVariableId; /** Only meaningful for a date/time-typed FlatVariableId (admitDate/referralDate/dischargeDate/currentDate/currentTime). Unset uses that field's own built-in default formatting. */ dateTimeFormatId?: string }
   | { kind: 'block'; variableId: BlockVariableId; config: BlockVariableConfig }
   | { kind: 'tags'; config: TagsVariableConfig }
-  | { kind: 'censusSummary'; config: CensusSummaryConfig }
 
-/** How multiple selected tags spanning more than one Tag Group combine into Census Summary's
- * output groups. Meaningless when the selected tags all belong to a single Tag Group (or there's
- * only one selected tag) — there's nothing to combine across yet. 'OR' unions every selected tag
- * into its own group, e.g. picking CD+PD (Category) and Medicine (Service) produces three groups:
- * CD, PD, Medicine. 'AND' cross-combines instead: one group per combination of one tag from each
- * represented Tag Group — the same picks produce two groups, "CD, Medicine" and "PD, Medicine" —
- * and a patient only counts in a combo group if they carry every tag in it. */
+/** How multiple selected tags spanning more than one Tag Group combine into Tag Combo Grouping's
+ * output groups (automatic mode only — see `ReportTemplate.groupSelectionMode`). Meaningless when
+ * the selected tags all belong to a single Tag Group (or there's only one selected tag) — there's
+ * nothing to combine across yet. 'OR' unions every selected tag into its own group, e.g. picking
+ * CD+PD and Medicine produces three groups: CD, PD, Medicine. 'AND' cross-combines instead: one
+ * group per combination of one tag from each represented Tag Group — the same picks produce two
+ * groups, "CD, Medicine" and "PD, Medicine" — and a patient only counts in a combo group if they
+ * carry every tag in it. */
 export type CensusGroupCombineMode = 'AND' | 'OR'
 
-/** How multiple patients within one Census Summary patient-row list are joined together. */
-export type CensusNameJoinMode = 'comma' | 'semicolon' | 'lineBreak' | 'custom'
+/** The five statuses Tag Combo Grouping can tally/list per group, all sharing one lookback window
+ * — see `ReportTemplate.groupLookbackHours`. Admitted requires "Relationship: Main" on top
+ * of the admit-date window check; Referred requires "Relationship: Referral"; Discharged/
+ * SignedOut/Expired share the same discharge-date window check but are told apart by which
+ * specific terminal Automation Role the patient's tag carries. */
+export type CensusStatus = 'admitted' | 'referred' | 'discharged' | 'signedOut' | 'expired'
 
-/** A whole-run aggregate (like Current Date/Time), so it's only offered in a template's
- * Header/Footer, never the per-patient Format Pattern. Three parts:
- * 1. Which patients are grouped, and how (`tagIds`/`groupCombineMode`/`lookbackHours`) — reuses
- *    the same Admitted/Referred/Discharged detection already built for the Patient Filter's
- *    Special/Timebound facet.
- * 2. The format proper (`patternText`/`fieldIds`) — one evaluation per output group, joined by
- *    `groupSeparator`. Fields: groupLabel (that group's comma-joined tag names — see
- *    `CensusGroupCombineMode`), and, for each of admitted/referred/discharged/signed-out/expired,
- *    a bare-number tally field and a list field (patients matching that status within the group,
- *    each rendered through `patientRowPatternText`, wrapped in `listOpenText`/`listCloseText` —
- *    resolving to "" instead when the list is empty unless `showListBracketsWhenEmpty` is on). On
- *    top of the Admitted/Referred/Discharged window check, each status also requires a specific
- *    tag — New Admissions requires "Relationship: Main", New Referrals requires "Relationship:
- *    Referral" (already implied by the window check itself), and Discharged/Signed Out/Expired
- *    are told apart by which literal terminal tag the patient carries, despite all three sharing
- *    the same discharge-date window check. Tally fields are never blank (a number, even "0", is
- *    never an empty string) so a required separator placed next to one is always safe from
- *    blank-collapse; a list field can resolve blank, so — per
- *    [[project_puhrr_collapseblanks_separator_gotcha]] — avoid placing a required separator where
- *    only a list field's own optional wrapper stands between it and the next field.
- * 3. How each patient's own row renders (`patientRowPatternText`/`patientRowFieldIds`), shared by
- *    every list field regardless of which group or status it belongs to. */
-export interface CensusSummaryConfig {
-  /** Individually selected tags (any Tag Groups) forming the basis for Census Summary's output
-   * groups — see `CensusGroupCombineMode`. */
+/** One manually-defined tag combo (`ReportTemplate.groupSelectionMode === 'manual'`) — unlike
+ * automatic mode, which derives every combo from `groupTagIds`/`groupCombineMode`, each combo here
+ * is picked and labeled by hand, and `sortOrder` controls render order directly (mirrors a Custom
+ * Action condition's shape/editing pattern). */
+export interface TagComboGroupSeed {
+  id: string
   tagIds: number[]
-  groupCombineMode: CensusGroupCombineMode
-  /** Hours to look back from the moment the report is generated (not frozen at save time, unlike
-   * Fixed Dates — a shift summary should always mean "the last N hours from now"). */
-  lookbackHours: number
-
-  patternText: string
-  fieldIds: Record<string, string>
-  groupSeparator: BlockJoinMode
-  customGroupSeparator: string
-
-  /** Wraps a list field's patient rows — e.g. " (" / ")" for "2 (SANTOS, MARIMAR)", or "" / "" for
-   * no wrapper at all. Shared by all three list fields. */
-  listOpenText: string
-  listCloseText: string
-  /** When on, an empty list still renders `listOpenText` + `listCloseText` back-to-back (e.g.
-   * "0 ()") instead of the list field resolving to "". */
-  showListBracketsWhenEmpty: boolean
-
-  /** How one patient renders wherever a patient list appears — a free Format Pattern, same
-   * `{{var:<id>}}` mechanism as everywhere else, scoped to fields Room Number, Last Name, First
-   * Name, Full Name, Ward/Location, Age, and Sex. */
-  patientRowPatternText: string
-  patientRowFieldIds: Record<string, string>
-  /** How multiple patient rows within one list join together. */
-  nameSeparator: CensusNameJoinMode
-  /** Only meaningful when nameSeparator === 'custom'. */
-  customNameSeparator: string
+  label: string
+  sortOrder: number
 }
+
+/** A user-authored override of one automatic-mode output group (`ReportTemplate.groupSelectionMode
+ * === 'automatic'`) — keyed by `comboKey` (that combo's tag ids, order-independent — see
+ * `canonicalComboKey`) rather than by identity, so an edit or a manual reorder survives
+ * `groupTagIds`/`groupCombineMode` re-deriving the same combo later. A combo with no matching entry
+ * here falls back to joining its tag names with ", " for its label and to natural (selection order,
+ * or Cartesian-product order under 'AND') position, after every overridden combo. */
+export interface AutomaticGroupLabelOverride {
+  comboKey: string
+  label: string
+  sortOrder: number
+}
+
+/** What a single `{{var:<id>}}` token in `ReportTemplate.groupPatternText` resolves to. `flat`
+ * only ever carries 'currentDate'/'currentTime' here (same whole-run, patient-independent
+ * resolution as the main Format Pattern's own Current Date/Time chips) — everything else is scoped
+ * to "this one output group": `groupLabel` (that group's label — in automatic mode, a user-authored
+ * override from `groupAutomaticLabels` if that combo has one, else its tag names joined with ", ";
+ * in manual mode, the combo's own hand-typed `label`), `patientTally` (count of every patient carrying this group's tags, regardless of
+ * admit/discharge window), `patientInfo` (every such patient rendered through the template's own
+ * main Format Pattern, joined by `patientSeparator`/`customPatientSeparator` — the same "Between
+ * Patients" setting the main per-patient body already uses), and `censusStatus` (a bare tally, or
+ * that status's matching patients again rendered through the main Format Pattern and wrapped in
+ * `groupListOpenText`/`groupListCloseText` — resolving to "" when the list is empty unless
+ * `groupShowListBracketsWhenEmpty` is on, shared by all five statuses). Tally fields are never
+ * blank (a number, even "0", is never an empty string) so a required separator placed next to one
+ * is always safe from blank-collapse; a list field can resolve blank, so — per
+ * [[project_puhrr_collapseblanks_separator_gotcha]] — avoid placing a required separator where
+ * only a list field's own optional wrapper stands between it and the next field. */
+export type GroupVariableInstance =
+  | { kind: 'flat'; variableId: 'currentDate' | 'currentTime'; dateTimeFormatId?: string }
+  | { kind: 'groupLabel' }
+  | { kind: 'patientTally' }
+  | { kind: 'patientInfo' }
+  | { kind: 'censusStatus'; status: CensusStatus; field: 'tally' | 'list' }
 
 /**
  * A user-defined, savable report format (issue #82). `patternText` is the single source of truth
@@ -526,6 +519,34 @@ export interface ReportTemplate {
   /** Same as the header, but printed once at the very end. */
   footerPatternText: string
   footerVariables: Record<string, TemplateVariableInstance>
+
+  /** Tag Combo Grouping (issue #145) — an optional segment rendered between the header and the
+   * per-patient body. When on, the body is no longer a flat per-patient list: patients are first
+   * bucketed into groups by tag combo, each group renders `groupPatternText` once (which can embed
+   * the per-patient Format Pattern via a `patientInfo` chip), and the groups join via
+   * `groupSeparator`/`customGroupSeparator`. Scoped to whichever patients the report was actually
+   * run against, same as the ungrouped body. */
+  groupingEnabled: boolean
+  /** 'automatic' derives one group per selected tag (or per tag combination — see
+   * `groupCombineMode`) from `groupTagIds`; 'manual' uses the hand-picked, hand-labeled, reorderable
+   * combos in `groupManualCombos` instead. */
+  groupSelectionMode: 'automatic' | 'manual'
+  groupTagIds: number[]
+  groupCombineMode: CensusGroupCombineMode
+  /** Automatic mode only: user-authored label/order overrides for the combos `groupTagIds`/
+   * `groupCombineMode` derive — see `AutomaticGroupLabelOverride`. */
+  groupAutomaticLabels: AutomaticGroupLabelOverride[]
+  groupManualCombos: TagComboGroupSeed[]
+  /** Hours to look back from the moment the report is generated (not frozen at save time) — one
+   * shared window for all five statuses' Tally/List chips. */
+  groupLookbackHours: number
+  groupListOpenText: string
+  groupListCloseText: string
+  groupShowListBracketsWhenEmpty: boolean
+  groupPatternText: string
+  groupVariables: Record<string, GroupVariableInstance>
+  groupSeparator: BlockJoinMode
+  customGroupSeparator: string
 }
 
 /** A named, savable date/time display format (e.g. "MMM D, YYYY") — selectable wherever a

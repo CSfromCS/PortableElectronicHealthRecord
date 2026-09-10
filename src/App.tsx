@@ -89,6 +89,7 @@ import {
   PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE,
   buildCurrentDateTimeText,
   classifyTemplateRepeatMode,
+  renderGroupedBody,
   renderTemplateForPatient,
   resolveJoinString,
 } from './features/templates/templateEngine'
@@ -4302,11 +4303,13 @@ function App() {
       poolContext: patientPoolContext,
       ...buildCurrentDateTimeText(),
     }
-    const bodyText = classifyTemplateRepeatMode(template) === 'prints-once'
-      ? renderTemplateForPatient(template, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
-      : patientsForBody
-        .map((patient) => renderTemplateForPatient(template, patient, ctx))
-        .join(resolveJoinString(template.patientSeparator, template.customPatientSeparator))
+    const bodyText = template.groupingEnabled
+      ? renderGroupedBody(template, patientsForBody, ctx)
+      : classifyTemplateRepeatMode(template) === 'prints-once'
+        ? renderTemplateForPatient(template, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
+        : patientsForBody
+          .map((patient) => renderTemplateForPatient(template, patient, ctx))
+          .join(resolveJoinString(template.patientSeparator, template.customPatientSeparator))
     const headerText = template.headerPatternText
       ? renderTemplateForPatient({ patternText: template.headerPatternText, variables: template.headerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
       : ''
