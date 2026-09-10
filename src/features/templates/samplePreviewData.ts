@@ -1,7 +1,16 @@
 import { buildPatientPoolContext } from '@/features/filters/patientFilterUtils'
 import { SERVICE_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
+import { toLocalISODate } from '@/lib/dateTime'
 import { buildCurrentDateTimeText, createVariableId, type TemplateRenderContext } from './templateEngine'
 import type { DailyUpdate, DateTimeFormatDefinition, LabEntry, MedicationEntry, OrderEntry, Patient, TagDefinition, TagGroupDefinition, VitalEntry } from '@/types'
+
+// A fixed past date (e.g. "2026-01-02") eventually drifts out of any relative date-range window
+// (e.g. "last 5 days") a real template's Block variable is configured with, once enough real time
+// passes since this file was written — silently emptying the preview for Vitals/Labs/Orders/
+// Problems/Checklist chips using anything but the default "most recent entry" range mode. Anchor
+// everything to the actual current date instead so it never goes stale.
+const TODAY_ISO = toLocalISODate()
+const YESTERDAY_ISO = toLocalISODate(new Date(Date.now() - 24 * 60 * 60 * 1000))
 
 /** Synthetic patient used only for the template editor's live preview — deliberately decoupled
  * from whatever real patient (if any) is open, so previewing a template never risks surfacing a
@@ -9,8 +18,8 @@ import type { DailyUpdate, DateTimeFormatDefinition, LabEntry, MedicationEntry, 
  * reached from. */
 export const SAMPLE_PREVIEW_PATIENT: Patient = {
   id: -999,
-  lastModified: '2026-01-01T00:00:00.000Z',
-  createdAt: '2026-01-01T08:00:00.000Z',
+  lastModified: `${TODAY_ISO}T00:00:00.000Z`,
+  createdAt: `${TODAY_ISO}T08:00:00.000Z`,
   roomNumber: '512A',
   ward: 'Medicine Ward',
   lastName: 'CRUZ',
@@ -18,9 +27,9 @@ export const SAMPLE_PREVIEW_PATIENT: Patient = {
   middleName: 'Santos',
   age: 45,
   sex: 'F',
-  admitDate: '2026-01-01',
+  admitDate: TODAY_ISO,
   admitTime: '08:00',
-  referralDate: '2026-01-01',
+  referralDate: TODAY_ISO,
   referralTime: '09:15',
   dischargeDate: undefined,
   dischargeTime: undefined,
@@ -41,19 +50,19 @@ export const SAMPLE_PREVIEW_PATIENT: Patient = {
 }
 
 const SAMPLE_VITALS: VitalEntry[] = [
-  { id: -1, patientId: -999, date: '2026-01-02', time: '06:00', bp: '118/76', hr: '84', rr: '18', temp: '37.1', spo2: '97', note: '', createdAt: '2026-01-02T06:00:00.000Z' },
-  { id: -2, patientId: -999, date: '2026-01-01', time: '18:00', bp: '124/80', hr: '90', rr: '20', temp: '37.8', spo2: '95', note: 'Sample note', createdAt: '2026-01-01T18:00:00.000Z' },
+  { id: -1, patientId: -999, date: TODAY_ISO, time: '06:00', bp: '118/76', hr: '84', rr: '18', temp: '37.1', spo2: '97', note: '', createdAt: `${TODAY_ISO}T06:00:00.000Z` },
+  { id: -2, patientId: -999, date: YESTERDAY_ISO, time: '18:00', bp: '124/80', hr: '90', rr: '20', temp: '37.8', spo2: '95', note: 'Sample note', createdAt: `${YESTERDAY_ISO}T18:00:00.000Z` },
 ]
 
 const SAMPLE_ORDERS: OrderEntry[] = [
-  { id: -1, patientId: -999, orderDate: '2026-01-02', orderTime: '07:00', service: 'IM', orderText: 'CBC and electrolytes tomorrow AM', status: 'active', note: '', createdAt: '2026-01-02T07:00:00.000Z' },
+  { id: -1, patientId: -999, orderDate: TODAY_ISO, orderTime: '07:00', service: 'IM', orderText: 'CBC and electrolytes tomorrow AM', status: 'active', note: '', createdAt: `${TODAY_ISO}T07:00:00.000Z` },
 ]
 
 const SAMPLE_LABS: LabEntry[] = [
   {
     id: -1,
     patientId: -999,
-    date: '2026-01-02',
+    date: TODAY_ISO,
     time: '06:30',
     templateId: 'ust-cbc',
     results: {
@@ -62,27 +71,27 @@ const SAMPLE_LABS: LabEntry[] = [
       L: '14', M: '5', E: '1', B: '0', Blasts: '0', Myelocytes: '0', MDW: '21.5',
     },
     note: 'Sample note for preview',
-    createdAt: '2026-01-02T06:30:00.000Z',
+    createdAt: `${TODAY_ISO}T06:30:00.000Z`,
   },
 ]
 
 // Previously an empty Map, so the Medications Block variable chip had nothing to render in the
 // preview at all — unlike Vitals/Labs/Orders/Problems/Checklist, which all had at least one entry.
 const SAMPLE_MEDICATIONS: MedicationEntry[] = [
-  { id: -1, patientId: -999, sortOrder: 0, medication: 'Amlodipine', dose: '10 mg', route: 'PO', frequency: 'OD', note: 'Home antihypertensive', status: 'active', createdAt: '2026-01-01T09:00:00.000Z' },
-  { id: -2, patientId: -999, sortOrder: 1, medication: 'Ceftriaxone', dose: '2 g', route: 'IV', frequency: 'q24h', note: 'Completed course', status: 'discontinued', createdAt: '2026-01-01T09:00:00.000Z' },
+  { id: -1, patientId: -999, sortOrder: 0, medication: 'Amlodipine', dose: '10 mg', route: 'PO', frequency: 'OD', note: 'Home antihypertensive', status: 'active', createdAt: `${TODAY_ISO}T09:00:00.000Z` },
+  { id: -2, patientId: -999, sortOrder: 1, medication: 'Ceftriaxone', dose: '2 g', route: 'IV', frequency: 'q24h', note: 'Completed course', status: 'discontinued', createdAt: `${TODAY_ISO}T09:00:00.000Z` },
 ]
 
 const SAMPLE_DAILY_UPDATES: DailyUpdate[] = [
   {
     id: -1,
     patientId: -999,
-    date: '2026-01-02',
+    date: TODAY_ISO,
     problems: [{ id: createVariableId(), title: 'Sample problem', notes: 'Sample notes for preview', completed: false }],
     assessment: '',
     plans: '',
     checklist: [{ text: 'Sample checklist item', completed: false }],
-    lastUpdated: '2026-01-02T07:00:00.000Z',
+    lastUpdated: `${TODAY_ISO}T07:00:00.000Z`,
   },
 ]
 
@@ -99,6 +108,11 @@ const SAMPLE_DAILY_UPDATES: DailyUpdate[] = [
  * than every non-terminal tag this install has — those two are unambiguous, always-seeded
  * defaults; applying everything else (e.g. both Category options, or both OR Status options at
  * once) would produce a combination no real patient would actually carry.
+ *
+ * Once a service is resolved, `admissionDiagnosisByService` needs its own entry for that service
+ * id too — Admission Diagnosis only falls back to `admissionDiagnosisUnassigned` while the patient
+ * has zero services (see `composeDiagnosisText`), so giving the preview patient a real service
+ * without a matching diagnosis entry would make that chip render blank instead.
  */
 export const buildSamplePreviewPatient = (
   tagsById: Map<number, TagDefinition> = new Map(),
@@ -112,6 +126,8 @@ export const buildSamplePreviewPatient = (
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map((tag) => tag.id)
       .filter((id): id is number => id !== undefined)
+  const mainServiceTagId = serviceTagIds[0]
+  const referralServiceTagId = serviceTagIds[1]
 
   const generalTagIds = ['Main', 'EHR']
     .map((name) => Array.from(tagsById.values()).find((tag) => tag.name === name)?.id)
@@ -119,8 +135,12 @@ export const buildSamplePreviewPatient = (
 
   return {
     ...SAMPLE_PREVIEW_PATIENT,
-    mainServiceTagIds: serviceTagIds.slice(0, 1),
-    referralServiceTagIds: serviceTagIds.slice(1, 2),
+    mainServiceTagIds: mainServiceTagId !== undefined ? [mainServiceTagId] : [],
+    referralServiceTagIds: referralServiceTagId !== undefined ? [referralServiceTagId] : [],
+    admissionDiagnosisByService: {
+      ...(mainServiceTagId !== undefined ? { [mainServiceTagId]: 'Community-acquired pneumonia, improving' } : {}),
+      ...(referralServiceTagId !== undefined ? { [referralServiceTagId]: 'For co-management' } : {}),
+    },
     tagIds: generalTagIds,
   }
 }
