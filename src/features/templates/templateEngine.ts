@@ -1080,7 +1080,7 @@ export type GroupRenderTemplate = Pick<
   ReportTemplate,
   | 'patternText' | 'variables' | 'patientSeparator' | 'customPatientSeparator'
   | 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupTagLabelSeparator' | 'groupManualCombos'
-  | 'groupLookbackHoursByStatus' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'
+  | 'groupLookbackHours' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'
   | 'groupPatternText' | 'groupVariables' | 'groupSeparator' | 'customGroupSeparator'
 >
 
@@ -1155,24 +1155,22 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
     const patientsInGroup = patientsForBody.filter((patient) =>
       group.tagIds.every((tagId) => (patient.tagIds ?? []).includes(tagId)),
     )
-    const buildWindow = (status: CensusStatus): DateTimeWindow => {
-      const hours = Math.max(0, template.groupLookbackHoursByStatus[status])
-      const windowStart = new Date(ctx.nowDate.getTime() - hours * 3_600_000)
-      return {
-        dateFrom: toLocalISODate(windowStart),
-        timeFrom: toLocalTime(windowStart),
-        dateTo: toLocalISODate(ctx.nowDate),
-        timeTo: toLocalTime(ctx.nowDate),
-      }
+    const hours = Math.max(0, template.groupLookbackHours)
+    const windowStart = new Date(ctx.nowDate.getTime() - hours * 3_600_000)
+    const window: DateTimeWindow = {
+      dateFrom: toLocalISODate(windowStart),
+      timeFrom: toLocalTime(windowStart),
+      dateTo: toLocalISODate(ctx.nowDate),
+      timeTo: toLocalTime(ctx.nowDate),
     }
-    const dischargedInWindow = patientsInGroup.filter((patient) => matchesPatientPool(patient, ['discharged'], buildWindow('discharged'), ctx.poolContext))
+    const dischargedInWindow = patientsInGroup.filter((patient) => matchesPatientPool(patient, ['discharged'], window, ctx.poolContext))
     const groupCtx: GroupRenderCtx = {
       label: group.label,
       patientsInGroup,
       admitted: patientsInGroup.filter((patient) =>
-        matchesPatientPool(patient, ['admitted'], buildWindow('admitted'), ctx.poolContext) && patientHasAutomationRole(patient, ctx.tagsById, 'relationship-main'),
+        matchesPatientPool(patient, ['admitted'], window, ctx.poolContext) && patientHasAutomationRole(patient, ctx.tagsById, 'relationship-main'),
       ),
-      referred: patientsInGroup.filter((patient) => matchesPatientPool(patient, ['referred'], buildWindow('referred'), ctx.poolContext)),
+      referred: patientsInGroup.filter((patient) => matchesPatientPool(patient, ['referred'], window, ctx.poolContext)),
       discharged: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-discharged')),
       signedOut: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-signed-out')),
       expired: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-expired')),

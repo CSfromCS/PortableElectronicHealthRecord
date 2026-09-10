@@ -15,6 +15,8 @@ import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib
 import { toLocalISODate, toLocalTime } from '@/lib/dateTime'
 import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
+import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
+import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { cn } from '@/lib/utils'
 import type {
   BlockJoinMode,
@@ -22,7 +24,6 @@ import type {
   BlockVariableId,
   BlockVariableRangeMode,
   CensusGroupCombineMode,
-  CensusStatus,
   DateTimeFormatDefinition,
   FlatVariableId,
   GroupVariableInstance,
@@ -98,7 +99,7 @@ type TemplateFormState = {
   groupCombineMode: CensusGroupCombineMode
   groupTagLabelSeparator: string
   groupManualCombos: TagComboGroupSeed[]
-  groupLookbackHoursByStatus: Record<CensusStatus, number>
+  groupLookbackHours: number
   groupListOpenText: string
   groupListCloseText: string
   groupShowListBracketsWhenEmpty: boolean
@@ -106,10 +107,6 @@ type TemplateFormState = {
   groupVariables: Record<string, GroupVariableInstance>
   groupSeparator: BlockJoinMode
   customGroupSeparator: string
-}
-
-const DEFAULT_GROUP_LOOKBACK_HOURS_BY_STATUS: Record<CensusStatus, number> = {
-  admitted: 12, referred: 12, discharged: 12, signedOut: 12, expired: 12,
 }
 
 const templateToForm = (template: ReportTemplate): TemplateFormState => ({
@@ -128,7 +125,7 @@ const templateToForm = (template: ReportTemplate): TemplateFormState => ({
   groupCombineMode: template.groupCombineMode,
   groupTagLabelSeparator: template.groupTagLabelSeparator,
   groupManualCombos: template.groupManualCombos.map((combo) => ({ ...combo })),
-  groupLookbackHoursByStatus: { ...template.groupLookbackHoursByStatus },
+  groupLookbackHours: template.groupLookbackHours,
   groupListOpenText: template.groupListOpenText,
   groupListCloseText: template.groupListCloseText,
   groupShowListBracketsWhenEmpty: template.groupShowListBracketsWhenEmpty,
@@ -154,7 +151,7 @@ const blankForm = (): TemplateFormState => ({
   groupCombineMode: 'OR',
   groupTagLabelSeparator: ', ',
   groupManualCombos: [],
-  groupLookbackHoursByStatus: { ...DEFAULT_GROUP_LOOKBACK_HOURS_BY_STATUS },
+  groupLookbackHours: 12,
   groupListOpenText: ' (',
   groupListCloseText: ')',
   groupShowListBracketsWhenEmpty: false,
@@ -278,16 +275,6 @@ const CENSUS_GROUP_COMBINE_MODE_LABELS: Record<CensusGroupCombineMode, string> =
   AND: 'All (AND)',
 }
 
-const CENSUS_STATUS_ORDER: CensusStatus[] = ['admitted', 'referred', 'discharged', 'signedOut', 'expired']
-
-const CENSUS_STATUS_LABELS: Record<CensusStatus, string> = {
-  admitted: 'New Admissions',
-  referred: 'New Referrals',
-  discharged: 'Discharged',
-  signedOut: 'Signed Out',
-  expired: 'Expired',
-}
-
 const GROUP_FORMAT_CATALOG: ChipCatalogEntry[] = GROUP_FIELD_ORDER.map((fieldId) => ({
   id: fieldId,
   label: GROUP_FIELD_LABELS[fieldId],
@@ -343,7 +330,7 @@ const ManualComboRow = ({
           <Trash2 className='h-3.5 w-3.5' />
         </Button>
       </div>
-      <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(combo.tagIds)} onToggle={toggleTag} />
+      <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(combo.tagIds)} onToggle={toggleTag} collapsible />
     </div>
   )
 }
@@ -415,7 +402,7 @@ const GroupingSegment = ({
             <div className='space-y-3'>
               <div className='space-y-1.5'>
                 <Label className='text-xs'>Which tags group patients</Label>
-                <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(form.groupTagIds)} onToggle={toggleAutomaticTag} />
+                <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(form.groupTagIds)} onToggle={toggleAutomaticTag} collapsible />
                 <p className='text-xs text-clay'>Each selected tag becomes its own output group, covering patients currently carrying that tag.</p>
               </div>
 
@@ -446,10 +433,15 @@ const GroupingSegment = ({
 
               <div className='space-y-1'>
                 <Label className='text-xs'>Group label separator</Label>
-                <Input
+                <TapToEditField
+                  className='rounded-md border border-input bg-white'
+                  ariaLabel='Group label separator'
+                  emptyText='Tap to set a separator'
                   value={form.groupTagLabelSeparator}
-                  onChange={(event) => onChange({ groupTagLabelSeparator: event.target.value })}
-                  placeholder='e.g. ", "'
+                  onCommit={(groupTagLabelSeparator) => onChange({ groupTagLabelSeparator })}
+                  renderEditor={({ value, onChange: onEditorChange }) => (
+                    <AutoGrowTextField aria-label='Group label separator' value={value} onChange={onEditorChange} placeholder='e.g. ", "' />
+                  )}
                 />
                 <p className='text-xs text-clay'>Joins a combo group's tag names into its label, e.g. "CD, Main".</p>
               </div>
@@ -492,27 +484,15 @@ const GroupingSegment = ({
             </div>
           )}
 
-          <div className='space-y-3 border-t border-clay/15 pt-3'>
-            <Label className='text-xs'>How far back each status looks</Label>
-            <div className='grid grid-cols-2 gap-2'>
-              {CENSUS_STATUS_ORDER.map((status) => (
-                <div key={status} className='space-y-1'>
-                  <Label className='text-xs text-clay'>{CENSUS_STATUS_LABELS[status]} (hours)</Label>
-                  <Input
-                    type='number'
-                    min={1}
-                    value={form.groupLookbackHoursByStatus[status]}
-                    onChange={(event) => onChange({
-                      groupLookbackHoursByStatus: {
-                        ...form.groupLookbackHoursByStatus,
-                        [status]: Math.max(1, Number.parseInt(event.target.value, 10) || 1),
-                      },
-                    })}
-                  />
-                </div>
-              ))}
-            </div>
-            <p className='text-xs text-clay'>Measured back from the moment the report is generated, not frozen at save time — shared between each status's Tally and List chip.</p>
+          <div className='space-y-1 border-t border-clay/15 pt-3'>
+            <Label className='text-xs'>How far back each status looks (hours)</Label>
+            <Input
+              type='number'
+              min={1}
+              value={form.groupLookbackHours}
+              onChange={(event) => onChange({ groupLookbackHours: Math.max(1, Number.parseInt(event.target.value, 10) || 1) })}
+            />
+            <p className='text-xs text-clay'>Measured back from the moment the report is generated, not frozen at save time — shared by New Admissions/Referrals/Discharged/Signed Out/Expired.</p>
           </div>
 
           <div className='space-y-1.5 border-t border-clay/15 pt-3'>
@@ -556,22 +536,28 @@ const GroupingSegment = ({
             <div className='grid grid-cols-2 gap-2'>
               <div className='space-y-1'>
                 <Label className='text-xs text-clay'>Start text</Label>
-                <textarea
-                  rows={2}
-                  className={TEXTAREA_CLASS}
+                <TapToEditField
+                  className='rounded-md border border-input bg-white'
+                  ariaLabel='Start text'
+                  emptyText='Tap to add start text'
                   value={form.groupListOpenText}
-                  onChange={(event) => onChange({ groupListOpenText: event.target.value })}
-                  placeholder='e.g. " ("'
+                  onCommit={(groupListOpenText) => onChange({ groupListOpenText })}
+                  renderEditor={({ value, onChange: onEditorChange }) => (
+                    <AutoGrowTextField aria-label='Start text' value={value} onChange={onEditorChange} placeholder='e.g. " ("' />
+                  )}
                 />
               </div>
               <div className='space-y-1'>
                 <Label className='text-xs text-clay'>End text</Label>
-                <textarea
-                  rows={2}
-                  className={TEXTAREA_CLASS}
+                <TapToEditField
+                  className='rounded-md border border-input bg-white'
+                  ariaLabel='End text'
+                  emptyText='Tap to add end text'
                   value={form.groupListCloseText}
-                  onChange={(event) => onChange({ groupListCloseText: event.target.value })}
-                  placeholder='e.g. ")"'
+                  onCommit={(groupListCloseText) => onChange({ groupListCloseText })}
+                  renderEditor={({ value, onChange: onEditorChange }) => (
+                    <AutoGrowTextField aria-label='End text' value={value} onChange={onEditorChange} placeholder='e.g. ")"' />
+                  )}
                 />
               </div>
             </div>
@@ -1912,7 +1898,7 @@ export const ManageTemplatesScreen = ({
       groupCombineMode: form.groupCombineMode,
       groupTagLabelSeparator: form.groupTagLabelSeparator,
       groupManualCombos: form.groupManualCombos,
-      groupLookbackHoursByStatus: form.groupLookbackHoursByStatus,
+      groupLookbackHours: form.groupLookbackHours,
       groupListOpenText: form.groupListOpenText,
       groupListCloseText: form.groupListCloseText,
       groupShowListBracketsWhenEmpty: form.groupShowListBracketsWhenEmpty,
@@ -1997,7 +1983,7 @@ export const ManageTemplatesScreen = ({
       groupCombineMode: template.groupCombineMode,
       groupTagLabelSeparator: template.groupTagLabelSeparator,
       groupManualCombos: template.groupManualCombos.map((combo) => ({ ...combo, id: createTagComboGroupId() })),
-      groupLookbackHoursByStatus: { ...template.groupLookbackHoursByStatus },
+      groupLookbackHours: template.groupLookbackHours,
       groupListOpenText: template.groupListOpenText,
       groupListCloseText: template.groupListCloseText,
       groupShowListBracketsWhenEmpty: template.groupShowListBracketsWhenEmpty,

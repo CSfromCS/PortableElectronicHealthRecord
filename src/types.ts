@@ -435,8 +435,8 @@ export type TemplateVariableInstance =
  * carry every tag in it. */
 export type CensusGroupCombineMode = 'AND' | 'OR'
 
-/** The five statuses Tag Combo Grouping can tally/list per group, each independently windowed —
- * see `ReportTemplate.groupLookbackHoursByStatus`. Admitted requires "Relationship: Main" on top
+/** The five statuses Tag Combo Grouping can tally/list per group, all sharing one lookback window
+ * — see `ReportTemplate.groupLookbackHours`. Admitted requires "Relationship: Main" on top
  * of the admit-date window check; Referred requires "Relationship: Referral"; Discharged/
  * SignedOut/Expired share the same discharge-date window check but are told apart by which
  * specific terminal Automation Role the patient's tag carries. */
@@ -525,9 +525,9 @@ export interface ReportTemplate {
    * "CD, Main". */
   groupTagLabelSeparator: string
   groupManualCombos: TagComboGroupSeed[]
-  /** Hours to look back from the moment the report is generated (not frozen at save time), one
-   * independent window per status — shared between that status's Tally and List chip. */
-  groupLookbackHoursByStatus: Record<CensusStatus, number>
+  /** Hours to look back from the moment the report is generated (not frozen at save time) — one
+   * shared window for all five statuses' Tally/List chips. */
+  groupLookbackHours: number
   groupListOpenText: string
   groupListCloseText: string
   groupShowListBracketsWhenEmpty: boolean
