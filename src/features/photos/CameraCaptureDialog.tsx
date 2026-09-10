@@ -32,10 +32,26 @@ export function CameraCaptureDialog({ open, subtitle, onClose, onDone }: CameraC
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const fallbackInputRef = useRef<HTMLInputElement | null>(null)
+  const stripScrollRef = useRef<HTMLDivElement | null>(null)
   const nextShotIdRef = useRef(0)
   const [captures, setCaptures] = useState<CapturedShot[]>([])
   const [permissionError, setPermissionError] = useState<string | null>(null)
+  const [stripFade, setStripFade] = useState({ left: false, right: false })
   const error = isCameraSupported ? permissionError : 'In-app camera is unavailable on this device/browser.'
+
+  // Hints that the capture strip has more thumbnails scrolled off one edge or the other.
+  const updateStripFade = () => {
+    const el = stripScrollRef.current
+    if (!el) return
+    setStripFade({
+      left: el.scrollLeft > 4,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
+    })
+  }
+
+  useEffect(() => {
+    updateStripFade()
+  }, [captures])
 
   const stopStream = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
@@ -156,22 +172,30 @@ export function CameraCaptureDialog({ open, subtitle, onClose, onDone }: CameraC
 
           <div className='absolute inset-x-0 bottom-0 space-y-2 p-3 bg-gradient-to-t from-black/70 to-transparent'>
             {captures.length > 0 ? (
-              <div className='w-full overflow-x-auto overflow-y-hidden touch-pan-x'>
-                <div className='flex w-max gap-1.5'>
-                  {captures.map((shot) => (
-                    <div key={shot.id} className='relative h-14 w-14 shrink-0 rounded border border-white/30 overflow-hidden'>
-                      <img src={shot.previewUrl} alt='Captured' className='h-full w-full object-cover' />
-                      <button
-                        type='button'
-                        aria-label='Discard this photo'
-                        className='absolute right-0.5 top-0.5 h-4 w-4 rounded-full bg-black/70 text-white flex items-center justify-center'
-                        onClick={() => removeShot(shot.id)}
-                      >
-                        <Trash2 className='h-2.5 w-2.5' />
-                      </button>
-                    </div>
-                  ))}
+              <div className='relative'>
+                <div ref={stripScrollRef} onScroll={updateStripFade} className='w-full overflow-x-auto overflow-y-hidden touch-pan-x'>
+                  <div className='flex w-max gap-1.5'>
+                    {captures.map((shot) => (
+                      <div key={shot.id} className='relative h-14 w-14 shrink-0 rounded border border-white/30 overflow-hidden'>
+                        <img src={shot.previewUrl} alt='Captured' className='h-full w-full object-cover' />
+                        <button
+                          type='button'
+                          aria-label='Discard this photo'
+                          className='absolute right-0.5 top-0.5 h-4 w-4 rounded-full bg-black/70 text-white flex items-center justify-center'
+                          onClick={() => removeShot(shot.id)}
+                        >
+                          <Trash2 className='h-2.5 w-2.5' />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+                {stripFade.left ? (
+                  <div className='pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-black/70 to-transparent' aria-hidden='true' />
+                ) : null}
+                {stripFade.right ? (
+                  <div className='pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-black/70 to-transparent' aria-hidden='true' />
+                ) : null}
               </div>
             ) : null}
             <div className='flex items-center justify-between gap-3'>
