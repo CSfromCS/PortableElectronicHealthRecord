@@ -1,14 +1,36 @@
 import {
   DEFAULT_TAGS_VARIABLE_CONFIG,
   buildDefaultBlockVariableConfig,
+  buildGroupVariableInstanceForField,
   buildVariableToken,
   createVariableId,
-  type CensusSummaryFieldId,
+  type GroupFieldId,
 } from './templateEngine'
-import type { DateTimeComponentId, DateTimeFormatDefinition, FlatVariableId, ReportTemplate, TemplateVariableInstance } from '@/types'
+import type { DateTimeComponentId, DateTimeFormatDefinition, FlatVariableId, GroupVariableInstance, ReportTemplate, TemplateVariableInstance } from '@/types'
 
-/** Matches this app's pre-header/footer/patient-separator behavior exactly: patients joined by a
- * blank line, no header or footer text. */
+/** Tag Combo Grouping (issue #145) off, with reasonable starting values for its fields should the
+ * user turn it on — split out from `DEFAULT_TEMPLATE_EXTRAS` below so the v25 migration in db.ts
+ * can backfill *just* these fields onto existing templates without touching their real, already-
+ * populated header/footer/patientSeparator data. */
+export const DEFAULT_GROUPING_FIELDS = {
+  groupingEnabled: false,
+  groupSelectionMode: 'automatic' as const,
+  groupTagIds: [] as number[],
+  groupCombineMode: 'OR' as const,
+  groupTagLabelSeparator: ', ',
+  groupManualCombos: [] as ReportTemplate['groupManualCombos'],
+  groupLookbackHoursByStatus: { admitted: 12, referred: 12, discharged: 12, signedOut: 12, expired: 12 },
+  groupListOpenText: ' (',
+  groupListCloseText: ')',
+  groupShowListBracketsWhenEmpty: false,
+  groupPatternText: '',
+  groupVariables: {} as Record<string, GroupVariableInstance>,
+  groupSeparator: 'blankLine' as const,
+  customGroupSeparator: '',
+}
+
+/** Matches this app's pre-header/footer/patient-separator/grouping behavior exactly: patients
+ * joined by a blank line, no header or footer text, Tag Combo Grouping (issue #145) off. */
 export const DEFAULT_TEMPLATE_EXTRAS = {
   patientSeparator: 'blankLine' as const,
   customPatientSeparator: '',
@@ -16,6 +38,7 @@ export const DEFAULT_TEMPLATE_EXTRAS = {
   headerVariables: {} as Record<string, TemplateVariableInstance>,
   footerPatternText: '',
   footerVariables: {} as Record<string, TemplateVariableInstance>,
+  ...DEFAULT_GROUPING_FIELDS,
 }
 
 /** Point 7 of issue #82: two pre-populated templates so there's a working reference point on
@@ -117,43 +140,28 @@ export const buildFirstInstallReportTemplates = (now: string, tagIdByName: Map<s
   }
   const errandsPattern = `${errandsFlatToken('roomNumber')} ${errandsFlatToken('lastName')}\n${buildVariableToken(checklistVariableId)}\n`
 
-  const censusFieldIds: Record<string, string> = {}
-  const censusToken = (fieldId: CensusSummaryFieldId): string => {
+  // Census summary CD vs PD — Tag Combo Grouping (issue #145): the group format renders a label
+  // plus each status's tally/list, and the main per-patient pattern (just Last Name, matching what
+  // the old Census-Summary-only Patient Row used to render) is what "New Admissions (list)" etc
+  // embed for each matching patient.
+  const groupVariables: Record<string, GroupVariableInstance> = {}
+  const groupToken = (fieldId: GroupFieldId): string => {
     const id = createVariableId()
-    censusFieldIds[id] = fieldId
+    groupVariables[id] = buildGroupVariableInstanceForField(fieldId)
     return buildVariableToken(id)
   }
-  const censusPatternText = [
-    censusToken('groupLabel'),
-    `Admitted ${censusToken('admittedTally')} patients ${censusToken('admittedList')}`,
-    `Referred ${censusToken('referredTally')} patients ${censusToken('referredList')}`,
-    `Discharged ${censusToken('dischargedTally')} patients ${censusToken('dischargedList')}`,
+  const groupPatternText = [
+    groupToken('groupLabel'),
+    `Admitted ${groupToken('admittedTally')} patients ${groupToken('admittedList')}`,
+    `Referred ${groupToken('referredTally')} patients ${groupToken('referredList')}`,
+    `Discharged ${groupToken('dischargedTally')} patients ${groupToken('dischargedList')}`,
   ].join('\n')
-  const censusPatientRowFieldIds: Record<string, string> = {}
-  const censusPatientRowId = createVariableId()
-  censusPatientRowFieldIds[censusPatientRowId] = 'lastName'
 
-  const censusVariableId = createVariableId()
-  const censusHeaderVariables: Record<string, TemplateVariableInstance> = {
-    [censusVariableId]: {
-      kind: 'censusSummary',
-      config: {
-        tagIds: [tagIdByName.get('CD'), tagIdByName.get('PD')].filter((id): id is number => id !== undefined),
-        groupCombineMode: 'OR',
-        lookbackHours: 12,
-        patternText: censusPatternText,
-        fieldIds: censusFieldIds,
-        groupSeparator: 'blankLine',
-        customGroupSeparator: '',
-        listOpenText: ' (',
-        listCloseText: ')',
-        showListBracketsWhenEmpty: false,
-        patientRowPatternText: buildVariableToken(censusPatientRowId),
-        patientRowFieldIds: censusPatientRowFieldIds,
-        nameSeparator: 'comma',
-        customNameSeparator: '',
-      },
-    },
+  const censusVariables: Record<string, TemplateVariableInstance> = {}
+  const censusFlatToken = (variableId: FlatVariableId): string => {
+    const id = createVariableId()
+    censusVariables[id] = { kind: 'flat', variableId }
+    return buildVariableToken(id)
   }
 
   return [
@@ -162,13 +170,23 @@ export const buildFirstInstallReportTemplates = (now: string, tagIdByName: Map<s
     { name: 'Errands list', patternText: errandsPattern, variables: errandsVariables, sortOrder: 2, createdAt: now, ...DEFAULT_TEMPLATE_EXTRAS },
     {
       name: 'Census summary CD vs PD (past 12 hours)',
-      patternText: '',
-      variables: {},
+      patternText: censusFlatToken('lastName'),
+      variables: censusVariables,
       sortOrder: 4,
       createdAt: now,
       ...DEFAULT_TEMPLATE_EXTRAS,
-      headerPatternText: buildVariableToken(censusVariableId),
-      headerVariables: censusHeaderVariables,
+      groupingEnabled: true,
+      groupSelectionMode: 'automatic',
+      groupTagIds: [tagIdByName.get('CD'), tagIdByName.get('PD')].filter((id): id is number => id !== undefined),
+      groupCombineMode: 'OR',
+      groupTagLabelSeparator: ', ',
+      groupLookbackHoursByStatus: { admitted: 12, referred: 12, discharged: 12, signedOut: 12, expired: 12 },
+      groupListOpenText: ' (',
+      groupListCloseText: ')',
+      groupShowListBracketsWhenEmpty: false,
+      groupPatternText,
+      groupVariables,
+      groupSeparator: 'blankLine',
     },
   ]
 }

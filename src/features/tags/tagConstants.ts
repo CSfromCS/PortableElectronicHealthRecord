@@ -24,8 +24,8 @@ export type DefaultTagSeed = {
 }
 
 export const DEFAULT_TAG_SEEDS: DefaultTagSeed[] = [
-  { name: 'CD', group: 'CD vs PD', terminal: false, automationRole: 'category-cd', displayType: 'emoji', emoji: '❤️' },
-  { name: 'PD', group: 'CD vs PD', terminal: false, automationRole: 'category-pd', displayType: 'emoji', emoji: '💵' },
+  { name: 'CD', group: 'CD vs PD', terminal: false, automationRole: 'none', displayType: 'emoji', emoji: '❤️' },
+  { name: 'PD', group: 'CD vs PD', terminal: false, automationRole: 'none', displayType: 'emoji', emoji: '💵' },
   { name: 'Main', group: 'Main vs Referral', terminal: false, automationRole: 'relationship-main', displayType: 'color', color: '#000000', displayText: 'M' },
   { name: 'Referral', group: 'Main vs Referral', terminal: false, automationRole: 'relationship-referral', displayType: 'color', color: '#ffffff', displayText: 'R' },
   { name: 'MGH', group: 'MGH status', terminal: false, automationRole: 'none', displayType: 'emoji', emoji: '🏠' },
@@ -70,8 +70,6 @@ export const UNGROUPED_LABEL = 'Ungrouped'
 
 export const AUTOMATION_ROLE_LABELS: Record<TagAutomationRole, string> = {
   none: 'None',
-  'category-cd': 'Category: CD',
-  'category-pd': 'Category: PD',
   'relationship-main': 'Relationship: Main',
   'relationship-referral': 'Relationship: Referral',
   'status-discharged': 'Status: Discharged',
@@ -79,19 +77,16 @@ export const AUTOMATION_ROLE_LABELS: Record<TagAutomationRole, string> = {
   'status-expired': 'Status: Expired',
 }
 
-export type AutomationRoleFamily = 'category' | 'relationship'
+export type AutomationRoleFamily = 'relationship'
 
 /**
  * Automation Role "family" — point 7's ambiguity check flags 2+ applied tags whose roles fall in
- * the same family (e.g. Category: CD + Category: PD), not just literally identical roles, since
- * that's the case the issue's own example (CD + PD) describes. Discharged/Signed Out/Expired have
- * no family of their own here — they're all `terminal: true`, so applying more than one at once is
+ * the same family, not just literally identical roles. Discharged/Signed Out/Expired have no
+ * family of their own here — they're all `terminal: true`, so applying more than one at once is
  * already caught by the separate, generic "2+ terminal tags applied" check; a family grouping too
  * would just duplicate that same warning under a second heading. */
 export const AUTOMATION_ROLE_FAMILY: Record<TagAutomationRole, AutomationRoleFamily | null> = {
   none: null,
-  'category-cd': 'category',
-  'category-pd': 'category',
   'relationship-main': 'relationship',
   'relationship-referral': 'relationship',
   'status-discharged': null,
@@ -100,7 +95,6 @@ export const AUTOMATION_ROLE_FAMILY: Record<TagAutomationRole, AutomationRoleFam
 }
 
 export const AUTOMATION_ROLE_FAMILY_LABELS: Record<AutomationRoleFamily, string> = {
-  category: 'Category',
   relationship: 'Relationship',
 }
 

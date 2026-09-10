@@ -5,23 +5,34 @@ import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
 import { seedDefaultCustomActions, seedFirstInstallCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
 import {
+  DEFAULT_GROUPING_FIELDS,
   DEFAULT_TEMPLATE_EXTRAS,
   buildDefaultDateTimeFormats,
   buildDefaultReportTemplates,
   buildFirstInstallReportTemplates,
   buildLockedLabsTemplate,
 } from './features/templates/templateDefaults'
-import { buildDefaultBlockVariableConfig } from './features/templates/templateEngine'
+import {
+  buildDefaultBlockVariableConfig,
+  buildGroupVariableInstanceForField,
+  buildVariableToken,
+  createVariableId,
+  tokenizePatternText,
+  type GroupFieldId,
+} from './features/templates/templateEngine'
 import { buildDefaultCustomViews } from './features/filters/customViewDefaults'
 import type {
+  BlockJoinMode,
   BlockVariableConfig,
   BlockVariableId,
+  CensusGroupCombineMode,
   CustomAction,
   CustomActionRun,
   CustomView,
   DailyUpdate,
   DateTimeFormatDefinition,
   FlatVariableId,
+  GroupVariableInstance,
   LabEntry,
   MedicationEntry,
   OrderEntry,
@@ -980,6 +991,202 @@ db.version(23).stores({
   dateTimeFormats: '++id, sortOrder',
   // Named, saved Tag+Ward filter combos (Custom Views) — a new table, nothing to migrate.
   customViews: '++id, sortOrder',
+})
+
+db.version(24).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Category: CD / Category: PD never had a real consumer left — Custom Actions moved to reading
+  // raw tag ids directly some time ago — so the Automation Role enum drops them. Resets any tag
+  // still carrying either (now-nonexistent) role back to 'none', same precedent as the v22
+  // 'special-mgh' cleanup above; nothing else about the tag changes.
+  const tagDefinitionTable = tx.table<TagDefinition, number>('tagDefinitions')
+  const existingTags = await tagDefinitionTable.toArray()
+  await Promise.all(
+    existingTags.map((tag) =>
+      tag.id !== undefined && ((tag.automationRole as string) === 'category-cd' || (tag.automationRole as string) === 'category-pd')
+        ? tagDefinitionTable.update(tag.id, { automationRole: 'none' })
+        : Promise.resolve(),
+    ),
+  )
+})
+
+/** The pre-issue-#145 shape of Census Summary's own config, kept locally only for this migration
+ * to read — the live type (`CensusSummaryConfig`) no longer exists now that Tag Combo Grouping has
+ * replaced it. */
+type LegacyCensusSummaryConfig = {
+  tagIds: number[]
+  groupCombineMode: CensusGroupCombineMode
+  lookbackHours: number
+  patternText: string
+  fieldIds: Record<string, string>
+  groupSeparator: BlockJoinMode
+  customGroupSeparator: string
+  listOpenText: string
+  listCloseText: string
+  showListBracketsWhenEmpty: boolean
+  patientRowPatternText: string
+  patientRowFieldIds: Record<string, string>
+}
+
+type LegacyHeaderFooterVariableInstance = TemplateVariableInstance | { kind: 'censusSummary'; config: LegacyCensusSummaryConfig }
+
+/** The old Census Summary patient-row system's `fullName` field has no equivalent single
+ * `FlatVariableId` (`formatFullName` combined first+last on the fly) — migrating it to Last Name
+ * alone is a deliberate simplification for this one-time historical conversion rather than
+ * expanding one old token into two new ones. Every other patient-row field id is already a real
+ * `FlatVariableId` name (`roomNumber`/`lastName`/`firstName`/`ward`/`age`/`sex`), so this is the
+ * only remapping needed. */
+const legacyPatientRowFieldToFlatVariableId = (fieldId: string): FlatVariableId =>
+  fieldId === 'fullName' ? 'lastName' : (fieldId as FlatVariableId)
+
+db.version(25).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+}).upgrade(async (tx) => {
+  // Issue #145: promotes Census Summary's header/footer-only aggregate into Tag Combo Grouping, a
+  // first-class segment between a template's Header and Main Template. Every existing template
+  // backfills the new (disabled) grouping fields; a template that had a Census Summary variable in
+  // its Header or Footer additionally gets grouping turned on and populated from that variable's
+  // old config — see buildGroupVariableInstanceForField for the old-field-id → new-instance
+  // mapping (unchanged field names throughout, so this is a straight re-tokenize). If the
+  // template's main pattern was empty (true for every Census-Summary-only template, since that
+  // variable only ever lived in the header/footer), it's seeded from the old patient-row pattern
+  // so "Patient Info"/list output doesn't go blank after the conversion.
+  const reportTemplateTable = tx.table<ReportTemplate & { headerVariables: Record<string, LegacyHeaderFooterVariableInstance>; footerVariables: Record<string, LegacyHeaderFooterVariableInstance> }, number>('reportTemplates')
+  const existingTemplates = await reportTemplateTable.toArray()
+
+  for (const template of existingTemplates) {
+    if (template.id === undefined) continue
+
+    const findCensusEntry = (variables: Record<string, LegacyHeaderFooterVariableInstance>) =>
+      Object.entries(variables).find((entry): entry is [string, { kind: 'censusSummary'; config: LegacyCensusSummaryConfig }] => entry[1].kind === 'censusSummary')
+
+    const headerEntry = findCensusEntry(template.headerVariables)
+    const footerEntry = findCensusEntry(template.footerVariables)
+    const found = headerEntry ?? footerEntry
+
+    if (!found) {
+      if ((template as Partial<ReportTemplate>).groupingEnabled === undefined) {
+        await reportTemplateTable.update(template.id, { ...DEFAULT_GROUPING_FIELDS })
+      }
+      continue
+    }
+
+    const [censusId, censusInstance] = found
+    const legacyConfig = censusInstance.config
+
+    const groupVariables: Record<string, GroupVariableInstance> = {}
+    const groupPatternText = tokenizePatternText(legacyConfig.patternText)
+      .map((part) => {
+        if (part.type === 'text') return part.text
+        if (part.type === 'lineBreak') return '\n'
+        const legacyFieldId = legacyConfig.fieldIds[part.id]
+        if (!legacyFieldId) return ''
+        const newId = createVariableId()
+        groupVariables[newId] = buildGroupVariableInstanceForField(legacyFieldId as GroupFieldId)
+        return buildVariableToken(newId)
+      })
+      .join('')
+
+    let patternText = template.patternText
+    let variables = template.variables
+    if (!patternText.trim()) {
+      const nextVariables: Record<string, TemplateVariableInstance> = {}
+      patternText = tokenizePatternText(legacyConfig.patientRowPatternText)
+        .map((part) => {
+          if (part.type === 'text') return part.text
+          if (part.type === 'lineBreak') return '\n'
+          const legacyFieldId = legacyConfig.patientRowFieldIds[part.id]
+          if (!legacyFieldId) return ''
+          const newId = createVariableId()
+          nextVariables[newId] = { kind: 'flat', variableId: legacyPatientRowFieldToFlatVariableId(legacyFieldId) }
+          return buildVariableToken(newId)
+        })
+        .join('')
+      variables = nextVariables
+    }
+
+    const stripCensusToken = (patternTextToStrip: string, variablesToStrip: Record<string, LegacyHeaderFooterVariableInstance>) => {
+      const remainingVariables = Object.fromEntries(Object.entries(variablesToStrip).filter(([id]) => id !== censusId))
+      const nextPatternText = tokenizePatternText(patternTextToStrip)
+        .map((part) => {
+          if (part.type === 'text') return part.text
+          if (part.type === 'lineBreak') return '\n'
+          return part.id === censusId ? '' : buildVariableToken(part.id)
+        })
+        .join('')
+      return { patternText: nextPatternText, variables: remainingVariables }
+    }
+
+    const updates: Partial<ReportTemplate> = {
+      patternText,
+      variables,
+      groupingEnabled: true,
+      groupSelectionMode: 'automatic',
+      groupTagIds: legacyConfig.tagIds,
+      groupCombineMode: legacyConfig.groupCombineMode,
+      groupTagLabelSeparator: ', ',
+      groupManualCombos: [],
+      groupLookbackHoursByStatus: {
+        admitted: legacyConfig.lookbackHours,
+        referred: legacyConfig.lookbackHours,
+        discharged: legacyConfig.lookbackHours,
+        signedOut: legacyConfig.lookbackHours,
+        expired: legacyConfig.lookbackHours,
+      },
+      groupListOpenText: legacyConfig.listOpenText,
+      groupListCloseText: legacyConfig.listCloseText,
+      groupShowListBracketsWhenEmpty: legacyConfig.showListBracketsWhenEmpty,
+      groupPatternText,
+      groupVariables,
+      groupSeparator: legacyConfig.groupSeparator,
+      customGroupSeparator: legacyConfig.customGroupSeparator,
+    }
+
+    if (headerEntry) {
+      const stripped = stripCensusToken(template.headerPatternText, template.headerVariables)
+      updates.headerPatternText = stripped.patternText
+      updates.headerVariables = stripped.variables as Record<string, TemplateVariableInstance>
+    } else if (footerEntry) {
+      const stripped = stripCensusToken(template.footerPatternText, template.footerVariables)
+      updates.footerPatternText = stripped.patternText
+      updates.footerVariables = stripped.variables as Record<string, TemplateVariableInstance>
+    }
+
+    await reportTemplateTable.update(template.id, updates)
+  }
 })
 
 export { db }

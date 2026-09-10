@@ -22,13 +22,14 @@ import type {
   BlockVariableId,
   BlockVariableRangeMode,
   CensusGroupCombineMode,
-  CensusNameJoinMode,
-  CensusSummaryConfig,
+  CensusStatus,
   DateTimeFormatDefinition,
   FlatVariableId,
+  GroupVariableInstance,
   LabsDateDisplayMode,
   RelativeDateRangeMode,
   ReportTemplate,
+  TagComboGroupSeed,
   TagDefinition,
   TagGroupDefinition,
   TagsVariableConfig,
@@ -40,27 +41,26 @@ import { ChipTextEditor, type ChipCatalogEntry } from './ChipTextEditor'
 import {
   BLOCK_JOIN_MODE_LABELS,
   BLOCK_VARIABLE_LABELS,
-  CENSUS_NAME_JOIN_MODE_LABELS,
-  CENSUS_NAME_JOIN_MODE_ORDER,
-  CENSUS_PATIENT_ROW_FIELD_LABELS,
-  CENSUS_PATIENT_ROW_FIELD_ORDER,
-  CENSUS_SUMMARY_FIELD_LABELS,
-  CENSUS_SUMMARY_FIELD_ORDER,
   DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS,
   DEFAULT_TAGS_VARIABLE_CONFIG,
   ENTRY_FIELD_LABELS_BY_BLOCK,
   ENTRY_FIELD_ORDER_BY_BLOCK,
   FLAT_VARIABLE_LABELS,
+  GROUP_FIELD_LABELS,
+  GROUP_FIELD_ORDER,
   buildDefaultBlockVariableConfig,
-  buildDefaultCensusSummaryConfig,
+  buildGroupVariableInstanceForField,
   buildVariableToken,
   classifyTemplateRepeatMode,
   createVariableId,
   describeBlockConfig,
   describeVariableInstance,
+  groupFieldIdForInstance,
   isDateTimeCapableEntryField,
+  renderGroupedBody,
   renderTemplateForPatient,
   tokenizePatternText,
+  type GroupFieldId,
 } from './templateEngine'
 import { buildSamplePreviewContext, buildSamplePreviewPatient } from './samplePreviewData'
 
@@ -92,6 +92,24 @@ type TemplateFormState = {
   headerVariables: Record<string, TemplateVariableInstance>
   footerPatternText: string
   footerVariables: Record<string, TemplateVariableInstance>
+  groupingEnabled: boolean
+  groupSelectionMode: 'automatic' | 'manual'
+  groupTagIds: number[]
+  groupCombineMode: CensusGroupCombineMode
+  groupTagLabelSeparator: string
+  groupManualCombos: TagComboGroupSeed[]
+  groupLookbackHoursByStatus: Record<CensusStatus, number>
+  groupListOpenText: string
+  groupListCloseText: string
+  groupShowListBracketsWhenEmpty: boolean
+  groupPatternText: string
+  groupVariables: Record<string, GroupVariableInstance>
+  groupSeparator: BlockJoinMode
+  customGroupSeparator: string
+}
+
+const DEFAULT_GROUP_LOOKBACK_HOURS_BY_STATUS: Record<CensusStatus, number> = {
+  admitted: 12, referred: 12, discharged: 12, signedOut: 12, expired: 12,
 }
 
 const templateToForm = (template: ReportTemplate): TemplateFormState => ({
@@ -104,6 +122,20 @@ const templateToForm = (template: ReportTemplate): TemplateFormState => ({
   headerVariables: { ...template.headerVariables },
   footerPatternText: template.footerPatternText,
   footerVariables: { ...template.footerVariables },
+  groupingEnabled: template.groupingEnabled,
+  groupSelectionMode: template.groupSelectionMode,
+  groupTagIds: [...template.groupTagIds],
+  groupCombineMode: template.groupCombineMode,
+  groupTagLabelSeparator: template.groupTagLabelSeparator,
+  groupManualCombos: template.groupManualCombos.map((combo) => ({ ...combo })),
+  groupLookbackHoursByStatus: { ...template.groupLookbackHoursByStatus },
+  groupListOpenText: template.groupListOpenText,
+  groupListCloseText: template.groupListCloseText,
+  groupShowListBracketsWhenEmpty: template.groupShowListBracketsWhenEmpty,
+  groupPatternText: template.groupPatternText,
+  groupVariables: { ...template.groupVariables },
+  groupSeparator: template.groupSeparator,
+  customGroupSeparator: template.customGroupSeparator,
 })
 
 const blankForm = (): TemplateFormState => ({
@@ -116,6 +148,20 @@ const blankForm = (): TemplateFormState => ({
   headerVariables: {},
   footerPatternText: '',
   footerVariables: {},
+  groupingEnabled: false,
+  groupSelectionMode: 'automatic',
+  groupTagIds: [],
+  groupCombineMode: 'OR',
+  groupTagLabelSeparator: ', ',
+  groupManualCombos: [],
+  groupLookbackHoursByStatus: { ...DEFAULT_GROUP_LOOKBACK_HOURS_BY_STATUS },
+  groupListOpenText: ' (',
+  groupListCloseText: ')',
+  groupShowListBracketsWhenEmpty: false,
+  groupPatternText: '',
+  groupVariables: {},
+  groupSeparator: 'blankLine',
+  customGroupSeparator: '',
 })
 
 const JOIN_MODE_ORDER: BlockJoinMode[] = ['lineBreak', 'blankLine', 'space', 'custom']
@@ -225,16 +271,6 @@ const DateTimeFormatPickerDialog = ({
   )
 }
 
-const CENSUS_SUMMARY_CATALOG: ChipCatalogEntry[] = CENSUS_SUMMARY_FIELD_ORDER.map((fieldId) => ({
-  id: fieldId,
-  label: CENSUS_SUMMARY_FIELD_LABELS[fieldId],
-}))
-
-const CENSUS_PATIENT_ROW_CATALOG: ChipCatalogEntry[] = CENSUS_PATIENT_ROW_FIELD_ORDER.map((fieldId) => ({
-  id: fieldId,
-  label: CENSUS_PATIENT_ROW_FIELD_LABELS[fieldId],
-}))
-
 const CENSUS_GROUP_COMBINE_MODE_ORDER: CensusGroupCombineMode[] = ['OR', 'AND']
 
 const CENSUS_GROUP_COMBINE_MODE_LABELS: Record<CensusGroupCombineMode, string> = {
@@ -242,268 +278,316 @@ const CENSUS_GROUP_COMBINE_MODE_LABELS: Record<CensusGroupCombineMode, string> =
   AND: 'All (AND)',
 }
 
-/** How multiple patient rows within one list join together — separate from
- * `JoinModePicker`/`BlockJoinMode` since comma/semicolon (not space/blank-line) are the options
- * that actually make sense for a list of patients. The custom textarea (not a single-line input)
- * matches `JoinModePicker`'s own custom field, so a literal line break can be typed into it too. */
-const CensusNameSeparatorPicker = ({
-  mode,
-  custom,
-  onModeChange,
-  onCustomChange,
-}: {
-  mode: CensusNameJoinMode
-  custom: string
-  onModeChange: (mode: CensusNameJoinMode) => void
-  onCustomChange: (value: string) => void
-}) => (
-  <div className='space-y-1'>
-    <Label className='text-xs'>Patient rows separated by</Label>
-    <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
-      {CENSUS_NAME_JOIN_MODE_ORDER.map((option) => (
-        <Button
-          key={option}
-          type='button'
-          size='sm'
-          variant={mode === option ? 'default' : 'ghost'}
-          className='flex-1 text-xs px-1'
-          onClick={() => onModeChange(option)}
-        >
-          {CENSUS_NAME_JOIN_MODE_LABELS[option]}
-        </Button>
-      ))}
-    </div>
-    {mode === 'custom' ? (
-      <>
-        <textarea
-          rows={2}
-          className={TEXTAREA_CLASS}
-          value={custom}
-          onChange={(event) => onCustomChange(event.target.value)}
-          placeholder={'e.g. " / " or a line break plus more text'}
-        />
-        <p className='text-xs text-clay'>Press Enter here for an actual line break between patient rows.</p>
-      </>
-    ) : null}
-  </div>
-)
+const CENSUS_STATUS_ORDER: CensusStatus[] = ['admitted', 'referred', 'discharged', 'signedOut', 'expired']
 
-/** Census Summary settings, in three parts:
- * 1. Patient Selection — how far back to look, and which tags (reusing the same grouped tag
- *    picker used elsewhere in PUHRR) form the basis for Census Summary's output groups, combined
- *    via AND/OR when they span more than one Tag Group (see `CensusGroupCombineMode`). No Ward or
- *    Special/Timebound facet here — those exist elsewhere for a different purpose (which patients
- *    appear in a view at all), not this one (how they're grouped into a report).
- * 2. Format — the pattern proper, one evaluation per output group, plus how groups join and how
- *    each `*List` field's patient list is wrapped.
- * 3. Patient Row — how one patient's own row renders, and how multiple rows in one list join.
- * Only ever reachable from a Header/Footer's restricted variable picker — a whole-run aggregate,
- * not a per-patient value. */
-const CensusSummaryConfigDialog = ({
-  open,
-  initialConfig,
+const CENSUS_STATUS_LABELS: Record<CensusStatus, string> = {
+  admitted: 'New Admissions',
+  referred: 'New Referrals',
+  discharged: 'Discharged',
+  signedOut: 'Signed Out',
+  expired: 'Expired',
+}
+
+const GROUP_FORMAT_CATALOG: ChipCatalogEntry[] = GROUP_FIELD_ORDER.map((fieldId) => ({
+  id: fieldId,
+  label: GROUP_FIELD_LABELS[fieldId],
+  dateTimeCapable: fieldId === 'currentDate' || fieldId === 'currentTime',
+}))
+
+const createTagComboGroupId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `combo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/** One row of Tag Combo Grouping's manual-mode combo list — a specific hand-picked set of tags
+ * plus a hand-typed label, reordered via drag. Mirrors Custom Actions' condition editor (same
+ * `BulkTagPicker` + `DragHandle` pattern), just without the checklist-items/tag-effects/date
+ * machinery a condition also carries. */
+const ManualComboRow = ({
+  combo,
+  index,
   tags,
   groups,
-  onCancel,
-  onSave,
+  onChange,
+  onRemove,
+  dragHandleProps,
 }: {
-  open: boolean
-  initialConfig: CensusSummaryConfig
+  combo: TagComboGroupSeed
+  index: number
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
-  onCancel: () => void
-  onSave: (config: CensusSummaryConfig) => void
+  onChange: (next: TagComboGroupSeed) => void
+  onRemove: () => void
+  dragHandleProps: ReturnType<ReturnType<typeof useDragReorder<string>>['getHandleProps']>
 }) => {
-  const [config, setConfig] = useState<CensusSummaryConfig>(initialConfig)
-  const [tab, setTab] = useState<'selection' | 'format' | 'patientRow'>('selection')
-
-  useEffect(() => {
-    if (open) {
-      setConfig(initialConfig)
-      setTab('selection')
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset the draft only when the dialog (re)opens
-  }, [open])
-
-  if (!open) return null
-
   const toggleTag = (tag: TagDefinition) => {
     if (tag.id === undefined) return
     const tagId = tag.id
-    setConfig((previous) => ({
-      ...previous,
-      tagIds: previous.tagIds.includes(tagId) ? previous.tagIds.filter((id) => id !== tagId) : [...previous.tagIds, tagId],
-    }))
+    onChange({
+      ...combo,
+      tagIds: combo.tagIds.includes(tagId) ? combo.tagIds.filter((id) => id !== tagId) : [...combo.tagIds, tagId],
+    })
   }
 
+  return (
+    <div className='space-y-2 rounded-xl border border-clay/25 bg-blush-sand/20 p-3'>
+      <div className='flex items-center gap-2'>
+        <DragHandle label={`Drag to reorder combo ${index + 1}`} dragProps={dragHandleProps} />
+        <Input
+          value={combo.label}
+          onChange={(event) => onChange({ ...combo, label: event.target.value })}
+          placeholder={`Combo ${index + 1} label`}
+          className='flex-1'
+        />
+        <Button type='button' variant='ghost' size='sm' className='h-8 w-8 p-0 text-action-danger' aria-label={`Remove combo ${index + 1}`} onClick={onRemove}>
+          <Trash2 className='h-3.5 w-3.5' />
+        </Button>
+      </div>
+      <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(combo.tagIds)} onToggle={toggleTag} />
+    </div>
+  )
+}
+
+/** Tag Combo Grouping (issue #145) — an optional segment between a template's Header and Main
+ * Template sections. Buckets patients by tag combo (automatic: selected tags + AND/OR, same
+ * mechanics Census Summary always used; manual: a hand-picked, hand-labeled, reorderable combo
+ * list, same editing pattern as a Custom Action's conditions) and renders a group-level format
+ * that can embed the Main Template's own per-patient format via a "Patient Info" chip. */
+const GroupingSegment = ({
+  form,
+  tags,
+  groups,
+  dateTimeFormats,
+  onChange,
+}: {
+  form: TemplateFormState
+  tags: TagDefinition[]
+  groups: TagGroupDefinition[]
+  dateTimeFormats: DateTimeFormatDefinition[]
+  onChange: (patch: Partial<TemplateFormState>) => void
+}) => {
   const tagsById = new Map(tags.map((tag) => [tag.id, tag]))
-  const representedGroupIds = new Set(config.tagIds.map((id) => tagsById.get(id)?.groupId ?? 'ungrouped'))
+  const representedGroupIds = new Set(form.groupTagIds.map((id) => tagsById.get(id)?.groupId ?? 'ungrouped'))
+
+  const toggleAutomaticTag = (tag: TagDefinition) => {
+    if (tag.id === undefined) return
+    const tagId = tag.id
+    onChange({ groupTagIds: form.groupTagIds.includes(tagId) ? form.groupTagIds.filter((id) => id !== tagId) : [...form.groupTagIds, tagId] })
+  }
+
+  const reorderCombos = (sourceId: string, targetId: string, position: DropPosition) => {
+    onChange({ groupManualCombos: moveItemByKey(form.groupManualCombos, (combo) => combo.id, sourceId, targetId, position) })
+  }
+  const comboDrag = useDragReorder(form.groupManualCombos.map((combo) => combo.id), reorderCombos)
+
+  const initialGroupFieldIds: Record<string, string> = {}
+  const initialGroupFieldFormats: Record<string, string> = {}
+  Object.entries(form.groupVariables).forEach(([chipId, instance]) => {
+    initialGroupFieldIds[chipId] = groupFieldIdForInstance(instance)
+    if (instance.kind === 'flat' && instance.dateTimeFormatId) initialGroupFieldFormats[chipId] = instance.dateTimeFormatId
+  })
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
-      <DialogContent className='max-w-3xl h-[85vh] flex flex-col' onCloseAutoFocus={(event) => event.preventDefault()}>
-        <DialogHeader>
-          <DialogTitle>Census Summary settings</DialogTitle>
-        </DialogHeader>
-        <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)} className='flex-1 flex flex-col min-h-0'>
-          <TabsList>
-            <TabsTrigger value='selection'>1. Patient Selection</TabsTrigger>
-            <TabsTrigger value='format'>2. Format</TabsTrigger>
-            <TabsTrigger value='patientRow'>3. Patient Row</TabsTrigger>
-          </TabsList>
+    <div className='space-y-3 rounded-lg border border-dashed border-clay/20 bg-warm-ivory/40 p-2.5'>
+      <label className='flex items-center gap-2.5 py-1 cursor-pointer'>
+        <input
+          type='checkbox'
+          className='h-4 w-4 accent-action-primary'
+          checked={form.groupingEnabled}
+          onChange={(event) => onChange({ groupingEnabled: event.target.checked })}
+        />
+        <span className='text-sm font-semibold text-espresso'>Enable tag combo grouping for this template</span>
+      </label>
+      <p className='text-xs text-clay'>
+        Buckets patients by tag combo before the Main Template below renders — each group can show a label, a
+        patient tally, the matching patients themselves (via Main Template), and new-admission/referral/
+        discharge/sign-out/expired tallies and lists, each independently windowed.
+      </p>
 
-          <TabsContent value='selection' className='flex-1 min-h-0 mt-3'>
-            <ScrollArea className='h-full pr-3'>
-              <div className='space-y-4 pb-2'>
+      {form.groupingEnabled ? (
+        <div className='space-y-4 border-t border-clay/15 pt-3'>
+          <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+            <Button type='button' size='sm' variant={form.groupSelectionMode === 'automatic' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => onChange({ groupSelectionMode: 'automatic' })}>Automatic</Button>
+            <Button type='button' size='sm' variant={form.groupSelectionMode === 'manual' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => onChange({ groupSelectionMode: 'manual' })}>Manual</Button>
+          </div>
+
+          {form.groupSelectionMode === 'automatic' ? (
+            <div className='space-y-3'>
+              <div className='space-y-1.5'>
+                <Label className='text-xs'>Which tags group patients</Label>
+                <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(form.groupTagIds)} onToggle={toggleAutomaticTag} />
+                <p className='text-xs text-clay'>Each selected tag becomes its own output group, covering patients currently carrying that tag.</p>
+              </div>
+
+              {representedGroupIds.size > 1 ? (
                 <div className='space-y-1'>
-                  <Label className='text-xs'>Look back this many hours</Label>
+                  <Label className='text-xs'>Selected tags span more than one Tag Group — combine them with</Label>
+                  <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+                    {CENSUS_GROUP_COMBINE_MODE_ORDER.map((mode) => (
+                      <Button
+                        key={mode}
+                        type='button'
+                        size='sm'
+                        variant={form.groupCombineMode === mode ? 'default' : 'ghost'}
+                        className='flex-1 text-xs'
+                        onClick={() => onChange({ groupCombineMode: mode })}
+                      >
+                        {CENSUS_GROUP_COMBINE_MODE_LABELS[mode]}
+                      </Button>
+                    ))}
+                  </div>
+                  <p className='text-xs text-clay'>
+                    {form.groupCombineMode === 'OR'
+                      ? 'One group per selected tag, regardless of which Tag Group it came from.'
+                      : 'One group per combination of one tag from each represented Tag Group — a patient only counts in a combo group if they carry every tag in it.'}
+                  </p>
+                </div>
+              ) : null}
+
+              <div className='space-y-1'>
+                <Label className='text-xs'>Group label separator</Label>
+                <Input
+                  value={form.groupTagLabelSeparator}
+                  onChange={(event) => onChange({ groupTagLabelSeparator: event.target.value })}
+                  placeholder='e.g. ", "'
+                />
+                <p className='text-xs text-clay'>Joins a combo group's tag names into its label, e.g. "CD, Main".</p>
+              </div>
+            </div>
+          ) : (
+            <div className='space-y-2'>
+              {form.groupManualCombos.map((combo, index) => (
+                <div
+                  key={combo.id}
+                  className={cn(
+                    comboDrag.isDragging(combo.id) && 'opacity-50',
+                    dropIndicatorClassName(comboDrag.dropIndicator(combo.id)),
+                  )}
+                  {...comboDrag.getItemProps(combo.id)}
+                >
+                  <ManualComboRow
+                    combo={combo}
+                    index={index}
+                    tags={tags}
+                    groups={groups}
+                    onChange={(next) => onChange({ groupManualCombos: form.groupManualCombos.map((c) => (c.id === combo.id ? next : c)) })}
+                    onRemove={() => onChange({ groupManualCombos: form.groupManualCombos.filter((c) => c.id !== combo.id) })}
+                    dragHandleProps={comboDrag.getHandleProps(combo.id)}
+                  />
+                </div>
+              ))}
+              <Button
+                type='button'
+                size='sm'
+                variant='outline'
+                onClick={() => onChange({
+                  groupManualCombos: [
+                    ...form.groupManualCombos,
+                    { id: createTagComboGroupId(), tagIds: [], label: '', sortOrder: form.groupManualCombos.length },
+                  ],
+                })}
+              >
+                <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Add combo
+              </Button>
+            </div>
+          )}
+
+          <div className='space-y-3 border-t border-clay/15 pt-3'>
+            <Label className='text-xs'>How far back each status looks</Label>
+            <div className='grid grid-cols-2 gap-2'>
+              {CENSUS_STATUS_ORDER.map((status) => (
+                <div key={status} className='space-y-1'>
+                  <Label className='text-xs text-clay'>{CENSUS_STATUS_LABELS[status]} (hours)</Label>
                   <Input
                     type='number'
                     min={1}
-                    value={config.lookbackHours}
-                    onChange={(event) => setConfig((previous) => ({ ...previous, lookbackHours: Math.max(1, Number.parseInt(event.target.value, 10) || 1) }))}
+                    value={form.groupLookbackHoursByStatus[status]}
+                    onChange={(event) => onChange({
+                      groupLookbackHoursByStatus: {
+                        ...form.groupLookbackHoursByStatus,
+                        [status]: Math.max(1, Number.parseInt(event.target.value, 10) || 1),
+                      },
+                    })}
                   />
-                  <p className='text-xs text-clay'>Measured back from the moment the report is generated, not frozen at save time — a 12-hour window always means "the last 12 hours," whenever this is actually used.</p>
                 </div>
+              ))}
+            </div>
+            <p className='text-xs text-clay'>Measured back from the moment the report is generated, not frozen at save time — shared between each status's Tally and List chip.</p>
+          </div>
 
-                <div className='space-y-1.5 border-t border-clay/15 pt-3'>
-                  <Label className='text-xs'>Which tags group patients</Label>
-                  <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(config.tagIds)} onToggle={toggleTag} />
-                  <p className='text-xs text-clay'>Each selected tag becomes its own output group (e.g. checking CD and PD produces a CD group and a PD group), each covering patients currently carrying that tag.</p>
-                </div>
+          <div className='space-y-1.5 border-t border-clay/15 pt-3'>
+            <Label className='text-xs'>Group format — one evaluation per output group</Label>
+            <ChipTextEditor
+              initialPatternText={form.groupPatternText}
+              initialFieldIds={initialGroupFieldIds}
+              initialFieldFormats={initialGroupFieldFormats}
+              catalog={GROUP_FORMAT_CATALOG}
+              dateTimeFormats={dateTimeFormats}
+              addButtonLabel='Add Field'
+              pickerTitle='Add group field'
+              onChange={(groupPatternText, fieldIds, fieldFormats) => {
+                const groupVariables: Record<string, GroupVariableInstance> = {}
+                Object.entries(fieldIds).forEach(([chipId, fieldId]) => {
+                  const instance = buildGroupVariableInstanceForField(fieldId as GroupFieldId)
+                  groupVariables[chipId] = instance.kind === 'flat' && fieldFormats[chipId]
+                    ? { ...instance, dateTimeFormatId: fieldFormats[chipId] }
+                    : instance
+                })
+                onChange({ groupPatternText, groupVariables })
+              }}
+            />
+            <p className='text-xs text-clay'>
+              "Patient Info" and each status's "(list)" field render their matching patients through the Main
+              Template below, joined the same way as "Between patients" — a list resolves to nothing when empty,
+              so a required separator placed right next to one can vanish along with it.
+            </p>
+          </div>
 
-                {representedGroupIds.size > 1 ? (
-                  <div className='space-y-1 border-t border-clay/15 pt-3'>
-                    <Label className='text-xs'>Selected tags span more than one Tag Group — combine them with</Label>
-                    <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
-                      {CENSUS_GROUP_COMBINE_MODE_ORDER.map((mode) => (
-                        <Button
-                          key={mode}
-                          type='button'
-                          size='sm'
-                          variant={config.groupCombineMode === mode ? 'default' : 'ghost'}
-                          className='flex-1 text-xs'
-                          onClick={() => setConfig((previous) => ({ ...previous, groupCombineMode: mode }))}
-                        >
-                          {CENSUS_GROUP_COMBINE_MODE_LABELS[mode]}
-                        </Button>
-                      ))}
-                    </div>
-                    <p className='text-xs text-clay'>
-                      {config.groupCombineMode === 'OR'
-                        ? 'One group per selected tag, regardless of which Tag Group it came from.'
-                        : 'One group per combination of one tag from each represented Tag Group (e.g. Category + Service produces "CD, Medicine", "CD, Surgery", "PD, Medicine", "PD, Surgery") — a patient only counts in a combo group if they carry every tag in it.'}
-                    </p>
-                  </div>
-                ) : null}
-              </div>
-            </ScrollArea>
-          </TabsContent>
+          <JoinModePicker
+            label='Between groups'
+            mode={form.groupSeparator}
+            custom={form.customGroupSeparator}
+            onModeChange={(groupSeparator) => onChange({ groupSeparator })}
+            onCustomChange={(customGroupSeparator) => onChange({ customGroupSeparator })}
+          />
 
-          <TabsContent value='format' className='flex-1 min-h-0 mt-3'>
-            <ScrollArea className='h-full pr-3'>
-              <div className='space-y-4 pb-2'>
-                <div className='space-y-1.5'>
-                  <Label className='text-xs'>Format — one evaluation per output group</Label>
-                  <ChipTextEditor
-                    initialPatternText={config.patternText}
-                    initialFieldIds={config.fieldIds}
-                    catalog={CENSUS_SUMMARY_CATALOG}
-                    addButtonLabel='Add Field'
-                    pickerTitle='Add Census Summary field'
-                    onChange={(patternText, fieldIds) => setConfig((previous) => ({ ...previous, patternText, fieldIds }))}
-                  />
-                  <p className='text-xs text-clay'>
-                    "Group Label" is that group's comma-joined tag names. Each "(tally)" field is just the patient count, nothing else. Each "(list)" field is that status's matching patients (see Patient Row), wrapped per below — it resolves to nothing when the list is empty, so a required separator placed right next to one can vanish along with it. Put risky optional content on its own line (a line break always stops this) rather than relying on it to protect neighboring text.
-                  </p>
-                  <p className='text-xs text-clay'>
-                    New Admissions only counts patients tagged "Main"; New Referrals only counts patients tagged "Referral"; Discharged/Signed Out/Expired each only count patients tagged with that exact status tag (all narrower than the underlying Admitted/Referred/Discharged window check).
-                  </p>
-                </div>
-
-                <JoinModePicker
-                  label='Between groups'
-                  mode={config.groupSeparator}
-                  custom={config.customGroupSeparator}
-                  onModeChange={(groupSeparator) => setConfig((previous) => ({ ...previous, groupSeparator }))}
-                  onCustomChange={(customGroupSeparator) => setConfig((previous) => ({ ...previous, customGroupSeparator }))}
-                />
-
-                <div className='border-t border-clay/15 pt-3 space-y-2'>
-                  <Label className='text-xs'>Wrap each patient list with</Label>
-                  <div className='grid grid-cols-2 gap-2'>
-                    <div className='space-y-1'>
-                      <Label className='text-xs text-clay'>Start text</Label>
-                      <textarea
-                        rows={2}
-                        className={TEXTAREA_CLASS}
-                        value={config.listOpenText}
-                        onChange={(event) => setConfig((previous) => ({ ...previous, listOpenText: event.target.value }))}
-                        placeholder='e.g. " ("'
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label className='text-xs text-clay'>End text</Label>
-                      <textarea
-                        rows={2}
-                        className={TEXTAREA_CLASS}
-                        value={config.listCloseText}
-                        onChange={(event) => setConfig((previous) => ({ ...previous, listCloseText: event.target.value }))}
-                        placeholder='e.g. ")"'
-                      />
-                    </div>
-                  </div>
-                  <label className='flex items-center gap-2.5 py-1 cursor-pointer'>
-                    <input
-                      type='checkbox'
-                      className='h-4 w-4 accent-action-primary'
-                      checked={config.showListBracketsWhenEmpty}
-                      onChange={(event) => setConfig((previous) => ({ ...previous, showListBracketsWhenEmpty: event.target.checked }))}
-                    />
-                    <span className='text-sm text-espresso'>Show start/end text even when the list is empty</span>
-                  </label>
-                  <p className='text-xs text-clay'>
-                    {config.showListBracketsWhenEmpty
-                      ? 'An empty list still renders the start and end text back-to-back, e.g. "0 ()".'
-                      : 'An empty list renders nothing at all, e.g. just "0" with no trailing "()".'}
-                  </p>
-                </div>
-              </div>
-            </ScrollArea>
-          </TabsContent>
-
-          <TabsContent value='patientRow' className='flex-1 min-h-0 mt-3'>
-            <ScrollArea className='h-full pr-3'>
-              <div className='space-y-4 pb-2'>
-                <div className='space-y-1.5'>
-                  <Label className='text-xs'>How each patient's row renders</Label>
-                  <ChipTextEditor
-                    initialPatternText={config.patientRowPatternText}
-                    initialFieldIds={config.patientRowFieldIds}
-                    catalog={CENSUS_PATIENT_ROW_CATALOG}
-                    addButtonLabel='Add Field'
-                    pickerTitle='Add patient row field'
-                    onChange={(patientRowPatternText, patientRowFieldIds) => setConfig((previous) => ({ ...previous, patientRowPatternText, patientRowFieldIds }))}
-                  />
-                  <p className='text-xs text-clay'>Shared by every "(list)" field — e.g. "{'{{Room Number}} {{Last Name}}'}" for "3069 SANTOS", or just Last Name for "SANTOS".</p>
-                </div>
-
-                <CensusNameSeparatorPicker
-                  mode={config.nameSeparator}
-                  custom={config.customNameSeparator}
-                  onModeChange={(nameSeparator) => setConfig((previous) => ({ ...previous, nameSeparator }))}
-                  onCustomChange={(customNameSeparator) => setConfig((previous) => ({ ...previous, customNameSeparator }))}
+          <div className='space-y-2 border-t border-clay/15 pt-3'>
+            <Label className='text-xs'>Wrap each patient list with</Label>
+            <div className='grid grid-cols-2 gap-2'>
+              <div className='space-y-1'>
+                <Label className='text-xs text-clay'>Start text</Label>
+                <textarea
+                  rows={2}
+                  className={TEXTAREA_CLASS}
+                  value={form.groupListOpenText}
+                  onChange={(event) => onChange({ groupListOpenText: event.target.value })}
+                  placeholder='e.g. " ("'
                 />
               </div>
-            </ScrollArea>
-          </TabsContent>
-        </Tabs>
-        <div className='flex justify-end gap-2 pt-2'>
-          <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
-          <Button type='button' disabled={config.tagIds.length === 0} onClick={() => onSave(config)}>Save</Button>
+              <div className='space-y-1'>
+                <Label className='text-xs text-clay'>End text</Label>
+                <textarea
+                  rows={2}
+                  className={TEXTAREA_CLASS}
+                  value={form.groupListCloseText}
+                  onChange={(event) => onChange({ groupListCloseText: event.target.value })}
+                  placeholder='e.g. ")"'
+                />
+              </div>
+            </div>
+            <label className='flex items-center gap-2.5 py-1 cursor-pointer'>
+              <input
+                type='checkbox'
+                className='h-4 w-4 accent-action-primary'
+                checked={form.groupShowListBracketsWhenEmpty}
+                onChange={(event) => onChange({ groupShowListBracketsWhenEmpty: event.target.checked })}
+              />
+              <span className='text-sm text-espresso'>Show start/end text even when a list is empty</span>
+            </label>
+          </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      ) : null}
+    </div>
   )
 }
 
@@ -1015,7 +1099,6 @@ const VariablePickerDialog = ({
   onPickFlat,
   onPickTags,
   onPickBlock,
-  onPickCensusSummary,
   restrictToCurrentDateTime = false,
 }: {
   open: boolean
@@ -1023,10 +1106,9 @@ const VariablePickerDialog = ({
   onPickFlat: (variableId: FlatVariableId) => void
   onPickTags: () => void
   onPickBlock: (variableId: BlockVariableId) => void
-  onPickCensusSummary?: () => void
   /** Header/Footer content prints once per run, not per patient, so only Current Date/Current
-   * Time, Census Summary (plus whatever literal text is typed) make sense there — every other
-   * variable reads from a specific patient and is left out of the picker entirely in this mode. */
+   * Time (plus whatever literal text is typed) make sense there — every other variable reads from
+   * a specific patient and is left out of the picker entirely in this mode. */
   restrictToCurrentDateTime?: boolean
 }) => (
   <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -1047,15 +1129,6 @@ const VariablePickerDialog = ({
                 {FLAT_VARIABLE_LABELS[variableId]}
               </button>
             ))}
-            {onPickCensusSummary ? (
-              <button
-                type='button'
-                className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
-                onClick={onPickCensusSummary}
-              >
-                Census Summary
-              </button>
-            ) : null}
           </div>
         </ScrollArea>
       ) : (
@@ -1182,7 +1255,6 @@ const FormatPatternEditor = ({
   const [pendingBlockVariable, setPendingBlockVariable] = useState<BlockVariableId | null>(null)
   const [tagsDialogOpen, setTagsDialogOpen] = useState(false)
   const [pendingDateTimeFlatId, setPendingDateTimeFlatId] = useState<FlatVariableId | null>(null)
-  const [censusSummaryDialogOpen, setCensusSummaryDialogOpen] = useState(false)
   /** Non-null while the config dialog is editing an EXISTING chip (clicked in the editor) rather
    * than about to insert a brand-new one from the picker. */
   const [reconfiguringId, setReconfiguringId] = useState<string | null>(null)
@@ -1480,9 +1552,6 @@ const FormatPatternEditor = ({
     } else if (instance.kind === 'flat' && DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS.has(instance.variableId)) {
       setReconfiguringId(id)
       setPendingDateTimeFlatId(instance.variableId)
-    } else if (instance.kind === 'censusSummary') {
-      setReconfiguringId(id)
-      setCensusSummaryDialogOpen(true)
     }
   }
 
@@ -1553,14 +1622,6 @@ const FormatPatternEditor = ({
     return instance?.kind === 'flat' ? instance.dateTimeFormatId : undefined
   })()
 
-  const currentCensusSummaryConfig = (() => {
-    if (reconfiguringId !== null) {
-      const instance = variablesRef.current[reconfiguringId]
-      if (instance?.kind === 'censusSummary') return instance.config
-    }
-    return buildDefaultCensusSummaryConfig(tags, groups)
-  })()
-
   const isHeaderFooter = variableScope === 'currentDateTimeOnly'
 
   return (
@@ -1591,7 +1652,7 @@ const FormatPatternEditor = ({
       </div>
       <p className='text-xs text-clay'>
         {variableScope === 'currentDateTimeOnly'
-          ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time or Census Summary — this prints once per run, so no patient-specific variable is available here. Click an inserted Census Summary block to change its settings.'
+          ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time — this prints once per run, so no patient-specific variable is available here.'
           : 'Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags block — or a date/time variable — to change its settings.'}
       </p>
 
@@ -1618,11 +1679,6 @@ const FormatPatternEditor = ({
           setReconfiguringId(null)
           setPendingBlockVariable(variableId)
         }}
-        onPickCensusSummary={variableScope === 'currentDateTimeOnly' ? () => {
-          setPickerOpen(false)
-          setReconfiguringId(null)
-          setCensusSummaryDialogOpen(true)
-        } : undefined}
       />
 
       <BlockVariableConfigDialog
@@ -1681,23 +1737,6 @@ const FormatPatternEditor = ({
         }}
       />
 
-      <CensusSummaryConfigDialog
-        open={censusSummaryDialogOpen}
-        initialConfig={currentCensusSummaryConfig}
-        tags={tags}
-        groups={groups}
-        onCancel={() => { setCensusSummaryDialogOpen(false); setReconfiguringId(null) }}
-        onSave={(config) => {
-          const instance: TemplateVariableInstance = { kind: 'censusSummary', config }
-          if (reconfiguringId !== null) {
-            updateExistingChip(reconfiguringId, instance)
-          } else {
-            insertInstanceAtSavedRange(instance)
-          }
-          setCensusSummaryDialogOpen(false)
-          setReconfiguringId(null)
-        }}
-      />
     </div>
   )
 }
@@ -1723,21 +1762,26 @@ const TemplateEditor = ({
   const tagsById = useMemo(() => new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag])), [tags])
 
   const repeatMode = useMemo(
-    () => classifyTemplateRepeatMode({ patternText: form.patternText, variables: form.variables }),
-    [form.patternText, form.variables],
+    () => classifyTemplateRepeatMode({ patternText: form.patternText, variables: form.variables, groupingEnabled: form.groupingEnabled }),
+    [form.patternText, form.variables, form.groupingEnabled],
   )
 
   const preview = useMemo(() => {
-    // Real tag/group definitions (not real PATIENT data) so a Census Summary variable's selected
-    // tags, and the preview patient's own Main/Referral service, actually resolve in the preview
-    // — see buildSamplePreviewContext/buildSamplePreviewPatient's own comments.
+    // Real tag/group definitions (not real PATIENT data) so Tag Combo Grouping's selected tags,
+    // and the preview patient's own Main/Referral service, actually resolve in the preview — see
+    // buildSamplePreviewContext/buildSamplePreviewPatient's own comments.
     const previewPatient = buildSamplePreviewPatient(tagsById, groups)
     const ctx = buildSamplePreviewContext(dateTimeFormatsById, tagsById, groups, previewPatient)
     const headerText = form.headerPatternText ? renderTemplateForPatient({ patternText: form.headerPatternText, variables: form.headerVariables }, previewPatient, ctx) : ''
-    const bodyText = renderTemplateForPatient({ patternText: form.patternText, variables: form.variables }, previewPatient, ctx)
+    // Grouping only ever has the one sample patient to work with here — same limitation every
+    // other multi-entry preview in this editor already has (Block variables only show a couple of
+    // sample rows too), just surfaced across a whole group instead of one field.
+    const bodyText = form.groupingEnabled
+      ? renderGroupedBody(form, [previewPatient], ctx)
+      : renderTemplateForPatient({ patternText: form.patternText, variables: form.variables }, previewPatient, ctx)
     const footerText = form.footerPatternText ? renderTemplateForPatient({ patternText: form.footerPatternText, variables: form.footerVariables }, previewPatient, ctx) : ''
     return [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
-  }, [form.headerPatternText, form.headerVariables, form.patternText, form.variables, form.footerPatternText, form.footerVariables, dateTimeFormatsById, tagsById, groups])
+  }, [form, dateTimeFormatsById, tagsById, groups])
 
   return (
     <div className='space-y-4'>
@@ -1758,6 +1802,14 @@ const TemplateEditor = ({
           onChange={(headerPatternText, headerVariables) => setForm((previous) => ({ ...previous, headerPatternText, headerVariables }))}
         />
       </div>
+
+      <GroupingSegment
+        form={form}
+        tags={tags}
+        groups={groups}
+        dateTimeFormats={dateTimeFormats}
+        onChange={(patch) => setForm((previous) => ({ ...previous, ...patch }))}
+      />
 
       <Card className='border-action-primary/25 shadow-sm'>
         <CardHeader className='py-3 px-4 pb-2'>
@@ -1854,6 +1906,20 @@ export const ManageTemplatesScreen = ({
       headerVariables: form.headerVariables,
       footerPatternText: form.footerPatternText,
       footerVariables: form.footerVariables,
+      groupingEnabled: form.groupingEnabled,
+      groupSelectionMode: form.groupSelectionMode,
+      groupTagIds: form.groupTagIds,
+      groupCombineMode: form.groupCombineMode,
+      groupTagLabelSeparator: form.groupTagLabelSeparator,
+      groupManualCombos: form.groupManualCombos,
+      groupLookbackHoursByStatus: form.groupLookbackHoursByStatus,
+      groupListOpenText: form.groupListOpenText,
+      groupListCloseText: form.groupListCloseText,
+      groupShowListBracketsWhenEmpty: form.groupShowListBracketsWhenEmpty,
+      groupPatternText: form.groupPatternText,
+      groupVariables: form.groupVariables,
+      groupSeparator: form.groupSeparator,
+      customGroupSeparator: form.customGroupSeparator,
     }
     if (editingTemplateId !== 'new' && editingTemplateId !== null) {
       await db.reportTemplates.update(editingTemplateId, fields)
@@ -1889,9 +1955,29 @@ export const ManageTemplatesScreen = ({
       return { patternText: nextPatternText, variables: nextVariables }
     }
 
+    const remapGroup = (patternText: string, variables: Record<string, GroupVariableInstance>) => {
+      const idMap = new Map<string, string>()
+      const nextVariables: Record<string, GroupVariableInstance> = {}
+      Object.entries(variables).forEach(([oldId, instance]) => {
+        const newId = createVariableId()
+        idMap.set(oldId, newId)
+        nextVariables[newId] = instance
+      })
+      const nextPatternText = tokenizePatternText(patternText)
+        .map((part) => {
+          if (part.type === 'text') return part.text
+          if (part.type === 'lineBreak') return '\n'
+          const newId = idMap.get(part.id)
+          return newId ? buildVariableToken(newId) : ''
+        })
+        .join('')
+      return { patternText: nextPatternText, variables: nextVariables }
+    }
+
     const body = remap(template.patternText, template.variables)
     const header = remap(template.headerPatternText, template.headerVariables)
     const footer = remap(template.footerPatternText, template.footerVariables)
+    const group = remapGroup(template.groupPatternText, template.groupVariables)
 
     // Deliberately omits `locked` — a duplicate of the built-in Labs template is a normal,
     // fully-editable template like any other.
@@ -1905,6 +1991,20 @@ export const ManageTemplatesScreen = ({
       headerVariables: header.variables,
       footerPatternText: footer.patternText,
       footerVariables: footer.variables,
+      groupingEnabled: template.groupingEnabled,
+      groupSelectionMode: template.groupSelectionMode,
+      groupTagIds: [...template.groupTagIds],
+      groupCombineMode: template.groupCombineMode,
+      groupTagLabelSeparator: template.groupTagLabelSeparator,
+      groupManualCombos: template.groupManualCombos.map((combo) => ({ ...combo, id: createTagComboGroupId() })),
+      groupLookbackHoursByStatus: { ...template.groupLookbackHoursByStatus },
+      groupListOpenText: template.groupListOpenText,
+      groupListCloseText: template.groupListCloseText,
+      groupShowListBracketsWhenEmpty: template.groupShowListBracketsWhenEmpty,
+      groupPatternText: group.patternText,
+      groupVariables: group.variables,
+      groupSeparator: template.groupSeparator,
+      customGroupSeparator: template.customGroupSeparator,
       sortOrder: nextSortOrder,
       createdAt: new Date().toISOString(),
     })

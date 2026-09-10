@@ -13,18 +13,17 @@ import {
   toLocalISODate,
   toLocalTime,
 } from '@/lib/dateTime'
-import { formatFullName } from '@/lib/patientIdentity'
 import type {
   BlockJoinMode,
   BlockVariableConfig,
   BlockVariableId,
-  CensusNameJoinMode,
-  CensusSummaryConfig,
+  CensusStatus,
   ChecklistEntryFieldId,
   DailyUpdate,
   DateTimeComponentId,
   DateTimeFormatDefinition,
   FlatVariableId,
+  GroupVariableInstance,
   LabEntry,
   MedicationEntry,
   MedicationsEntryFieldId,
@@ -361,24 +360,17 @@ export const ENTRY_FIELD_LABELS_BY_BLOCK: Record<BlockVariableId, Record<string,
   labs: {},
 }
 
-/** Census Summary's per-group fields, used inside the variable's own `patternText`/`fieldIds` —
- * one evaluation per output group (see `CensusGroupCombineMode`). `groupLabel` is that group's
- * comma-joined tag names, never blank (a group always has at least one defining tag). Each
- * `*Tally` field is a bare patient count, also never blank (a number, even "0", is never an empty
- * string) — safe to sit right next to a required separator. Each `*List` field can resolve blank
- * (when that status has zero matching patients and `showListBracketsWhenEmpty` is off) — per
- * [[project_puhrr_collapseblanks_separator_gotcha]], avoid placing a required separator where only
- * a `*List` field's own optional wrapper stands between it and the next field. */
-export type CensusSummaryFieldId =
-  | 'groupLabel'
+/** Group-level fields for Tag Combo Grouping's own `groupPatternText`/`groupVariables` — see
+ * `GroupVariableInstance`. */
+export type GroupFieldId = 'groupLabel' | 'currentDate' | 'currentTime' | 'patientTally' | 'patientInfo'
   | 'admittedTally' | 'admittedList'
   | 'referredTally' | 'referredList'
   | 'dischargedTally' | 'dischargedList'
   | 'signedOutTally' | 'signedOutList'
   | 'expiredTally' | 'expiredList'
 
-export const CENSUS_SUMMARY_FIELD_ORDER: CensusSummaryFieldId[] = [
-  'groupLabel',
+export const GROUP_FIELD_ORDER: GroupFieldId[] = [
+  'groupLabel', 'currentDate', 'currentTime', 'patientTally', 'patientInfo',
   'admittedTally', 'admittedList',
   'referredTally', 'referredList',
   'dischargedTally', 'dischargedList',
@@ -386,8 +378,12 @@ export const CENSUS_SUMMARY_FIELD_ORDER: CensusSummaryFieldId[] = [
   'expiredTally', 'expiredList',
 ]
 
-export const CENSUS_SUMMARY_FIELD_LABELS: Record<CensusSummaryFieldId, string> = {
+export const GROUP_FIELD_LABELS: Record<GroupFieldId, string> = {
   groupLabel: 'Group Label',
+  currentDate: 'Current Date',
+  currentTime: 'Current Time',
+  patientTally: 'Patient Tally',
+  patientInfo: 'Patient Info',
   admittedTally: 'New Admissions (tally)',
   admittedList: 'New Admissions (list)',
   referredTally: 'New Referrals (tally)',
@@ -400,56 +396,37 @@ export const CENSUS_SUMMARY_FIELD_LABELS: Record<CensusSummaryFieldId, string> =
   expiredList: 'Expired (list)',
 }
 
-/** Fields for one patient's own row, used inside `patientRowPatternText`/`patientRowFieldIds` — a
- * free Format Pattern rather than a fixed preset, so any arrangement of demographics is just a
- * pattern edit. Shared by every `*List` field regardless of which group or status it belongs to. */
-export type CensusPatientRowFieldId = 'roomNumber' | 'lastName' | 'firstName' | 'fullName' | 'ward' | 'age' | 'sex'
-
-export const CENSUS_PATIENT_ROW_FIELD_ORDER: CensusPatientRowFieldId[] = ['roomNumber', 'lastName', 'firstName', 'fullName', 'ward', 'age', 'sex']
-
-export const CENSUS_PATIENT_ROW_FIELD_LABELS: Record<CensusPatientRowFieldId, string> = {
-  roomNumber: 'Room Number',
-  lastName: 'Last Name',
-  firstName: 'First Name',
-  fullName: 'Full Name',
-  ward: 'Ward/Location',
-  age: 'Age',
-  sex: 'Sex',
+const GROUP_FIELD_TO_CENSUS_STATUS: Partial<Record<GroupFieldId, CensusStatus>> = {
+  admittedTally: 'admitted', admittedList: 'admitted',
+  referredTally: 'referred', referredList: 'referred',
+  dischargedTally: 'discharged', dischargedList: 'discharged',
+  signedOutTally: 'signedOut', signedOutList: 'signedOut',
+  expiredTally: 'expired', expiredList: 'expired',
 }
 
-export const CENSUS_NAME_JOIN_MODE_ORDER: CensusNameJoinMode[] = ['comma', 'semicolon', 'lineBreak', 'custom']
-
-export const CENSUS_NAME_JOIN_MODE_LABELS: Record<CensusNameJoinMode, string> = {
-  comma: 'Comma',
-  semicolon: 'Semicolon',
-  lineBreak: 'Line break',
-  custom: 'Custom',
+/** `groupFieldId` → the `GroupVariableInstance` it represents — used both by the Group Format
+ * chip editor (placing a new chip) and by the v25 migration (remapping an old Census Summary
+ * field token onto its new equivalent, see db.ts). */
+export const buildGroupVariableInstanceForField = (fieldId: GroupFieldId): GroupVariableInstance => {
+  if (fieldId === 'currentDate' || fieldId === 'currentTime') return { kind: 'flat', variableId: fieldId }
+  if (fieldId === 'groupLabel') return { kind: 'groupLabel' }
+  if (fieldId === 'patientTally') return { kind: 'patientTally' }
+  if (fieldId === 'patientInfo') return { kind: 'patientInfo' }
+  const status = GROUP_FIELD_TO_CENSUS_STATUS[fieldId]
+  const field = fieldId.endsWith('Tally') ? 'tally' : 'list'
+  return { kind: 'censusStatus', status: status ?? 'admitted', field }
 }
 
-export const resolveCensusNameSeparator = (mode: CensusNameJoinMode, custom: string): string => {
-  if (mode === 'comma') return ', '
-  if (mode === 'semicolon') return '; '
-  if (mode === 'lineBreak') return '\n'
-  return custom
+/** The inverse of `buildGroupVariableInstanceForField` — what `GroupFieldId` a saved
+ * `GroupVariableInstance` corresponds to, e.g. for pre-filling the Group Format chip editor's
+ * `initialFieldIds` from a template's saved `groupVariables`. */
+export const groupFieldIdForInstance = (instance: GroupVariableInstance): GroupFieldId => {
+  if (instance.kind === 'flat') return instance.variableId
+  if (instance.kind === 'groupLabel') return 'groupLabel'
+  if (instance.kind === 'patientTally') return 'patientTally'
+  if (instance.kind === 'patientInfo') return 'patientInfo'
+  return `${instance.status}${instance.field === 'tally' ? 'Tally' : 'List'}` as GroupFieldId
 }
-
-const resolveCensusPatientRowField = (fieldId: string, patient: Patient): string => {
-  switch (fieldId as CensusPatientRowFieldId) {
-    case 'roomNumber': return patient.roomNumber
-    case 'lastName': return patient.lastName
-    case 'firstName': return patient.firstName
-    case 'fullName': return formatFullName(patient)
-    case 'ward': return patient.ward
-    case 'age': return patient.age !== undefined ? String(patient.age) : ''
-    case 'sex': return patient.sex
-    default: return ''
-  }
-}
-
-/** Renders one patient through the shared `patientRowPatternText` — the same tokenize/resolve/
- * collapse pipeline as every other entry pattern in this file, just scoped to a fixed patient. */
-const renderCensusPatientRow = (patient: Patient, config: CensusSummaryConfig): string =>
-  renderEntryPattern(config.patientRowPatternText, config.patientRowFieldIds, {}, (fieldId) => resolveCensusPatientRowField(fieldId, patient))
 
 /** Entry-level fields whose value is a date/time (so a Date/Time Format can be chosen for that
  * specific chip, via `BlockVariableConfig.entryFieldDateTimeFormats`). */
@@ -619,57 +596,6 @@ export const buildDefaultBlockVariableConfig = (variableId: BlockVariableId): Bl
   medicationNotesPosition: 'before',
   labsDateDisplayMode: 'perEntry',
 })
-
-/** Defaults to the "Category" Tag Group's tags when that group exists (matching this app's own
- * default CD/PD tags), else no tags selected — the user picks their own from there. 12-hour
- * lookback matches the Patient Filter's own default window for the same Admitted/Referred/
- * Discharged criteria. The default pattern puts each clause on its own line specifically so an
- * empty `*List` field's blank-collapse can never reach past its own line and eat a neighboring
- * clause's separator — see [[project_puhrr_collapseblanks_separator_gotcha]]. Composing everything
- * onto one line (e.g. to match "CD: 2 new referrals (SANTOS, MARIMAR), ...") is entirely possible,
- * just no longer collapse-safe by construction the way this default is — that tradeoff is
- * inherent to `*Tally` being a bare number and `*List` being a fully independent chip. */
-export const buildDefaultCensusSummaryConfig = (tags: TagDefinition[], groups: TagGroupDefinition[]): CensusSummaryConfig => {
-  const defaultGroup = groups.find((group) => group.name.trim().toLowerCase() === 'category') ?? groups[0]
-  const defaultTagIds = defaultGroup
-    ? tags.filter((tag) => tag.groupId === defaultGroup.id).map((tag) => tag.id).filter((id): id is number => id !== undefined)
-    : []
-
-  const fieldIds: Record<string, string> = {}
-  const token = (fieldId: CensusSummaryFieldId): string => {
-    const id = createVariableId()
-    fieldIds[id] = fieldId
-    return buildVariableToken(id)
-  }
-  const patternText = [
-    token('groupLabel'),
-    `Admitted: ${token('admittedTally')}${token('admittedList')}`,
-    `Referred: ${token('referredTally')}${token('referredList')}`,
-    `Discharged: ${token('dischargedTally')}${token('dischargedList')}`,
-  ].join('\n')
-
-  const patientRowFieldIds: Record<string, string> = {}
-  const patientRowId = createVariableId()
-  patientRowFieldIds[patientRowId] = 'lastName'
-  const patientRowPatternText = buildVariableToken(patientRowId)
-
-  return {
-    tagIds: defaultTagIds,
-    groupCombineMode: 'OR',
-    lookbackHours: 12,
-    patternText,
-    fieldIds,
-    groupSeparator: 'blankLine',
-    customGroupSeparator: '',
-    listOpenText: ' (',
-    listCloseText: ')',
-    showListBracketsWhenEmpty: false,
-    patientRowPatternText,
-    patientRowFieldIds,
-    nameSeparator: 'comma',
-    customNameSeparator: '',
-  }
-}
 
 export const DEFAULT_TAGS_VARIABLE_CONFIG: TagsVariableConfig = {
   includeAll: true,
@@ -973,121 +899,8 @@ const resolveMedicationsBlock = (config: BlockVariableConfig, patient: Patient, 
   return lines.join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
 }
 
-const buildCensusLookbackWindow = (config: CensusSummaryConfig, ctx: TemplateRenderContext): DateTimeWindow => {
-  const windowStart = new Date(ctx.nowDate.getTime() - Math.max(0, config.lookbackHours) * 3_600_000)
-  return {
-    dateFrom: toLocalISODate(windowStart),
-    timeFrom: toLocalTime(windowStart),
-    dateTo: toLocalISODate(ctx.nowDate),
-    timeTo: toLocalTime(ctx.nowDate),
-  }
-}
-
-type CensusOutputGroup = { label: string; tags: TagDefinition[] }
-
-/** Buckets the selected tags into Census Summary's output groups. With no tags spanning more than
- * one Tag Group (or only one selected tag), each tag is simply its own group. Otherwise
- * `groupCombineMode` decides: 'OR' unions every selected tag into its own group regardless of
- * origin; 'AND' cross-combines instead, producing one group per combination of one tag from each
- * represented Tag Group (a Cartesian product) — see `CensusGroupCombineMode`. */
-const buildCensusOutputGroups = (config: CensusSummaryConfig, tagsById: Map<number, TagDefinition>): CensusOutputGroup[] => {
-  const selectedTags = config.tagIds.map((id) => tagsById.get(id)).filter((tag): tag is TagDefinition => tag !== undefined)
-  if (selectedTags.length === 0) return []
-
-  const tagsByOriginGroup = new Map<number | 'ungrouped', TagDefinition[]>()
-  selectedTags.forEach((tag) => {
-    const key = tag.groupId ?? 'ungrouped'
-    const existing = tagsByOriginGroup.get(key)
-    if (existing) existing.push(tag)
-    else tagsByOriginGroup.set(key, [tag])
-  })
-  const perOriginGroup = [...tagsByOriginGroup.values()]
-
-  if (perOriginGroup.length <= 1 || config.groupCombineMode === 'OR') {
-    return selectedTags.map((tag) => ({ label: tag.name, tags: [tag] }))
-  }
-
-  const combinations = perOriginGroup.reduce<TagDefinition[][]>(
-    (combosSoFar, tagsInOneOriginGroup) => combosSoFar.flatMap((combo) => tagsInOneOriginGroup.map((tag) => [...combo, tag])),
-    [[]],
-  )
-  return combinations.map((combo) => ({ label: combo.map((tag) => tag.name).join(', '), tags: combo }))
-}
-
-/** "" when the list is empty and `showListBracketsWhenEmpty` is off; otherwise
- * `listOpenText` + the joined patient rows + `listCloseText` (so an empty-but-shown list renders
- * as e.g. "()"). Each row comes from the shared `patientRowPatternText`. */
-const buildCensusListText = (patients: Patient[], config: CensusSummaryConfig): string => {
-  if (patients.length === 0 && !config.showListBracketsWhenEmpty) return ''
-  const separator = resolveCensusNameSeparator(config.nameSeparator, config.customNameSeparator)
-  const rows = patients.map((patient) => renderCensusPatientRow(patient, config)).join(separator)
-  return `${config.listOpenText}${rows}${config.listCloseText}`
-}
-
-const resolveCensusSummaryField = (
-  fieldId: string,
-  group: { label: string; admitted: Patient[]; referred: Patient[]; discharged: Patient[]; signedOut: Patient[]; expired: Patient[] },
-  config: CensusSummaryConfig,
-): string => {
-  switch (fieldId as CensusSummaryFieldId) {
-    case 'groupLabel': return group.label
-    case 'admittedTally': return String(group.admitted.length)
-    case 'admittedList': return buildCensusListText(group.admitted, config)
-    case 'referredTally': return String(group.referred.length)
-    case 'referredList': return buildCensusListText(group.referred, config)
-    case 'dischargedTally': return String(group.discharged.length)
-    case 'dischargedList': return buildCensusListText(group.discharged, config)
-    case 'signedOutTally': return String(group.signedOut.length)
-    case 'signedOutList': return buildCensusListText(group.signedOut, config)
-    case 'expiredTally': return String(group.expired.length)
-    case 'expiredList': return buildCensusListText(group.expired, config)
-    default: return ''
-  }
-}
-
 const patientHasAutomationRole = (patient: Patient, tagsById: Map<number, TagDefinition>, role: TagAutomationRole): boolean =>
   (patient.tagIds ?? []).some((tagId) => tagsById.get(tagId)?.automationRole === role)
-
-/** One evaluation of `patternText` per output group (see `buildCensusOutputGroups`), each scoped
- * to patients carrying every tag in that group who were newly admitted/referred/discharged within
- * the lookback window (reusing the exact same detection as the Patient Filter's Special/Timebound
- * facet, via `matchesPatientPool`). On top of that window check, each status also requires a
- * specific Automation Role: New Admissions requires "Relationship: Main" (Referred already
- * requires "Relationship: Referral" internally, via `matchesPatientPool` itself); Discharged/
- * Signed Out/Expired share the same discharge-date-window check but are told apart by which
- * specific "Status: …" role the patient's terminal tag carries — narrower than
- * `matchesPatientPool`'s own "any terminal tag" check, which is deliberately kept broad for its
- * other callers (Patient Filter, Master Checklist). All five roles are load-bearing — see
- * `LOAD_BEARING_AUTOMATION_ROLES` — so Manage Tags blocks deleting whichever tag currently
- * fulfills one. Every group always renders, even one where
- * every count comes up 0 — a tally field is never blank (see `CensusSummaryFieldId`'s doc comment)
- * so it reports 0 plainly; only the corresponding `*List` field (and, if it sits alone on its own
- * line, that line — see `collapseBlanks`) disappears. Not a per-patient value — scans
- * `ctx.allPatients` directly. */
-const resolveCensusSummary = (config: CensusSummaryConfig, ctx: TemplateRenderContext): string => {
-  const groups = buildCensusOutputGroups(config, ctx.tagsById)
-  if (groups.length === 0) return ''
-
-  const window = buildCensusLookbackWindow(config, ctx)
-  const lines = groups.map((group) => {
-    const patientsInGroup = ctx.allPatients.filter((patient) =>
-      group.tags.every((tag) => tag.id !== undefined && (patient.tagIds ?? []).includes(tag.id)),
-    )
-    const dischargedInWindow = patientsInGroup.filter((patient) => matchesPatientPool(patient, ['discharged'], window, ctx.poolContext))
-    const groupCtx = {
-      label: group.label,
-      admitted: patientsInGroup.filter((patient) =>
-        matchesPatientPool(patient, ['admitted'], window, ctx.poolContext) && patientHasAutomationRole(patient, ctx.tagsById, 'relationship-main'),
-      ),
-      referred: patientsInGroup.filter((patient) => matchesPatientPool(patient, ['referred'], window, ctx.poolContext)),
-      discharged: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-discharged')),
-      signedOut: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-signed-out')),
-      expired: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-expired')),
-    }
-    return renderEntryPattern(config.patternText, config.fieldIds, {}, (fieldId) => resolveCensusSummaryField(fieldId, groupCtx, config))
-  })
-  return lines.join(resolveJoinString(config.groupSeparator, config.customGroupSeparator))
-}
 
 const resolveBlockVariable = (
   variableId: BlockVariableId,
@@ -1111,7 +924,6 @@ const resolveBlockVariable = (
 const resolveVariableInstance = (instance: TemplateVariableInstance, patient: Patient, ctx: TemplateRenderContext): string => {
   if (instance.kind === 'flat') return resolveFlatVariable(instance.variableId, instance.dateTimeFormatId, patient, ctx)
   if (instance.kind === 'block') return resolveBlockVariable(instance.variableId, instance.config, patient, ctx)
-  if (instance.kind === 'censusSummary') return resolveCensusSummary(instance.config, ctx)
   return resolveTagsVariable(instance.config, patient, ctx)
 }
 
@@ -1155,9 +967,6 @@ export type TemplateRepeatMode = 'per-patient' | 'prints-once'
 const isPatientDependentInstance = (instance: TemplateVariableInstance): boolean => {
   if (instance.kind === 'block') return true
   if (instance.kind === 'tags') return true
-  // Census Summary is a whole-run aggregate (scans every patient, not "the" patient), same as
-  // Current Date/Time — it never makes a template Per-Patient on its own.
-  if (instance.kind === 'censusSummary') return false
   return PATIENT_DEPENDENT_FLAT_VARIABLES.has(instance.variableId)
 }
 
@@ -1167,9 +976,12 @@ const isPatientDependentInstance = (instance: TemplateVariableInstance): boolean
  * reduced rule only asks "does the Format Pattern contain any variable that depends on a specific
  * patient" — any patient-data Flat variable, any Block variable, or a Tags variable. A template
  * with only literal text and/or Current Date/Current Time is Prints Once. Re-evaluate this
- * whenever the Format Pattern changes; never set it manually.
- */
-export const classifyTemplateRepeatMode = (template: Pick<ReportTemplate, 'patternText' | 'variables'>): TemplateRepeatMode => {
+ * whenever the Format Pattern changes; never set it manually. Tag Combo Grouping (issue #145)
+ * always needs the report's own patient-filter step regardless of what the main Format Pattern
+ * contains, so a grouping-enabled template is always Per-Patient. */
+export const classifyTemplateRepeatMode = (template: Pick<ReportTemplate, 'patternText' | 'variables' | 'groupingEnabled'>): TemplateRepeatMode => {
+  if (template.groupingEnabled) return 'per-patient'
+
   const usedIds = new Set<string>()
   for (const match of template.patternText.matchAll(VARIABLE_TOKEN_REGEX)) usedIds.add(match[1])
 
@@ -1187,12 +999,187 @@ export const describeVariableInstance = (instance: TemplateVariableInstance): st
     const detail = instance.variableId === 'medications' ? describeMedicationsConfig(instance.config) : describeBlockConfig(instance.config)
     return `${BLOCK_VARIABLE_LABELS[instance.variableId]} — ${detail}`
   }
-  if (instance.kind === 'censusSummary') {
-    const tagCount = instance.config.tagIds.length
-    const tagLabel = tagCount === 0 ? 'no tags selected' : `${tagCount} tag${tagCount === 1 ? '' : 's'}`
-    return `Census Summary — ${tagLabel}, last ${instance.config.lookbackHours}h`
-  }
   return describeTagsConfig(instance.config)
+}
+
+/** Human-readable label for a Group Format chip/summary — used by the Tag Combo Grouping editor. */
+export const describeGroupVariableInstance = (instance: GroupVariableInstance): string => {
+  if (instance.kind === 'flat') return instance.variableId === 'currentDate' ? 'Current Date' : 'Current Time'
+  if (instance.kind === 'groupLabel') return 'Group Label'
+  if (instance.kind === 'patientTally') return 'Patient Tally'
+  if (instance.kind === 'patientInfo') return 'Patient Info'
+  const fieldId = `${instance.status}${instance.field === 'tally' ? 'Tally' : 'List'}` as GroupFieldId
+  return GROUP_FIELD_LABELS[fieldId]
+}
+
+/** Buckets patients into Tag Combo Grouping's output groups. Automatic mode: with no selected tags
+ * spanning more than one Tag Group (or only one selected tag), each tag is simply its own group;
+ * otherwise `groupCombineMode` decides — 'OR' unions every selected tag into its own group
+ * regardless of origin, 'AND' cross-combines instead, producing one group per combination of one
+ * tag from each represented Tag Group (a Cartesian product), joining each combo's tag names with
+ * `groupTagLabelSeparator`. Manual mode just maps `groupManualCombos` (sorted by `sortOrder`)
+ * straight across, using each combo's own hand-typed label. */
+const buildOutputGroups = (
+  template: Pick<ReportTemplate, 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupTagLabelSeparator' | 'groupManualCombos'>,
+  tagsById: Map<number, TagDefinition>,
+): { label: string; tagIds: number[] }[] => {
+  if (template.groupSelectionMode === 'manual') {
+    return [...template.groupManualCombos]
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((combo) => ({ label: combo.label, tagIds: combo.tagIds }))
+  }
+
+  const selectedTags = template.groupTagIds.map((id) => tagsById.get(id)).filter((tag): tag is TagDefinition => tag !== undefined)
+  if (selectedTags.length === 0) return []
+
+  const tagsByOriginGroup = new Map<number | 'ungrouped', TagDefinition[]>()
+  selectedTags.forEach((tag) => {
+    const key = tag.groupId ?? 'ungrouped'
+    const existing = tagsByOriginGroup.get(key)
+    if (existing) existing.push(tag)
+    else tagsByOriginGroup.set(key, [tag])
+  })
+  const perOriginGroup = [...tagsByOriginGroup.values()]
+
+  if (perOriginGroup.length <= 1 || template.groupCombineMode === 'OR') {
+    return selectedTags.map((tag) => ({ label: tag.name, tagIds: tag.id === undefined ? [] : [tag.id] }))
+  }
+
+  const combinations = perOriginGroup.reduce<TagDefinition[][]>(
+    (combosSoFar, tagsInOneOriginGroup) => combosSoFar.flatMap((combo) => tagsInOneOriginGroup.map((tag) => [...combo, tag])),
+    [[]],
+  )
+  return combinations.map((combo) => ({
+    label: combo.map((tag) => tag.name).join(template.groupTagLabelSeparator),
+    tagIds: combo.map((tag) => tag.id).filter((id): id is number => id !== undefined),
+  }))
+}
+
+/** Renders a list of patients through the template's own per-patient Format Pattern (the same one
+ * the ungrouped body uses), joined by `patientSeparator`/`customPatientSeparator` — backs both
+ * `patientInfo` and each status's `list` field. "" when empty and `groupShowListBracketsWhenEmpty`
+ * is off; otherwise `groupListOpenText` + the joined rows + `groupListCloseText` (so an
+ * empty-but-shown list renders as e.g. "()"). */
+const renderGroupPatientList = (
+  patients: Patient[],
+  template: Pick<ReportTemplate, 'patternText' | 'variables' | 'patientSeparator' | 'customPatientSeparator' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'>,
+  ctx: TemplateRenderContext,
+): string => {
+  if (patients.length === 0 && !template.groupShowListBracketsWhenEmpty) return ''
+  const rows = patients
+    .map((patient) => renderTemplateForPatient(template, patient, ctx))
+    .join(resolveJoinString(template.patientSeparator, template.customPatientSeparator))
+  return `${template.groupListOpenText}${rows}${template.groupListCloseText}`
+}
+
+/** Every `ReportTemplate` field Tag Combo Grouping's renderer touches — a `Pick` rather than the
+ * full type so both a saved `ReportTemplate` (App.tsx) and the editor's in-progress form draft
+ * (`TemplateFormState`, which carries the same field names minus `id`/`sortOrder`/`createdAt`) can
+ * call it directly. */
+export type GroupRenderTemplate = Pick<
+  ReportTemplate,
+  | 'patternText' | 'variables' | 'patientSeparator' | 'customPatientSeparator'
+  | 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupTagLabelSeparator' | 'groupManualCombos'
+  | 'groupLookbackHoursByStatus' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'
+  | 'groupPatternText' | 'groupVariables' | 'groupSeparator' | 'customGroupSeparator'
+>
+
+type GroupRenderCtx = {
+  label: string
+  patientsInGroup: Patient[]
+  admitted: Patient[]
+  referred: Patient[]
+  discharged: Patient[]
+  signedOut: Patient[]
+  expired: Patient[]
+}
+
+const resolveGroupVariableInstance = (
+  instance: GroupVariableInstance,
+  groupCtx: GroupRenderCtx,
+  template: GroupRenderTemplate,
+  ctx: TemplateRenderContext,
+): string => {
+  if (instance.kind === 'flat') return resolveFlatVariable(instance.variableId, instance.dateTimeFormatId, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
+  if (instance.kind === 'groupLabel') return groupCtx.label
+  if (instance.kind === 'patientTally') return String(groupCtx.patientsInGroup.length)
+  if (instance.kind === 'patientInfo') return renderGroupPatientList(groupCtx.patientsInGroup, template, ctx)
+  const subset = groupCtx[instance.status]
+  return instance.field === 'tally' ? String(subset.length) : renderGroupPatientList(subset, template, ctx)
+}
+
+const resolveGroupPatternPart = (
+  part: PatternPart,
+  variables: Record<string, GroupVariableInstance>,
+  groupCtx: GroupRenderCtx,
+  template: GroupRenderTemplate,
+  ctx: TemplateRenderContext,
+): ResolvedSegment => {
+  if (part.type === 'text') return { kind: 'text', text: part.text }
+  if (part.type === 'lineBreak') return { kind: 'lineBreak' }
+  const instance = variables[part.id]
+  if (!instance) return { kind: 'text', text: buildVariableToken(part.id) }
+  const text = resolveGroupVariableInstance(instance, groupCtx, template, ctx)
+  return { kind: 'value', text, blank: text.trim() === '' }
+}
+
+/** Same tokenize/resolve/collapse pipeline as `renderTemplateForPatient`, scoped to one output
+ * group instead of one patient. */
+const renderGroupPattern = (template: GroupRenderTemplate, groupCtx: GroupRenderCtx, ctx: TemplateRenderContext): string => {
+  const parts = tokenizePatternText(template.groupPatternText)
+  const resolved = parts.map((part) => resolveGroupPatternPart(part, template.groupVariables, groupCtx, template, ctx))
+  return renderResolvedSegments(collapseBlanks(resolved))
+}
+
+/**
+ * Renders Tag Combo Grouping's body: one evaluation of `groupPatternText` per output group (see
+ * `buildOutputGroups`), scoped to `patientsForBody` — whichever patients the report was actually
+ * run against, not every patient in the database. Each status subset requires the window check
+ * plus a specific Automation Role, same detection Census Summary always used: New Admissions
+ * requires "Relationship: Main" (Referred already requires "Relationship: Referral" internally, via
+ * `matchesPatientPool` itself); Discharged/Signed Out/Expired share the same discharge-date-window
+ * check but are told apart by which specific "Status: …" role the patient's terminal tag carries —
+ * narrower than `matchesPatientPool`'s own "any terminal tag" check, which is deliberately kept
+ * broad for its other callers (Patient Filter, Master Checklist). All five roles are load-bearing
+ * — see `LOAD_BEARING_AUTOMATION_ROLES` — so Manage Tags blocks deleting whichever tag currently
+ * fulfills one. Every group always renders, even one where every count comes up 0 — a tally field
+ * is never blank so it reports 0 plainly; only the corresponding list field (and, if it sits alone
+ * on its own line, that line — see `collapseBlanks`) disappears. A patient matching none of the
+ * defined tag combos doesn't appear anywhere in the output (no "ungrouped" bucket).
+ */
+export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody: Patient[], ctx: TemplateRenderContext): string => {
+  const groups = buildOutputGroups(template, ctx.tagsById)
+  if (groups.length === 0) return ''
+
+  const lines = groups.map((group) => {
+    const patientsInGroup = patientsForBody.filter((patient) =>
+      group.tagIds.every((tagId) => (patient.tagIds ?? []).includes(tagId)),
+    )
+    const buildWindow = (status: CensusStatus): DateTimeWindow => {
+      const hours = Math.max(0, template.groupLookbackHoursByStatus[status])
+      const windowStart = new Date(ctx.nowDate.getTime() - hours * 3_600_000)
+      return {
+        dateFrom: toLocalISODate(windowStart),
+        timeFrom: toLocalTime(windowStart),
+        dateTo: toLocalISODate(ctx.nowDate),
+        timeTo: toLocalTime(ctx.nowDate),
+      }
+    }
+    const dischargedInWindow = patientsInGroup.filter((patient) => matchesPatientPool(patient, ['discharged'], buildWindow('discharged'), ctx.poolContext))
+    const groupCtx: GroupRenderCtx = {
+      label: group.label,
+      patientsInGroup,
+      admitted: patientsInGroup.filter((patient) =>
+        matchesPatientPool(patient, ['admitted'], buildWindow('admitted'), ctx.poolContext) && patientHasAutomationRole(patient, ctx.tagsById, 'relationship-main'),
+      ),
+      referred: patientsInGroup.filter((patient) => matchesPatientPool(patient, ['referred'], buildWindow('referred'), ctx.poolContext)),
+      discharged: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-discharged')),
+      signedOut: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-signed-out')),
+      expired: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-expired')),
+    }
+    return renderGroupPattern(template, groupCtx, ctx)
+  })
+  return lines.join(resolveJoinString(template.groupSeparator, template.customGroupSeparator))
 }
 
 /** Medications ignores rangeMode/entryCount entirely (MedicationEntry has no date to filter by),
