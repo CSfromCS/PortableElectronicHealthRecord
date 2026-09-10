@@ -5432,31 +5432,85 @@ function App() {
     exitPatientTaggingSelectionMode()
   }
 
+  // A flat, clearly-labeled placeholder — evokes an x-ray without claiming to be one, so the
+  // Photos feature has something to demo without fabricating real-looking clinical imagery.
+  const buildSamplePhotoBlob = (label: string, width = 800, height = 600): Promise<Blob> => {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d')
+    if (!context) return Promise.reject(new Error('Unable to create sample image.'))
+
+    const gradient = context.createRadialGradient(width / 2, height / 2, 40, width / 2, height / 2, width / 1.3)
+    gradient.addColorStop(0, '#3a3f47')
+    gradient.addColorStop(1, '#0d0f12')
+    context.fillStyle = gradient
+    context.fillRect(0, 0, width, height)
+
+    context.textAlign = 'center'
+    context.textBaseline = 'middle'
+    context.fillStyle = 'rgba(255, 255, 255, 0.85)'
+    context.font = 'bold 28px sans-serif'
+    context.fillText(label, width / 2, height / 2)
+    context.fillStyle = 'rgba(255, 255, 255, 0.55)'
+    context.font = '16px sans-serif'
+    context.fillText('Sample image — demo data only', width / 2, height / 2 + 36)
+
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Unable to create sample image.'))), 'image/jpeg', 0.85)
+    })
+  }
+
   const addSamplePatient = async () => {
     const today = toLocalISODate()
     const now = new Date().toISOString()
     let samplePatientId = 0
 
-    await db.transaction('rw', [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders], async () => {
+    // Service tags live in their own tables (tagGroups/tagDefinitions), so they're resolved
+    // outside the patients-scoped transaction below — Dexie transactions can only touch the
+    // tables they declare, and get-or-create may need to write to either of those two.
+    const serviceGroupId = await ensureServiceGroupId(tagGroups ?? [])
+    const mainServiceTag = await getOrCreateServiceTag('Internal Medicine', serviceTags, serviceGroupId)
+    const referralServiceTag = await getOrCreateServiceTag('Pulmonology', serviceTags, serviceGroupId)
+    const mainServiceTagId = mainServiceTag.id
+    const referralServiceTagId = referralServiceTag.id
+    // "Main" (Relationship) and "EHR" (Chart Type) are unambiguous, always-seeded defaults —
+    // unlike Category's CD/PD, which are institution-specific enough that guessing wrong here
+    // would just be confusing rather than a realistic demo.
+    const generalTagIds = [
+      (tagDefinitions ?? []).find((tag) => tag.name === 'Main')?.id,
+      (tagDefinitions ?? []).find((tag) => tag.name === 'EHR')?.id,
+    ].filter((id): id is number => id !== undefined)
+
+    const [cxrFrontBlob, cxrLateralBlob] = await Promise.all([
+      buildSamplePhotoBlob('Chest X-ray — PA view'),
+      buildSamplePhotoBlob('Chest X-ray — Lateral view'),
+    ])
+    const cxrUploadGroupId = buildPhotoUploadGroupId()
+
+    await db.transaction('rw', [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments], async () => {
       samplePatientId = await db.patients.add({
         lastModified: now,
         createdAt: now,
         roomNumber: '512A',
-        ward: '',
+        ward: 'Medicine Ward B',
         lastName: 'DELA CRUZ',
         firstName: 'Juan',
         middleName: 'Santos',
         age: 57,
         sex: 'M',
         admitDate: today,
-        admitTime: '',
+        admitTime: '08:15',
         referralDate: today,
-        referralTime: '',
-        mainServiceTagIds: [],
-        referralServiceTagIds: [],
+        referralTime: '10:30',
+        mainServiceTagIds: mainServiceTagId !== undefined ? [mainServiceTagId] : [],
+        referralServiceTagIds: referralServiceTagId !== undefined ? [referralServiceTagId] : [],
         attendingPhysician: 'Dr. Maria C. Garcia',
-        admissionDiagnosisUnassigned: 'Community-acquired pneumonia (RLL), improving',
-        admissionDiagnosisByService: {},
+        admissionDiagnosisUnassigned: '',
+        admissionDiagnosisByService: {
+          ...(mainServiceTagId !== undefined ? { [mainServiceTagId]: 'Community-acquired pneumonia (RLL), improving' } : {}),
+          ...(referralServiceTagId !== undefined ? { [referralServiceTagId]: 'CAP (RLL) — co-management; evaluate for underlying structural lung disease given ex-smoker history' } : {}),
+        },
         dischargeDiagnosisUnassigned: '',
         dischargeDiagnosisByService: {},
         clinicalSummary: 'CAP improving on empiric antibiotics with stable hemodynamics and improving respiratory symptoms. Continue monitoring trends and prepare for oral step-down when afebrile and clinically stable.',
@@ -5471,7 +5525,7 @@ function App() {
         medications: 'Nebulization PRN for dyspnea episodes.',
         labs: 'Follow-up trends: CBC improving, renal panel stable.',
         pendings: 'Sputum culture and sensitivity result.\nRepeat chest x-ray in 48-72 hours.',
-        tagIds: [],
+        tagIds: generalTagIds,
       }) as number
 
       await db.medications.bulkAdd([
@@ -5715,6 +5769,37 @@ function App() {
           orderText: 'CBC and electrolytes tomorrow 6 AM',
           note: 'Monitor response to treatment',
           status: 'active',
+          createdAt: now,
+        },
+      ])
+
+      await db.photoAttachments.bulkAdd([
+        {
+          patientId: samplePatientId,
+          category: 'orders',
+          title: 'Chest X-ray (PA/Lateral)',
+          isDefaultTitle: false,
+          uploadGroupId: cxrUploadGroupId,
+          selectionOrderInGroup: 0,
+          mimeType: 'image/jpeg',
+          width: 800,
+          height: 600,
+          byteSize: cxrFrontBlob.size,
+          imageBlob: cxrFrontBlob,
+          createdAt: now,
+        },
+        {
+          patientId: samplePatientId,
+          category: 'orders',
+          title: 'Chest X-ray (PA/Lateral)',
+          isDefaultTitle: false,
+          uploadGroupId: cxrUploadGroupId,
+          selectionOrderInGroup: 1,
+          mimeType: 'image/jpeg',
+          width: 800,
+          height: 600,
+          byteSize: cxrLateralBlob.size,
+          imageBlob: cxrLateralBlob,
           createdAt: now,
         },
       ])
