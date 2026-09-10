@@ -1124,6 +1124,30 @@ const buildChipElement = (id: string, instance: TemplateVariableInstance): HTMLS
   return chip
 }
 
+// A caret-anchoring spacer placed beside every chip (see the mount effect and
+// insertInstanceAtSavedRange below) — a zero-width space rather than a truly empty string, since
+// an empty text node isn't reliably hit-testable by the browser's own click-to-caret resolution
+// (`caretRangeFromPoint`/`caretPositionFromPoint`), which is exactly what made a chip that's first
+// on its line unclickable on its left. Renders as nothing; stripped back out in `serialize` below
+// so it never leaks into the saved pattern text.
+const CARET_SPACER = '\u200B'
+
+const isSpacerTextNode = (node: Node | null): node is Text =>
+  node !== null && node.nodeType === Node.TEXT_NODE && (node.textContent ?? '').split(CARET_SPACER).join('').length === 0
+
+/** Walks past any number of consecutive spacer-only text nodes to the nearest real node (a chip,
+ * a <br>, or actual text) — clicking directly on a chip's edge (see handleContainerMouseDown)
+ * lands the caret at a container child-offset pointing at the chip itself, with its spacer as the
+ * immediate sibling rather than the <br>/chip the spacer was placed beside, so a single-sibling
+ * check isn't enough to find it. */
+const skipSpacers = (node: Node | null, direction: 'before' | 'after'): Node | null => {
+  let current = node
+  while (isSpacerTextNode(current)) {
+    current = direction === 'before' ? current.previousSibling : current.nextSibling
+  }
+  return current
+}
+
 /**
  * A free-text editing surface — type any string, press Enter for a new line — with variable
  * placeholders rendered as inline, non-editable "chip" blocks instead of raw `{{var:...}}` text.
@@ -1178,12 +1202,12 @@ const FormatPatternEditor = ({
       } else {
         const instance = initialVariables[part.id]
         if (instance) {
-          // A leading empty text node gives the caret somewhere to land immediately before the
-          // chip even when nothing else precedes it (e.g. right after a <br>, i.e. the chip is
-          // first on its line) — without it, that position isn't reliably clickable or keyboard-
-          // reachable, and Backspace there falls through to the browser's native handling, which
-          // can end up deleting the chip along with the line break instead of just the break.
-          container.appendChild(document.createTextNode(''))
+          // A leading spacer gives the caret somewhere to land immediately before the chip even
+          // when nothing else precedes it (e.g. right after a <br>, i.e. the chip is first on its
+          // line) — without it, that position isn't reliably clickable or keyboard-reachable, and
+          // Backspace there falls through to the browser's native handling, which can end up
+          // deleting the chip along with the line break instead of just the break.
+          container.appendChild(document.createTextNode(CARET_SPACER))
           container.appendChild(buildChipElement(part.id, instance))
         }
       }
@@ -1214,7 +1238,7 @@ const FormatPatternEditor = ({
     if (container) {
       container.childNodes.forEach((node) => {
         if (node.nodeType === Node.TEXT_NODE) {
-          patternText += node.textContent ?? ''
+          patternText += (node.textContent ?? '').split(CARET_SPACER).join('')
         } else if (node.nodeType === Node.ELEMENT_NODE) {
           const element = node as HTMLElement
           if (element.tagName === 'BR') {
@@ -1240,8 +1264,13 @@ const FormatPatternEditor = ({
     onChange(patternText, variables)
   }
 
-  /** The sibling node immediately before/after the caret, however it's currently anchored (inside
-   * a text node, or directly in the container/a block element between two other nodes). */
+  /** The nearest real node (chip, <br>, or actual text) immediately before/after the caret,
+   * however it's currently anchored — inside a text node, or directly in the container/a block
+   * element between two other nodes (e.g. right after clicking a chip's edge, see
+   * handleContainerMouseDown). A spacer text node has no real position to be "inside" of — any
+   * offset within one (including both of a single zero-width character's two offsets, which are
+   * visually indistinguishable to a click) counts as sitting at its edge, so skipSpacers always
+   * walks past it to whatever's actually beside it. */
   const getAdjacentNode = (direction: 'before' | 'after'): Node | null => {
     const container = containerRef.current
     const selection = window.getSelection()
@@ -1250,13 +1279,14 @@ const FormatPatternEditor = ({
     if (!container.contains(startContainer)) return null
 
     if (startContainer.nodeType === Node.TEXT_NODE) {
-      return direction === 'before'
-        ? (startOffset === 0 ? startContainer.previousSibling : null)
-        : (startOffset === (startContainer.textContent?.length ?? 0) ? startContainer.nextSibling : null)
+      const atEdge = isSpacerTextNode(startContainer)
+        || (direction === 'before' ? startOffset === 0 : startOffset === (startContainer.textContent?.length ?? 0))
+      if (!atEdge) return null
+      const sibling = direction === 'before' ? startContainer.previousSibling : startContainer.nextSibling
+      return skipSpacers(sibling, direction)
     }
-    return direction === 'before'
-      ? startContainer.childNodes[startOffset - 1] ?? null
-      : startContainer.childNodes[startOffset] ?? null
+    const sibling = direction === 'before' ? startContainer.childNodes[startOffset - 1] ?? null : startContainer.childNodes[startOffset] ?? null
+    return skipSpacers(sibling, direction)
   }
 
   /** Whether the caret sits immediately before/after a chip — browsers are inconsistent about
@@ -1373,9 +1403,9 @@ const FormatPatternEditor = ({
     range.insertNode(chip)
     // Leading spacer mirrors the one in the mount effect above — same reasoning: gives the caret
     // somewhere to land immediately before the chip even if it ends up first on its line.
-    chip.parentNode?.insertBefore(document.createTextNode(''), chip)
+    chip.parentNode?.insertBefore(document.createTextNode(CARET_SPACER), chip)
 
-    const spacer = document.createTextNode('')
+    const spacer = document.createTextNode(CARET_SPACER)
     chip.parentNode?.insertBefore(spacer, chip.nextSibling)
     const newRange = document.createRange()
     newRange.setStart(spacer, 0)
