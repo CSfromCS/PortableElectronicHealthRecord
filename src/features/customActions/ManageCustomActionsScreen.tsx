@@ -251,7 +251,15 @@ const ConditionChecklistItemsEditor = ({
           const isDraftRow = index >= items.length
           return (
             <div
-              key={item.id}
+              // Keyed by position, not item.id: the trailing draft row's debounced auto-commit
+              // (TapToEditField, DEBOUNCE_MS) turns it into a real item — with a freshly minted
+              // id — out from under the still-focused, still-typing field. An id-keyed row would
+              // see that as a brand-new element (remounting mid-keystroke and losing the in-
+              // progress edit, which lands as a stray committed item plus whatever's typed next
+              // duplicating into the new draft row). Keying by index instead keeps the same
+              // component/DOM node in place across that swap, exactly like the Checklist tab and
+              // Master Checklist's identical draft-row pattern in App.tsx.
+              key={`checklist-item-${index}`}
               className={cn(
                 'flex items-center gap-1.5 rounded-md border border-clay/20 bg-warm-ivory px-1.5 py-1 transition-shadow',
                 !isDraftRow && itemDrag.isDragging(item.id) && 'opacity-50',
