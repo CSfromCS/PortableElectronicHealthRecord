@@ -1783,11 +1783,11 @@ export const ManageTemplatesScreen = ({
       <CardContent className='px-4 pb-4 space-y-4'>
         {editingTemplateId === null ? (
           <>
-            <div className='flex items-center justify-between gap-2'>
+            <div className='flex items-center justify-between gap-2 flex-wrap'>
               <p className='text-xs text-clay max-w-[55%]'>
                 Templates control which fields appear in a report and in what arrangement — replacing the old fixed export formats.
               </p>
-              <div className='flex gap-2'>
+              <div className='flex gap-2 flex-wrap justify-end'>
                 <Button size='sm' variant='outline' onClick={onManageDateTimeFormats}>Date & Time Formats</Button>
                 <Button size='sm' onClick={() => setEditingTemplateId('new')}>
                   <Plus className='h-3.5 w-3.5' aria-hidden='true' /> New template

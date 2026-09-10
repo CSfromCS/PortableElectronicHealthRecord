@@ -128,6 +128,7 @@ import {
   resolveDefaultPhotoBatchTitle,
   type DefaultTitledPhotoBatch,
 } from './features/photos/photoUtils'
+import { CameraCaptureDialog } from './features/photos/CameraCaptureDialog'
 import { SyncButton, type SyncStatus } from './features/sync/SyncButton'
 import { SyncSetupDialog, type SetupDeviceName, type SetupUsername } from './features/sync/SyncSetupDialog'
 import { VersionPickerDialog } from './features/sync/VersionPickerDialog'
@@ -642,7 +643,6 @@ const ensurePatientLastModified = (patient: Patient): Patient => {
 
 function App() {
   const backupFileInputRef = useRef<HTMLInputElement | null>(null)
-  const cameraPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const galleryPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const outputPreviewTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const carouselThumbnailButtonRefs = useRef<Record<number, HTMLButtonElement>>({})
@@ -877,13 +877,14 @@ function App() {
   const labsSelection = useEntrySelection()
   const ordersSelection = useEntrySelection()
   const photosSelection = useEntrySelection()
-  // A multi-shot camera capture session (issue #131 point 1) — the camera input only ever
-  // returns one photo per invocation (a platform limitation of `<input capture>`), so we stage
-  // shots here and only write them to the db as one bundle once the user hits Save. A null
-  // target means the session is building a brand-new bundle; a group means it's appending to
-  // that existing bundle (issue #131 point 3).
-  const [pendingCameraFiles, setPendingCameraFiles] = useState<File[]>([])
-  const [pendingCameraPreviewUrls, setPendingCameraPreviewUrls] = useState<string[]>([])
+  // A live in-app camera session (issue #131 point 1) — CameraCaptureDialog owns the actual
+  // capture loop (getUserMedia, one or more shots) and hands back files on "Done", which are
+  // then written to the db as one bundle. A null target means the session is building a
+  // brand-new bundle; a group means it's appending to that existing bundle (issue #131 point 3).
+  const [cameraCaptureDialogOpen, setCameraCaptureDialogOpen] = useState(false)
+  // Bumped every time the camera dialog is opened so it remounts fresh (see its own comment) —
+  // otherwise a bundle's leftover captures/error from a previous session could bleed into the next.
+  const [cameraSessionKey, setCameraSessionKey] = useState(0)
   const [cameraSessionTargetGroup, setCameraSessionTargetGroup] = useState<PhotoAttachmentGroup | null>(null)
   // Set right before opening the gallery picker so its onChange knows whether the picked
   // files start a new bundle (null) or get appended to an existing one (issue #131 point 3).
@@ -2070,15 +2071,6 @@ function App() {
     }
   }, [reviewablePhotoAttachments])
 
-  useEffect(() => {
-    const urls = pendingCameraFiles.map((file) => URL.createObjectURL(file))
-    setPendingCameraPreviewUrls(urls)
-
-    return () => {
-      urls.forEach((url) => URL.revokeObjectURL(url))
-    }
-  }, [pendingCameraFiles])
-
   const selectedAttachmentCarousel = useMemo(() => {
     if (selectedAttachmentId === null) return null
 
@@ -2109,6 +2101,20 @@ function App() {
   }, [attachmentViewerSource, reviewablePhotoAttachments, selectedAttachmentId, selectedPatientAllAttachments])
 
   const carouselPreviewUrls = attachmentViewerSource === 'review' ? allAttachmentPreviewUrls : attachmentPreviewUrls
+
+  // Lets the photo viewer's top bar offer "add photos to this bundle" (camera/gallery), scoped
+  // to the patient Photos tab only — the cross-patient Review dialog doesn't have a single
+  // patient context to attach new photos to.
+  const currentViewerGroup: PhotoAttachmentGroup | null = useMemo(() => {
+    if (attachmentViewerSource !== 'patient' || !selectedAttachmentCarousel || selectedAttachmentCarousel.entries.length === 0) return null
+    const entries = selectedAttachmentCarousel.entries
+    return {
+      groupId: getPhotoGroupKey(entries[0]),
+      createdAt: entries[0].createdAt,
+      entries,
+      totalByteSize: entries.reduce((sum, entry) => sum + entry.byteSize, 0),
+    }
+  }, [attachmentViewerSource, selectedAttachmentCarousel])
 
   const selectedAttachmentCarouselEntry = selectedAttachmentCarousel
     ? selectedAttachmentCarousel.entries[selectedAttachmentCarousel.currentIndex]
@@ -3926,15 +3932,6 @@ function App() {
     await savePhotoFiles(files, targetGroup)
   }
 
-  // Each camera tap returns one photo; stage it into the pending session instead of saving
-  // immediately so several shots in a row can land in the same bundle (issue #131 point 1).
-  const handleCameraCapture = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith('image/'))
-    event.target.value = ''
-    if (files.length === 0) return
-    setPendingCameraFiles((previous) => [...previous, ...files])
-  }
-
   const openGalleryForNewBundle = () => {
     setGalleryAddTargetGroup(null)
     galleryPhotoInputRef.current?.click()
@@ -3947,24 +3944,26 @@ function App() {
 
   const openCameraForNewBundle = () => {
     setCameraSessionTargetGroup(null)
-    cameraPhotoInputRef.current?.click()
+    setCameraSessionKey((key) => key + 1)
+    setCameraCaptureDialogOpen(true)
   }
 
   const openCameraForGroup = (group: PhotoAttachmentGroup) => {
     setCameraSessionTargetGroup(group)
-    cameraPhotoInputRef.current?.click()
+    setCameraSessionKey((key) => key + 1)
+    setCameraCaptureDialogOpen(true)
   }
 
-  const saveCameraSession = async () => {
-    if (pendingCameraFiles.length === 0) return
-    await savePhotoFiles(pendingCameraFiles, cameraSessionTargetGroup)
-    setPendingCameraFiles([])
+  const closeCameraCaptureDialog = () => {
+    setCameraCaptureDialogOpen(false)
     setCameraSessionTargetGroup(null)
   }
 
-  const discardCameraSession = () => {
-    setPendingCameraFiles([])
+  const finishCameraCaptureSession = (files: File[]) => {
+    setCameraCaptureDialogOpen(false)
+    const targetGroup = cameraSessionTargetGroup
     setCameraSessionTargetGroup(null)
+    void savePhotoFiles(files, targetGroup)
   }
 
   const deletePhotoAttachment = async (attachmentId?: number) => {
@@ -6163,9 +6162,9 @@ function App() {
             {view === 'checklist' ? (
               <Card className='bg-warm-ivory border-clay shadow-sm'>
                 <CardHeader className='pb-2'>
-                  <div className='flex items-center justify-between gap-2'>
+                  <div className='flex items-center justify-between gap-2 flex-wrap'>
                     <CardTitle className='text-base text-espresso'>Master Checklist</CardTitle>
-                    <div className='flex items-center gap-1.5'>
+                    <div className='flex items-center gap-1.5 flex-wrap justify-end'>
                       <Button type='button' variant='outline' size='sm' className='gap-1.5' onClick={() => setPatientSortDialogOpen(true)}>
                         <Layers className='h-3.5 w-3.5' aria-hidden='true' />
                         Sort
@@ -8088,14 +8087,6 @@ function App() {
                           </div>
                         </div>
                         <Input
-                          ref={cameraPhotoInputRef}
-                          type='file'
-                          accept='image/*'
-                          capture='environment'
-                          className='hidden'
-                          onChange={handleCameraCapture}
-                        />
-                        <Input
                           ref={galleryPhotoInputRef}
                           type='file'
                           accept='image/*'
@@ -8103,42 +8094,14 @@ function App() {
                           className='hidden'
                           onChange={(event) => void handleGallerySelection(event)}
                         />
-                        {pendingCameraFiles.length > 0 ? (
-                          <div className='space-y-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
-                            <div className='flex items-center justify-between gap-2 flex-wrap'>
-                              <p className='text-xs font-semibold text-espresso'>
-                                {pendingCameraFiles.length} photo{pendingCameraFiles.length === 1 ? '' : 's'} captured
-                                {cameraSessionTargetGroup ? ' — adding to bundle' : ''}
-                              </p>
-                              <div className='flex gap-1.5 flex-wrap'>
-                                <Button size='sm' variant='outline' className='h-7 text-xs gap-1' disabled={isPhotoSaving} onClick={() => cameraPhotoInputRef.current?.click()}>
-                                  <Camera className='h-3.5 w-3.5' aria-hidden='true' />
-                                  Take another
-                                </Button>
-                                <Button size='sm' className='h-7 text-xs' disabled={isPhotoSaving} onClick={() => void saveCameraSession()}>
-                                  {isPhotoSaving ? 'Saving...' : `Save ${pendingCameraFiles.length}`}
-                                </Button>
-                                <Button size='sm' variant='ghost' className='h-7 text-xs' disabled={isPhotoSaving} onClick={discardCameraSession}>
-                                  Discard
-                                </Button>
-                              </div>
-                            </div>
-                            <div className='flex gap-1.5 flex-wrap'>
-                              {pendingCameraPreviewUrls.map((url, index) => (
-                                <img key={index} src={url} alt={`Captured photo ${index + 1}`} className='h-14 w-14 rounded border border-clay/30 object-cover' />
-                              ))}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className='flex gap-2 flex-wrap'>
-                            <Button size='sm' onClick={openCameraForNewBundle} disabled={isPhotoSaving}>
-                              {isPhotoSaving ? 'Saving photos...' : 'Take photo(s)'}
-                            </Button>
-                            <Button size='sm' variant='secondary' onClick={openGalleryForNewBundle} disabled={isPhotoSaving}>
-                              Choose existing photo(s)
-                            </Button>
-                          </div>
-                        )}
+                        <div className='flex gap-2 flex-wrap'>
+                          <Button size='sm' onClick={openCameraForNewBundle} disabled={isPhotoSaving}>
+                            {isPhotoSaving ? 'Saving photos...' : 'Take photo(s)'}
+                          </Button>
+                          <Button size='sm' variant='secondary' onClick={openGalleryForNewBundle} disabled={isPhotoSaving}>
+                            Choose existing photo(s)
+                          </Button>
+                        </div>
 
                         <div className='flex items-end justify-between gap-2 flex-wrap'>
                           <div className='space-y-1 max-w-56'>
@@ -8293,7 +8256,7 @@ function App() {
                                             variant='outline'
                                             className='h-7 w-7'
                                             aria-label='Take more photos for this bundle'
-                                            disabled={isPhotoSaving || pendingCameraFiles.length > 0}
+                                            disabled={isPhotoSaving}
                                             onClick={() => openCameraForGroup(group)}
                                           >
                                             <Camera className='h-3.5 w-3.5' />
@@ -8303,7 +8266,7 @@ function App() {
                                             variant='outline'
                                             className='h-7 w-7'
                                             aria-label='Add existing photos to this bundle'
-                                            disabled={isPhotoSaving || pendingCameraFiles.length > 0}
+                                            disabled={isPhotoSaving}
                                             onClick={() => openGalleryForGroup(group)}
                                           >
                                             <Upload className='h-3.5 w-3.5' />
@@ -8820,6 +8783,14 @@ function App() {
           </DialogContent>
         </Dialog>
 
+        <CameraCaptureDialog
+          key={cameraSessionKey}
+          open={cameraCaptureDialogOpen}
+          subtitle={cameraSessionTargetGroup ? 'Adding to bundle' : 'New photo bundle'}
+          onClose={closeCameraCaptureDialog}
+          onDone={finishCameraCaptureSession}
+        />
+
         <Dialog open={selectedAttachmentCarouselEntry !== null} onOpenChange={(open) => { if (!open) setSelectedAttachmentId(null) }}>
           <DialogContent
             showCloseButton={false}
@@ -8869,18 +8840,40 @@ function App() {
                     <p className='flex-1 min-w-0 truncate text-center text-sm font-medium text-white'>
                       {`[${formatPhotoCategory(selectedAttachmentCarouselEntry.category)}] ${selectedAttachmentCarouselEntry.title || 'Untitled'}`}
                     </p>
-                    <button
-                      type='button'
-                      aria-label='Remove from app'
-                      className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
-                      onClick={() => requestDeleteConfirmation({
-                        title: 'Delete photo?',
-                        message: 'Permanently remove this photo from the app record?',
-                        onConfirm: () => deletePhotoAttachment(selectedAttachmentCarouselEntry.id),
-                      })}
-                    >
-                      <Trash2 className='h-4.5 w-4.5' />
-                    </button>
+                    <div className='flex items-center gap-1.5 shrink-0'>
+                      {currentViewerGroup ? (
+                        <>
+                          <button
+                            type='button'
+                            aria-label='Take more photos for this bundle'
+                            className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                            onClick={() => openCameraForGroup(currentViewerGroup)}
+                          >
+                            <Camera className='h-4.5 w-4.5' />
+                          </button>
+                          <button
+                            type='button'
+                            aria-label='Add existing photos to this bundle'
+                            className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                            onClick={() => openGalleryForGroup(currentViewerGroup)}
+                          >
+                            <Upload className='h-4.5 w-4.5' />
+                          </button>
+                        </>
+                      ) : null}
+                      <button
+                        type='button'
+                        aria-label='Remove from app'
+                        className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                        onClick={() => requestDeleteConfirmation({
+                          title: 'Delete photo?',
+                          message: 'Permanently remove this photo from the app record?',
+                          onConfirm: () => deletePhotoAttachment(selectedAttachmentCarouselEntry.id),
+                        })}
+                      >
+                        <Trash2 className='h-4.5 w-4.5' />
+                      </button>
+                    </div>
                   </div>
                 ) : null}
 

@@ -157,7 +157,7 @@ export const ManageDateTimeFormatsScreen = ({
       <CardContent className='px-4 pb-4 space-y-4'>
         {editingId === null ? (
           <>
-            <div className='flex items-center justify-between'>
+            <div className='flex items-center justify-between gap-2 flex-wrap'>
               <p className='text-xs text-clay max-w-[70%]'>
                 Saved formats appear as options wherever a date/time variable is configured in a template.
               </p>
