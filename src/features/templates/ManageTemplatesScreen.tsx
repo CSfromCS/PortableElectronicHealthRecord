@@ -62,7 +62,7 @@ import {
   renderTemplateForPatient,
   tokenizePatternText,
 } from './templateEngine'
-import { SAMPLE_PREVIEW_PATIENT, buildSamplePreviewContext } from './samplePreviewData'
+import { buildSamplePreviewContext, buildSamplePreviewPatient } from './samplePreviewData'
 
 const BLOCK_VARIABLE_ORDER: BlockVariableId[] = ['vitals', 'labs', 'problems', 'checklist', 'orders', 'medications']
 
@@ -1566,11 +1566,13 @@ const TemplateEditor = ({
 
   const preview = useMemo(() => {
     // Real tag/group definitions (not real PATIENT data) so a Census Summary variable's selected
-    // tags actually resolve in the preview — see buildSamplePreviewContext's own comment.
-    const ctx = buildSamplePreviewContext(dateTimeFormatsById, tagsById, groups)
-    const headerText = form.headerPatternText ? renderTemplateForPatient({ patternText: form.headerPatternText, variables: form.headerVariables }, SAMPLE_PREVIEW_PATIENT, ctx) : ''
-    const bodyText = renderTemplateForPatient({ patternText: form.patternText, variables: form.variables }, SAMPLE_PREVIEW_PATIENT, ctx)
-    const footerText = form.footerPatternText ? renderTemplateForPatient({ patternText: form.footerPatternText, variables: form.footerVariables }, SAMPLE_PREVIEW_PATIENT, ctx) : ''
+    // tags, and the preview patient's own Main/Referral service, actually resolve in the preview
+    // — see buildSamplePreviewContext/buildSamplePreviewPatient's own comments.
+    const previewPatient = buildSamplePreviewPatient(tagsById, groups)
+    const ctx = buildSamplePreviewContext(dateTimeFormatsById, tagsById, groups, previewPatient)
+    const headerText = form.headerPatternText ? renderTemplateForPatient({ patternText: form.headerPatternText, variables: form.headerVariables }, previewPatient, ctx) : ''
+    const bodyText = renderTemplateForPatient({ patternText: form.patternText, variables: form.variables }, previewPatient, ctx)
+    const footerText = form.footerPatternText ? renderTemplateForPatient({ patternText: form.footerPatternText, variables: form.footerVariables }, previewPatient, ctx) : ''
     return [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
   }, [form.headerPatternText, form.headerVariables, form.patternText, form.variables, form.footerPatternText, form.footerVariables, dateTimeFormatsById, tagsById, groups])
 
