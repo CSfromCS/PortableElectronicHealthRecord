@@ -4,8 +4,15 @@ import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } fr
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
 import { seedDefaultCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
-import { DEFAULT_TEMPLATE_EXTRAS, buildDefaultDateTimeFormats, buildDefaultReportTemplates, buildLockedLabsTemplate } from './features/templates/templateDefaults'
+import {
+  DEFAULT_TEMPLATE_EXTRAS,
+  buildDefaultDateTimeFormats,
+  buildDefaultReportTemplates,
+  buildFirstInstallReportTemplates,
+  buildLockedLabsTemplate,
+} from './features/templates/templateDefaults'
 import { buildDefaultBlockVariableConfig } from './features/templates/templateEngine'
+import { buildDefaultCustomViews } from './features/filters/customViewDefaults'
 import type {
   BlockVariableConfig,
   BlockVariableId,
@@ -180,9 +187,10 @@ db.on('populate', async () => {
   )
   await seedDefaultCustomActions(tagIdByName, (action) => db.customActions.add(action) as Promise<number>)
   const now = new Date().toISOString()
-  await db.reportTemplates.bulkAdd(buildDefaultReportTemplates(now))
-  await db.reportTemplates.add(buildLockedLabsTemplate(now, 2))
+  await db.reportTemplates.bulkAdd(buildFirstInstallReportTemplates(now, tagIdByName))
+  await db.reportTemplates.add(buildLockedLabsTemplate(now, 3))
   await db.dateTimeFormats.bulkAdd(buildDefaultDateTimeFormats(now))
+  await db.customViews.bulkAdd(buildDefaultCustomViews(now, tagIdByName))
 })
 
 db.version(5).stores({

@@ -3,6 +3,7 @@ import {
   buildDefaultBlockVariableConfig,
   buildVariableToken,
   createVariableId,
+  type CensusSummaryFieldId,
 } from './templateEngine'
 import type { DateTimeComponentId, DateTimeFormatDefinition, FlatVariableId, ReportTemplate, TemplateVariableInstance } from '@/types'
 
@@ -47,6 +48,128 @@ export const buildDefaultReportTemplates = (now: string): Omit<ReportTemplate, '
   return [
     { name: 'Full Census', patternText: fullCensusPattern, variables, sortOrder: 0, createdAt: now, ...DEFAULT_TEMPLATE_EXTRAS },
     { name: 'Short List', patternText: shortListPattern, variables: shortListVariables, sortOrder: 1, createdAt: now, ...DEFAULT_TEMPLATE_EXTRAS },
+  ]
+}
+
+/**
+ * The richer, real-world set of starting templates used only for brand-new installs
+ * (`db.on('populate')`) — matches this app's own maintainer's actual configured templates rather
+ * than the generic placeholder set `buildDefaultReportTemplates` above still provides for installs
+ * upgrading through the historical migration that first introduced Report Templates (left
+ * unchanged there deliberately, since that's a one-time backfill for pre-existing installs, not a
+ * "what should a first run look like" decision). Requires `tagIdByName` (built earlier in the same
+ * populate hook — see `seedDefaultTagGroupsAndTags`) since the Census Summary template scopes
+ * itself to the CD/PD tags by id.
+ */
+export const buildFirstInstallReportTemplates = (now: string, tagIdByName: Map<string, number>): Omit<ReportTemplate, 'id'>[] => {
+  const variables: Record<string, TemplateVariableInstance> = {}
+  const flatToken = (variableId: FlatVariableId): string => {
+    const id = createVariableId()
+    variables[id] = { kind: 'flat', variableId }
+    return buildVariableToken(id)
+  }
+  const fullCensusPattern = [
+    `${flatToken('roomNumber')} ${flatToken('lastName')}, ${flatToken('firstName')}`,
+    `${flatToken('age')}/${flatToken('sex')}`,
+    `M: ${flatToken('mainService')}`,
+    flatToken('admissionDiagnosis'),
+    '',
+  ].join('\n')
+
+  const shortCensusVariables: Record<string, TemplateVariableInstance> = {}
+  const shortToken = (variableId: FlatVariableId): string => {
+    const id = createVariableId()
+    shortCensusVariables[id] = { kind: 'flat', variableId }
+    return buildVariableToken(id)
+  }
+  const shortCensusPattern = `${shortToken('roomNumber')} ${shortToken('ward')} — ${shortToken('lastName')}`
+
+  const errandsVariables: Record<string, TemplateVariableInstance> = {}
+  const errandsFlatToken = (variableId: FlatVariableId): string => {
+    const id = createVariableId()
+    errandsVariables[id] = { kind: 'flat', variableId }
+    return buildVariableToken(id)
+  }
+  const checklistEntryFieldIds: Record<string, string> = {}
+  const checklistToken = (fieldId: string): string => {
+    const id = createVariableId()
+    checklistEntryFieldIds[id] = fieldId
+    return buildVariableToken(id)
+  }
+  const checklistVariableId = createVariableId()
+  errandsVariables[checklistVariableId] = {
+    kind: 'block',
+    variableId: 'checklist',
+    config: {
+      ...buildDefaultBlockVariableConfig('checklist'),
+      rangeMode: 'dateRange',
+      relativeMode: 'lastNDays',
+      lastNDays: 5,
+      entryCount: 3,
+      entryFieldIds: checklistEntryFieldIds,
+      entryPatternText: `${checklistToken('checkbox')} ${checklistToken('itemText')}`,
+      entrySeparator: 'lineBreak',
+      showGroupHeader: false,
+      groupSeparator: 'lineBreak',
+      checkedGlyph: '✅',
+      uncheckedGlyph: '⭕',
+    },
+  }
+  const errandsPattern = `${errandsFlatToken('roomNumber')} ${errandsFlatToken('lastName')}\n${buildVariableToken(checklistVariableId)}\n`
+
+  const censusFieldIds: Record<string, string> = {}
+  const censusToken = (fieldId: CensusSummaryFieldId): string => {
+    const id = createVariableId()
+    censusFieldIds[id] = fieldId
+    return buildVariableToken(id)
+  }
+  const censusPatternText = [
+    censusToken('groupLabel'),
+    `Admitted ${censusToken('admittedTally')} patients ${censusToken('admittedList')}`,
+    `Referred ${censusToken('referredTally')} patients ${censusToken('referredList')}`,
+    `Discharged ${censusToken('dischargedTally')} patients ${censusToken('dischargedList')}`,
+  ].join('\n')
+  const censusPatientRowFieldIds: Record<string, string> = {}
+  const censusPatientRowId = createVariableId()
+  censusPatientRowFieldIds[censusPatientRowId] = 'lastName'
+
+  const censusVariableId = createVariableId()
+  const censusHeaderVariables: Record<string, TemplateVariableInstance> = {
+    [censusVariableId]: {
+      kind: 'censusSummary',
+      config: {
+        tagIds: [tagIdByName.get('CD'), tagIdByName.get('PD')].filter((id): id is number => id !== undefined),
+        groupCombineMode: 'OR',
+        lookbackHours: 12,
+        patternText: censusPatternText,
+        fieldIds: censusFieldIds,
+        groupSeparator: 'blankLine',
+        customGroupSeparator: '',
+        listOpenText: ' (',
+        listCloseText: ')',
+        showListBracketsWhenEmpty: false,
+        patientRowPatternText: buildVariableToken(censusPatientRowId),
+        patientRowFieldIds: censusPatientRowFieldIds,
+        nameSeparator: 'comma',
+        customNameSeparator: '',
+      },
+    },
+  }
+
+  return [
+    { name: 'Full Census', patternText: fullCensusPattern, variables, sortOrder: 0, createdAt: now, ...DEFAULT_TEMPLATE_EXTRAS },
+    { name: 'Short census', patternText: shortCensusPattern, variables: shortCensusVariables, sortOrder: 1, createdAt: now, ...DEFAULT_TEMPLATE_EXTRAS },
+    { name: 'Errands list', patternText: errandsPattern, variables: errandsVariables, sortOrder: 2, createdAt: now, ...DEFAULT_TEMPLATE_EXTRAS },
+    {
+      name: 'Census summary CD vs PD (past 12 hours)',
+      patternText: '',
+      variables: {},
+      sortOrder: 4,
+      createdAt: now,
+      ...DEFAULT_TEMPLATE_EXTRAS,
+      headerPatternText: buildVariableToken(censusVariableId),
+      headerVariables: censusHeaderVariables,
+    },
   ]
 }
 
