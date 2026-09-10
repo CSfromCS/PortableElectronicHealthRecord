@@ -1306,10 +1306,105 @@ const FormatPatternEditor = ({
     return node instanceof HTMLElement && node.tagName === 'BR' ? node : null
   }
 
+  /**
+   * Inserts a <br> at the caret via the standard, spec-defined Range API instead of the
+   * deprecated `document.execCommand('insertLineBreak')` — execCommand's exact behavior (where
+   * the <br> lands, what it does to a text node it splits, where the caret ends up afterward)
+   * isn't reliably consistent across browsers, which is what made Enter near an existing chip's
+   * spacer produce an unpredictable DOM shape the adjacency checks below couldn't always account
+   * for. This makes the result fully deterministic: exactly `<br>` followed by one fresh spacer,
+   * with the caret placed in that spacer — the same anchor a chip gets when inserted.
+   */
+  const insertLineBreakAtCaret = () => {
+    const container = containerRef.current
+    const selection = window.getSelection()
+    if (!container || !selection) return
+    const currentRange = selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+    const range = currentRange && container.contains(currentRange.startContainer) ? currentRange : (() => {
+      const fallback = document.createRange()
+      fallback.selectNodeContents(container)
+      fallback.collapse(false)
+      return fallback
+    })()
+
+    range.deleteContents()
+    const br = document.createElement('br')
+    range.insertNode(br)
+
+    const spacer = document.createTextNode(CARET_SPACER)
+    br.parentNode?.insertBefore(spacer, br.nextSibling)
+    const newRange = document.createRange()
+    newRange.setStart(spacer, 0)
+    newRange.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(newRange)
+    savedRangeRef.current = newRange.cloneRange()
+  }
+
+  const isAtomicNode = (node: Node | null): node is HTMLElement =>
+    node !== null && node.nodeType === Node.ELEMENT_NODE
+    && ((node as HTMLElement).dataset.variableId !== undefined || (node as HTMLElement).tagName === 'BR')
+
+  /**
+   * Moves the caret one full chip or <br> at a time instead of one DOM position at a time — left
+   * to native ArrowLeft/ArrowRight, every chip and line break now costs 3 presses to get past (its
+   * leading spacer, itself, its trailing spacer) since each spacer is a real, if invisible,
+   * character. A chip is meant to read as a single character and a line break as a single line
+   * boundary, so this collapses each crossing back down to one press — mirroring how
+   * getAdjacentChip/getAdjacentLineBreak above already treat a spacer as "no real content here"
+   * for Backspace/Delete. Only intercepts a plain arrow press at a boundary; an unmodified move in
+   * the middle of ordinary text, or any modified (shift/ctrl/alt/meta) press, is left to the
+   * browser so selection-extension and word-jump keep working normally.
+   */
+  const moveCaretPastBoundary = (direction: 'before' | 'after'): boolean => {
+    const container = containerRef.current
+    const selection = window.getSelection()
+    if (!container || !selection || selection.rangeCount === 0 || !selection.isCollapsed) return false
+    const { startContainer, startOffset } = selection.getRangeAt(0)
+    if (!container.contains(startContainer)) return false
+
+    let searchFrom: Node | null
+    if (startContainer.nodeType === Node.TEXT_NODE) {
+      const atEdge = isSpacerTextNode(startContainer)
+        || (direction === 'before' ? startOffset === 0 : startOffset === (startContainer.textContent?.length ?? 0))
+      if (!atEdge) return false
+      searchFrom = direction === 'before' ? startContainer.previousSibling : startContainer.nextSibling
+    } else {
+      searchFrom = direction === 'before' ? startContainer.childNodes[startOffset - 1] ?? null : startContainer.childNodes[startOffset] ?? null
+    }
+
+    const node = skipSpacers(searchFrom, direction)
+    const range = document.createRange()
+
+    if (node === null) {
+      range.setStart(container, direction === 'before' ? 0 : container.childNodes.length)
+    } else if (isAtomicNode(node)) {
+      const beyond = direction === 'before' ? node.previousSibling : node.nextSibling
+      const landing = skipSpacers(beyond, direction)
+      if (landing === null) {
+        range.setStart(container, direction === 'before' ? 0 : container.childNodes.length)
+      } else if (landing.nodeType === Node.TEXT_NODE) {
+        range.setStart(landing, direction === 'before' ? (landing.textContent?.length ?? 0) : 0)
+      } else if (direction === 'before') {
+        range.setStartAfter(landing)
+      } else {
+        range.setStartBefore(landing)
+      }
+    } else {
+      range.setStart(node, direction === 'before' ? (node.textContent?.length ?? 0) : 0)
+    }
+
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    savedRangeRef.current = range.cloneRange()
+    return true
+  }
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Enter') {
       event.preventDefault()
-      document.execCommand('insertLineBreak')
+      insertLineBreakAtCaret()
       emitChange()
       return
     }
@@ -1328,6 +1423,11 @@ const FormatPatternEditor = ({
         lineBreak.remove()
         emitChange()
       }
+      return
+    }
+    if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      const direction = event.key === 'ArrowLeft' ? 'before' : 'after'
+      if (moveCaretPastBoundary(direction)) event.preventDefault()
     }
   }
 
