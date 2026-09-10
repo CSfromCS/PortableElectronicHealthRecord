@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -73,8 +75,16 @@ import {
   migrateUnassignedDiagnosisOnFirstService,
 } from './features/patients/serviceDiagnosis'
 import { ServiceDiagnosisFields } from './features/patients/ServiceDiagnosisFields'
-import { ManageTemplatesScreen } from './features/templates/ManageTemplatesScreen'
-import { ManageDateTimeFormatsScreen } from './features/templates/ManageDateTimeFormatsScreen'
+// Settings sub-screens (issue #135) — each only ever renders behind its own `view === '...'`
+// check below, so loading their code lazily keeps them out of the initial bundle for the common
+// Patients/Checklist/Photos path. Named exports, so `.then` reshapes the module to the default
+// export React.lazy expects.
+const ManageTemplatesScreen = lazy(() =>
+  import('./features/templates/ManageTemplatesScreen').then((module) => ({ default: module.ManageTemplatesScreen })),
+)
+const ManageDateTimeFormatsScreen = lazy(() =>
+  import('./features/templates/ManageDateTimeFormatsScreen').then((module) => ({ default: module.ManageDateTimeFormatsScreen })),
+)
 import {
   PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE,
   buildCurrentDateTimeText,
@@ -107,7 +117,9 @@ import {
 } from './features/photos/photoMentions'
 import { ProblemListEditor } from './features/problems/ProblemListEditor'
 import { normalizeDailyUpdate, normalizeProblemBlocks, toPendingProblemBlocks } from './features/problems/problemUtils'
-import { TabSettingsScreen } from './features/tabs/TabSettingsScreen'
+const TabSettingsScreen = lazy(() =>
+  import('./features/tabs/TabSettingsScreen').then((module) => ({ default: module.TabSettingsScreen })),
+)
 import {
   PATIENT_TAB_DESCRIPTIONS,
   PATIENT_TAB_LABELS,
@@ -151,9 +163,15 @@ import {
 } from './features/sync/syncService'
 import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
-import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
-import { ManageCustomViewsScreen } from './features/filters/ManageCustomViewsScreen'
-import { ManageCustomActionsScreen } from './features/customActions/ManageCustomActionsScreen'
+const ManageTagsScreen = lazy(() =>
+  import('./features/tags/ManageTagsScreen').then((module) => ({ default: module.ManageTagsScreen })),
+)
+const ManageCustomViewsScreen = lazy(() =>
+  import('./features/filters/ManageCustomViewsScreen').then((module) => ({ default: module.ManageCustomViewsScreen })),
+)
+const ManageCustomActionsScreen = lazy(() =>
+  import('./features/customActions/ManageCustomActionsScreen').then((module) => ({ default: module.ManageCustomActionsScreen })),
+)
 import {
   actionHasApplicableEffect,
   actionHasApplicableGeneralEffect,
@@ -5832,6 +5850,13 @@ function App() {
           <div className='mb-3 h-px bg-linear-to-r from-transparent via-clay/20 to-transparent sm:hidden' aria-hidden='true' />
         ) : null}
 
+        <Suspense fallback={
+          <Card className='bg-white/80 border-clay/25 shadow-sm'>
+            <CardContent className='px-4 py-8 text-center'>
+              <p className='text-sm text-clay'>Loading…</p>
+            </CardContent>
+          </Card>
+        }>
         {view === 'manageTags' ? (
           <ManageTagsScreen
             tags={tagDefinitions ?? []}
@@ -8782,6 +8807,7 @@ function App() {
             </CardContent>
           </Card>
         )}
+        </Suspense>
 
         <Dialog open={!!outputPreview} onOpenChange={(open) => { if (!open) closeCopyModal() }}>
           <DialogContent className='flex flex-col gap-3 p-4 w-[95vw] max-w-[95vw] h-[80vh] max-h-[80vh] md:w-[90vw] md:max-w-5xl md:h-[88vh] md:max-h-[88vh]'>
