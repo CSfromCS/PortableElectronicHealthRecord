@@ -764,7 +764,7 @@ export const ManageCustomActionsScreen = ({
         </div>
       </CardHeader>
       <CardContent className='px-4 pb-4 space-y-4'>
-        <div className='flex items-center justify-between'>
+        <div className='flex items-center justify-between gap-2 flex-wrap'>
           <p className='text-xs text-clay max-w-[70%]'>
             Custom Actions append checklist items and/or add or remove tags, either manually via a button or automatically when a tag is added.
           </p>

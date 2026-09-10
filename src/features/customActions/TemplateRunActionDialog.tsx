@@ -58,9 +58,9 @@ export const TemplateRunActionDialog = ({
             <p className='text-xs text-clay -mt-2'>
               Runs "{template.name}" and copies the result to the clipboard. Every patient matching this action's saved filter is included by default — deselect any that don't belong this time.
             </p>
-            <div className='flex items-center justify-between gap-2'>
+            <div className='flex items-center justify-between gap-2 flex-wrap'>
               <p className='text-xs text-clay'>{selectedPatients.length} of {patients.length} selected</p>
-              <div className='flex gap-1.5'>
+              <div className='flex gap-1.5 flex-wrap justify-end'>
                 <Button type='button' size='sm' variant='outline' className='h-7 text-xs' onClick={selectAll}>Select all</Button>
                 <Button type='button' size='sm' variant='outline' className='h-7 text-xs' onClick={deselectAll}>Deselect all</Button>
               </div>

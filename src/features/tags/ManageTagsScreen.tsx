@@ -382,11 +382,11 @@ export const ManageTagsScreen = ({
 
           {selectedTagIds.size > 0 ? (
             <div className='rounded-lg border border-action-primary/40 bg-action-primary/5 p-3 space-y-2.5'>
-              <div className='flex items-center justify-between'>
+              <div className='flex items-center justify-between gap-2 flex-wrap'>
                 <p className='text-xs font-semibold text-espresso'>
                   {selectedTagIds.size} tag{selectedTagIds.size === 1 ? '' : 's'} selected
                 </p>
-                <div className='flex items-center gap-1'>
+                <div className='flex items-center gap-1 flex-wrap justify-end'>
                   <Button
                     variant='ghost'
                     size='sm'

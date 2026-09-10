@@ -119,6 +119,7 @@ import {
 import {
   PHOTO_CATEGORY_OPTIONS,
   buildDefaultPhotoTitle,
+  buildPhotoFileName,
   buildPhotoUploadGroupId,
   compressImageFile,
   formatBytes,
@@ -127,6 +128,7 @@ import {
   resolveDefaultPhotoBatchTitle,
   type DefaultTitledPhotoBatch,
 } from './features/photos/photoUtils'
+import { CameraCaptureDialog } from './features/photos/CameraCaptureDialog'
 import { SyncButton, type SyncStatus } from './features/sync/SyncButton'
 import { SyncSetupDialog, type SetupDeviceName, type SetupUsername } from './features/sync/SyncSetupDialog'
 import { VersionPickerDialog } from './features/sync/VersionPickerDialog'
@@ -147,7 +149,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 import { ManageTagsScreen } from './features/tags/ManageTagsScreen'
 import { ManageCustomViewsScreen } from './features/filters/ManageCustomViewsScreen'
@@ -641,7 +643,6 @@ const ensurePatientLastModified = (patient: Patient): Patient => {
 
 function App() {
   const backupFileInputRef = useRef<HTMLInputElement | null>(null)
-  const cameraPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const galleryPhotoInputRef = useRef<HTMLInputElement | null>(null)
   const outputPreviewTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const carouselThumbnailButtonRefs = useRef<Record<number, HTMLButtonElement>>({})
@@ -876,6 +877,18 @@ function App() {
   const labsSelection = useEntrySelection()
   const ordersSelection = useEntrySelection()
   const photosSelection = useEntrySelection()
+  // A live in-app camera session (issue #131 point 1) — CameraCaptureDialog owns the actual
+  // capture loop (getUserMedia, one or more shots) and hands back files on "Done", which are
+  // then written to the db as one bundle. A null target means the session is building a
+  // brand-new bundle; a group means it's appending to that existing bundle (issue #131 point 3).
+  const [cameraCaptureDialogOpen, setCameraCaptureDialogOpen] = useState(false)
+  // Bumped every time the camera dialog is opened so it remounts fresh (see its own comment) —
+  // otherwise a bundle's leftover captures/error from a previous session could bleed into the next.
+  const [cameraSessionKey, setCameraSessionKey] = useState(0)
+  const [cameraSessionTargetGroup, setCameraSessionTargetGroup] = useState<PhotoAttachmentGroup | null>(null)
+  // Set right before opening the gallery picker so its onChange knows whether the picked
+  // files start a new bundle (null) or get appended to an existing one (issue #131 point 3).
+  const [galleryAddTargetGroup, setGalleryAddTargetGroup] = useState<PhotoAttachmentGroup | null>(null)
   const [bulkCustomActionTarget, setBulkCustomActionTarget] = useState<CustomAction | null>(null)
   const [isBulkCustomActionApplying, setIsBulkCustomActionApplying] = useState(false)
   const [customActionResolveState, setCustomActionResolveState] = useState<{ action: CustomAction; patient: Patient } | null>(null)
@@ -1984,6 +1997,14 @@ function App() {
       }))
   }, [attachmentFilter, selectedPatientAllAttachments])
 
+  // Every photo id currently on screen in the Photos tab, respecting both the category filter
+  // and the collapsed/expanded view mode — backs "Select All" and bulk actions there.
+  const allVisiblePhotoIds = useMemo(() => {
+    return patientPhotoViewMode === 'collapsed'
+      ? selectedPatientAttachmentGroups.flatMap((group) => group.entries.map((entry) => entry.id))
+      : selectedPatientExpandedPhotoSections.flatMap((section) => section.entries.map((entry) => entry.id))
+  }, [patientPhotoViewMode, selectedPatientAttachmentGroups, selectedPatientExpandedPhotoSections])
+
   const mentionableAttachments = useMemo(() => {
     const mapped = selectedPatientAllAttachments
       .filter((entry): entry is PhotoAttachment & { id: number } => entry.id !== undefined && entry.title.trim().length > 0)
@@ -2080,6 +2101,20 @@ function App() {
   }, [attachmentViewerSource, reviewablePhotoAttachments, selectedAttachmentId, selectedPatientAllAttachments])
 
   const carouselPreviewUrls = attachmentViewerSource === 'review' ? allAttachmentPreviewUrls : attachmentPreviewUrls
+
+  // Lets the photo viewer's top bar offer "add photos to this bundle" (camera/gallery), scoped
+  // to the patient Photos tab only — the cross-patient Review dialog doesn't have a single
+  // patient context to attach new photos to.
+  const currentViewerGroup: PhotoAttachmentGroup | null = useMemo(() => {
+    if (attachmentViewerSource !== 'patient' || !selectedAttachmentCarousel || selectedAttachmentCarousel.entries.length === 0) return null
+    const entries = selectedAttachmentCarousel.entries
+    return {
+      groupId: getPhotoGroupKey(entries[0]),
+      createdAt: entries[0].createdAt,
+      entries,
+      totalByteSize: entries.reduce((sum, entry) => sum + entry.byteSize, 0),
+    }
+  }, [attachmentViewerSource, selectedAttachmentCarousel])
 
   const selectedAttachmentCarouselEntry = selectedAttachmentCarousel
     ? selectedAttachmentCarousel.entries[selectedAttachmentCarousel.currentIndex]
@@ -3774,18 +3809,48 @@ function App() {
     return filteredResults
   }, [isOthersLabTemplate, labTemplateValues, selectedLabTemplate.id, selectedLabTemplate.tests])
 
-  const addPhotoAttachment = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith('image/'))
-    if (files.length === 0 || selectedPatientId === null) {
-      event.target.value = ''
-      return
-    }
+  // Writes `files` to the db as one batch. `targetGroup` null starts a brand-new bundle (the
+  // original behavior — a fresh uploadGroupId, default-title collision handling); a group
+  // appends to that bundle's existing uploadGroupId/title/category instead (issue #131 point 3).
+  const savePhotoFiles = async (files: File[], targetGroup: PhotoAttachmentGroup | null) => {
+    if (files.length === 0 || selectedPatientId === null) return
 
     setIsPhotoSaving(true)
     setNotice(files.length === 1 ? 'Saving photo...' : `Saving ${files.length} photos...`)
 
     try {
       const now = new Date()
+
+      if (targetGroup) {
+        const anchorEntry = targetGroup.entries[0]
+        const baseOrder = Math.max(0, ...targetGroup.entries.map((entry) => entry.selectionOrderInGroup ?? 0))
+
+        const preparedAttachments = await Promise.all(
+          files.map(async (file, index) => {
+            const compressed = await compressImageFile(file)
+            return {
+              patientId: selectedPatientId,
+              category: anchorEntry.category,
+              title: anchorEntry.title,
+              isDefaultTitle: anchorEntry.isDefaultTitle ?? false,
+              uploadGroupId: anchorEntry.uploadGroupId ?? targetGroup.groupId,
+              selectionOrderInGroup: baseOrder + index + 1,
+              mimeType: compressed.mimeType,
+              width: compressed.width,
+              height: compressed.height,
+              byteSize: compressed.blob.size,
+              imageBlob: compressed.blob,
+              createdAt: now.toISOString(),
+            }
+          }),
+        )
+
+        await db.photoAttachments.bulkAdd(preparedAttachments)
+        await touchPatientLastModified(selectedPatientId)
+        setNotice(files.length === 1 ? 'Photo added to bundle.' : `${files.length} photos added to bundle.`)
+        return
+      }
+
       const trimmedTitle = attachmentTitle.trim()
       const usingDefaultTitle = isAttachmentTitleDefault || trimmedTitle.length === 0
       const uploadGroupId = buildPhotoUploadGroupId()
@@ -3853,8 +3918,52 @@ function App() {
       setNotice('Unable to attach photos.')
     } finally {
       setIsPhotoSaving(false)
-      event.target.value = ''
     }
+  }
+
+  // Gallery picks land immediately (the OS file picker already lets the user multi-select), so
+  // there's no staging step — just save straight to `galleryAddTargetGroup` (or a new bundle).
+  const handleGallerySelection = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith('image/'))
+    event.target.value = ''
+    const targetGroup = galleryAddTargetGroup
+    setGalleryAddTargetGroup(null)
+    if (files.length === 0) return
+    await savePhotoFiles(files, targetGroup)
+  }
+
+  const openGalleryForNewBundle = () => {
+    setGalleryAddTargetGroup(null)
+    galleryPhotoInputRef.current?.click()
+  }
+
+  const openGalleryForGroup = (group: PhotoAttachmentGroup) => {
+    setGalleryAddTargetGroup(group)
+    galleryPhotoInputRef.current?.click()
+  }
+
+  const openCameraForNewBundle = () => {
+    setCameraSessionTargetGroup(null)
+    setCameraSessionKey((key) => key + 1)
+    setCameraCaptureDialogOpen(true)
+  }
+
+  const openCameraForGroup = (group: PhotoAttachmentGroup) => {
+    setCameraSessionTargetGroup(group)
+    setCameraSessionKey((key) => key + 1)
+    setCameraCaptureDialogOpen(true)
+  }
+
+  const closeCameraCaptureDialog = () => {
+    setCameraCaptureDialogOpen(false)
+    setCameraSessionTargetGroup(null)
+  }
+
+  const finishCameraCaptureSession = (files: File[]) => {
+    setCameraCaptureDialogOpen(false)
+    const targetGroup = cameraSessionTargetGroup
+    setCameraSessionTargetGroup(null)
+    void savePhotoFiles(files, targetGroup)
   }
 
   const deletePhotoAttachment = async (attachmentId?: number) => {
@@ -3869,18 +3978,7 @@ function App() {
   }
 
   const exportPhotoAttachment = useCallback((attachment: ReviewablePhotoAttachment) => {
-    const extensionByMimeType: Record<string, string> = {
-      'image/jpeg': 'jpg',
-      'image/png': 'png',
-      'image/webp': 'webp',
-      'image/heic': 'heic',
-      'image/heif': 'heif',
-    }
-
-    const inferredExtension = extensionByMimeType[attachment.mimeType] ?? 'bin'
-    const title = attachment.title.trim().length > 0 ? attachment.title.trim() : `photo-${attachment.id}`
-    const safeTitle = title.replace(/[^a-zA-Z0-9-_]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || `photo-${attachment.id}`
-    const fileName = `${safeTitle}.${inferredExtension}`
+    const fileName = buildPhotoFileName(attachment)
     const url = URL.createObjectURL(attachment.imageBlob)
     const anchor = document.createElement('a')
     anchor.href = url
@@ -3955,6 +4053,56 @@ function App() {
     }
     photosSelection.exit()
     setNotice(`Deleted ${ids.length} photo${ids.length === 1 ? '' : 's'}.`)
+  }
+
+  // Collapsed-view select is by bundle, not by individual photo (issue #131 point 2) — this is
+  // the "select all ids in this bundle, unless they're all already selected, then clear them"
+  // toggle that backs a bundle card's checkbox/click, mirroring toggleSelectAll's all-or-nothing
+  // behavior but scoped to just this one group instead of the whole selection.
+  const toggleGroupSelection = (group: PhotoAttachmentGroup) => {
+    const ids = group.entries.map((entry) => entry.id)
+    const allSelected = ids.length > 0 && ids.every((id) => photosSelection.isSelected(id))
+    ids.forEach((id) => {
+      const isSelected = photosSelection.isSelected(id)
+      if (allSelected ? isSelected : !isSelected) photosSelection.toggle(id)
+    })
+  }
+
+  // Mirrors sharePreviewText (Reports tab) using the Web Share API's file-sharing support
+  // instead of text (issue #131 point 4). `entries` is whatever's currently selected — individual
+  // photos in expanded view, or every photo in the selected bundle(s) in collapsed view.
+  const sharePhotos = async (entries: ReviewablePhotoAttachment[]) => {
+    if (entries.length === 0) return
+    if (!canUseWebShare) {
+      setNotice('Web Share is unavailable on this device/browser.')
+      return
+    }
+
+    const files = entries.map((entry, index) => {
+      const fileName = buildPhotoFileName(entry)
+      if (entries.length === 1) return new File([entry.imageBlob], fileName, { type: entry.mimeType })
+      const dotIndex = fileName.lastIndexOf('.')
+      const stem = dotIndex >= 0 ? fileName.slice(0, dotIndex) : fileName
+      const extension = dotIndex >= 0 ? fileName.slice(dotIndex) : ''
+      return new File([entry.imageBlob], `${stem}-${index + 1}${extension}`, { type: entry.mimeType })
+    })
+
+    if (typeof navigator.canShare === 'function' && !navigator.canShare({ files })) {
+      setNotice('This device cannot share these photos.')
+      return
+    }
+
+    try {
+      await navigator.share({
+        files,
+        title: entries.length === 1 ? (entries[0].title || 'Photo') : `${entries.length} photos`,
+      })
+      setNotice('Shared.')
+    } catch (error) {
+      const name = error instanceof DOMException ? error.name : ''
+      if (name === 'AbortError') return
+      setNotice('Unable to share photos.')
+    }
   }
 
   const hasUnsavedChanges = profileDirty || dailyDirty || vitalDirty || orderDirty
@@ -6014,9 +6162,9 @@ function App() {
             {view === 'checklist' ? (
               <Card className='bg-warm-ivory border-clay shadow-sm'>
                 <CardHeader className='pb-2'>
-                  <div className='flex items-center justify-between gap-2'>
+                  <div className='flex items-center justify-between gap-2 flex-wrap'>
                     <CardTitle className='text-base text-espresso'>Master Checklist</CardTitle>
-                    <div className='flex items-center gap-1.5'>
+                    <div className='flex items-center gap-1.5 flex-wrap justify-end'>
                       <Button type='button' variant='outline' size='sm' className='gap-1.5' onClick={() => setPatientSortDialogOpen(true)}>
                         <Layers className='h-3.5 w-3.5' aria-hidden='true' />
                         Sort
@@ -6129,7 +6277,7 @@ function App() {
                             <p className='text-xs text-clay'>
                               Included: {selectedCensusPatients.length} of {censusSelectablePatients.length} matching patients
                             </p>
-                            <div className='flex gap-2'>
+                            <div className='flex gap-2 flex-wrap justify-end'>
                               <Button type='button' size='sm' variant='outline' className='gap-1.5' onClick={() => setPatientSortDialogOpen(true)}>
                                 <Layers className='h-3.5 w-3.5' aria-hidden='true' />
                                 Sort
@@ -7939,27 +8087,18 @@ function App() {
                           </div>
                         </div>
                         <Input
-                          ref={cameraPhotoInputRef}
-                          type='file'
-                          accept='image/*'
-                          capture='environment'
-                          multiple
-                          className='hidden'
-                          onChange={(event) => void addPhotoAttachment(event)}
-                        />
-                        <Input
                           ref={galleryPhotoInputRef}
                           type='file'
                           accept='image/*'
                           multiple
                           className='hidden'
-                          onChange={(event) => void addPhotoAttachment(event)}
+                          onChange={(event) => void handleGallerySelection(event)}
                         />
                         <div className='flex gap-2 flex-wrap'>
-                          <Button size='sm' onClick={() => cameraPhotoInputRef.current?.click()} disabled={isPhotoSaving}>
+                          <Button size='sm' onClick={openCameraForNewBundle} disabled={isPhotoSaving}>
                             {isPhotoSaving ? 'Saving photos...' : 'Take photo(s)'}
                           </Button>
-                          <Button size='sm' variant='secondary' onClick={() => galleryPhotoInputRef.current?.click()} disabled={isPhotoSaving}>
+                          <Button size='sm' variant='secondary' onClick={openGalleryForNewBundle} disabled={isPhotoSaving}>
                             Choose existing photo(s)
                           </Button>
                         </div>
@@ -7996,12 +8135,12 @@ function App() {
                           </Button>
                         </div>
 
-                        {patientPhotoViewMode === 'expanded' && selectedPatientAttachmentGroups.length > 0 && !photosSelection.selectionMode ? (
+                        {selectedPatientAttachmentGroups.length > 0 && !photosSelection.selectionMode ? (
                           <div className='flex items-center justify-end gap-2'>
                             <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => photosSelection.setSelectionMode(true)}>Select</Button>
                           </div>
                         ) : null}
-                        {patientPhotoViewMode === 'expanded' && photosSelection.selectionMode ? (
+                        {photosSelection.selectionMode ? (
                           <div className='flex flex-wrap items-center gap-2 rounded-lg border border-action-primary/40 bg-action-primary/5 p-2.5'>
                             <p className='text-xs font-semibold text-espresso'>{photosSelection.selectedIds.size} selected</p>
                             <div className='flex flex-wrap items-center gap-1.5 ml-auto'>
@@ -8009,16 +8148,27 @@ function App() {
                                 size='sm'
                                 variant='outline'
                                 className='h-7 text-xs'
-                                onClick={() => {
-                                  const allPhotoIds = selectedPatientExpandedPhotoSections.flatMap((section) => section.entries.map((entry) => entry.id))
-                                  photosSelection.toggleSelectAll(allPhotoIds)
-                                }}
+                                onClick={() => photosSelection.toggleSelectAll(allVisiblePhotoIds)}
                               >
-                                {(() => {
-                                  const allPhotoIds = selectedPatientExpandedPhotoSections.flatMap((section) => section.entries.map((entry) => entry.id))
-                                  return allPhotoIds.length > 0 && allPhotoIds.every((id) => photosSelection.isSelected(id)) ? 'Deselect All' : 'Select All'
-                                })()}
+                                {allVisiblePhotoIds.length > 0 && allVisiblePhotoIds.every((id) => photosSelection.isSelected(id)) ? 'Deselect All' : 'Select All'}
                               </Button>
+                              {canUseWebShare ? (
+                                <Button
+                                  size='sm'
+                                  variant='outline'
+                                  className='h-7 text-xs gap-1'
+                                  disabled={photosSelection.selectedIds.size === 0}
+                                  onClick={() => {
+                                    const entries = selectedPatientAllAttachments.filter(
+                                      (entry): entry is ReviewablePhotoAttachment => entry.id !== undefined && photosSelection.isSelected(entry.id),
+                                    )
+                                    void sharePhotos(entries)
+                                  }}
+                                >
+                                  <Share2 className='h-3.5 w-3.5' aria-hidden='true' />
+                                  Share
+                                </Button>
+                              ) : null}
                               <Button
                                 size='sm'
                                 variant='destructive'
@@ -8046,12 +8196,24 @@ function App() {
                                 const createdAt = new Date(group.createdAt).toLocaleString()
                                 const photoCount = group.entries.length
 
+                                const groupSelected = group.entries.length > 0 && group.entries.every((entry) => photosSelection.isSelected(entry.id))
+
                                 return (
                                   <div key={group.groupId} className='rounded-md border border-clay/40 bg-white p-1.5 space-y-1'>
                                     <button
                                       type='button'
-                                      className='relative w-full overflow-hidden rounded border border-clay/30 bg-warm-ivory'
-                                      onClick={() => openPhotoById(coverPhoto.id)}
+                                      className={cn(
+                                        'relative w-full overflow-hidden rounded border bg-warm-ivory',
+                                        groupSelected ? 'border-action-primary border-2' : 'border-clay/30',
+                                      )}
+                                      onTouchStart={() => photosSelection.handleTouchStart(coverPhoto.id, () => toggleGroupSelection(group))}
+                                      onTouchEnd={photosSelection.handleTouchEnd}
+                                      onTouchMove={photosSelection.cancelLongPress}
+                                      onTouchCancel={photosSelection.cancelLongPress}
+                                      onClick={() => {
+                                        if (photosSelection.selectionMode) toggleGroupSelection(group)
+                                        else openPhotoById(coverPhoto.id)
+                                      }}
                                     >
                                       {previewUrl ? (
                                         <img
@@ -8066,6 +8228,18 @@ function App() {
                                       <span className='absolute right-1.5 top-1.5 rounded-full bg-espresso/85 px-1.5 py-0.5 text-[11px] font-semibold text-white'>
                                         {photoCount}
                                       </span>
+                                      {photosSelection.selectionMode ? (
+                                        <span className='absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-white/90 shadow'>
+                                          <input
+                                            type='checkbox'
+                                            className='h-4 w-4 accent-action-primary'
+                                            checked={groupSelected}
+                                            onChange={() => toggleGroupSelection(group)}
+                                            onClick={(event) => event.stopPropagation()}
+                                            aria-label={`Select bundle ${coverPhoto.title || formatPhotoCategory(coverPhoto.category)}`}
+                                          />
+                                        </span>
+                                      ) : null}
                                     </button>
                                     <p className='text-xs text-espresso line-clamp-2'>
                                       {coverPhoto.title || '(No title)'}
@@ -8075,13 +8249,43 @@ function App() {
                                     </p>
                                     <div className='flex justify-between items-center gap-2'>
                                       <p className='text-[11px] text-clay'>{formatBytes(group.totalByteSize)}</p>
-                                      <Button size='sm' variant='destructive' onClick={() => requestDeleteConfirmation({
-                                        title: 'Delete photo set?',
-                                        message: `Permanently remove ${group.entries.length === 1 ? 'this photo' : `these ${group.entries.length} photos`} from the app record?`,
-                                        onConfirm: () => deletePhotoAttachmentGroup(group),
-                                      })}>
-                                        Remove set
-                                      </Button>
+                                      {!photosSelection.selectionMode ? (
+                                        <div className='flex items-center gap-1'>
+                                          <Button
+                                            size='icon'
+                                            variant='outline'
+                                            className='h-7 w-7'
+                                            aria-label='Take more photos for this bundle'
+                                            disabled={isPhotoSaving}
+                                            onClick={() => openCameraForGroup(group)}
+                                          >
+                                            <Camera className='h-3.5 w-3.5' />
+                                          </Button>
+                                          <Button
+                                            size='icon'
+                                            variant='outline'
+                                            className='h-7 w-7'
+                                            aria-label='Add existing photos to this bundle'
+                                            disabled={isPhotoSaving}
+                                            onClick={() => openGalleryForGroup(group)}
+                                          >
+                                            <Upload className='h-3.5 w-3.5' />
+                                          </Button>
+                                          <Button
+                                            size='icon'
+                                            variant='destructive'
+                                            className='h-7 w-7'
+                                            aria-label='Delete photo bundle'
+                                            onClick={() => requestDeleteConfirmation({
+                                              title: 'Delete photo set?',
+                                              message: `Permanently remove ${group.entries.length === 1 ? 'this photo' : `these ${group.entries.length} photos`} from the app record?`,
+                                              onConfirm: () => deletePhotoAttachmentGroup(group),
+                                            })}
+                                          >
+                                            <Trash2 className='h-3.5 w-3.5' />
+                                          </Button>
+                                        </div>
+                                      ) : null}
                                     </div>
                                   </div>
                                 )
@@ -8579,6 +8783,14 @@ function App() {
           </DialogContent>
         </Dialog>
 
+        <CameraCaptureDialog
+          key={cameraSessionKey}
+          open={cameraCaptureDialogOpen}
+          subtitle={cameraSessionTargetGroup ? 'Adding to bundle' : 'New photo bundle'}
+          onClose={closeCameraCaptureDialog}
+          onDone={finishCameraCaptureSession}
+        />
+
         <Dialog open={selectedAttachmentCarouselEntry !== null} onOpenChange={(open) => { if (!open) setSelectedAttachmentId(null) }}>
           <DialogContent
             showCloseButton={false}
@@ -8628,18 +8840,40 @@ function App() {
                     <p className='flex-1 min-w-0 truncate text-center text-sm font-medium text-white'>
                       {`[${formatPhotoCategory(selectedAttachmentCarouselEntry.category)}] ${selectedAttachmentCarouselEntry.title || 'Untitled'}`}
                     </p>
-                    <button
-                      type='button'
-                      aria-label='Remove from app'
-                      className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
-                      onClick={() => requestDeleteConfirmation({
-                        title: 'Delete photo?',
-                        message: 'Permanently remove this photo from the app record?',
-                        onConfirm: () => deletePhotoAttachment(selectedAttachmentCarouselEntry.id),
-                      })}
-                    >
-                      <Trash2 className='h-4.5 w-4.5' />
-                    </button>
+                    <div className='flex items-center gap-1.5 shrink-0'>
+                      {currentViewerGroup ? (
+                        <>
+                          <button
+                            type='button'
+                            aria-label='Take more photos for this bundle'
+                            className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                            onClick={() => openCameraForGroup(currentViewerGroup)}
+                          >
+                            <Camera className='h-4.5 w-4.5' />
+                          </button>
+                          <button
+                            type='button'
+                            aria-label='Add existing photos to this bundle'
+                            className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                            onClick={() => openGalleryForGroup(currentViewerGroup)}
+                          >
+                            <Upload className='h-4.5 w-4.5' />
+                          </button>
+                        </>
+                      ) : null}
+                      <button
+                        type='button'
+                        aria-label='Remove from app'
+                        className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                        onClick={() => requestDeleteConfirmation({
+                          title: 'Delete photo?',
+                          message: 'Permanently remove this photo from the app record?',
+                          onConfirm: () => deletePhotoAttachment(selectedAttachmentCarouselEntry.id),
+                        })}
+                      >
+                        <Trash2 className='h-4.5 w-4.5' />
+                      </button>
+                    </div>
                   </div>
                 ) : null}
 

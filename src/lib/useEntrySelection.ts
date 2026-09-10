@@ -11,7 +11,9 @@ export type EntrySelectionController = {
    * selection (a standard "select all" checkbox toggle). Undefined entries are ignored. */
   toggleSelectAll: (ids: (number | undefined)[]) => void
   exit: () => void
-  handleTouchStart: (id: number | undefined) => void
+  /** `onSelect`, if given, replaces the default `toggle(id)` once long-press fires — lets a
+   * caller select a whole group of ids (e.g. a photo bundle) keyed off one representative id. */
+  handleTouchStart: (id: number | undefined, onSelect?: () => void) => void
   handleTouchEnd: (event: TouchEvent<HTMLElement>) => void
   cancelLongPress: () => void
 }
@@ -61,13 +63,14 @@ export function useEntrySelection(): EntrySelectionController {
     }
   }
 
-  const handleTouchStart = (id: number | undefined) => {
+  const handleTouchStart = (id: number | undefined, onSelect?: () => void) => {
     if (id === undefined) return
     longPressFiredRef.current = false
     longPressTimerRef.current = window.setTimeout(() => {
       longPressFiredRef.current = true
       setSelectionMode(true)
-      toggle(id)
+      if (onSelect) onSelect()
+      else toggle(id)
     }, 500)
   }
 
