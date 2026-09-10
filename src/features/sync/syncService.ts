@@ -1,10 +1,13 @@
 import { db } from '@/db'
 import type {
+  CustomAction,
+  CustomView,
   DailyUpdate,
   LabEntry,
   MedicationEntry,
   OrderEntry,
   Patient,
+  ReportTemplate,
   TagDefinition,
   TagEvent,
   TagGroupDefinition,
@@ -36,6 +39,9 @@ type SyncPayload = {
   tagGroups?: TagGroupDefinition[]
   tagDefinitions?: TagDefinition[]
   tagEvents?: TagEvent[]
+  reportTemplates?: ReportTemplate[]
+  customViews?: CustomView[]
+  customActions?: CustomAction[]
 }
 
 type RemoteDescription = {
@@ -194,13 +200,16 @@ const parseDescription = (descriptionRaw: string): RemoteDescription | null => {
 const toIsoNow = (): string => new Date().toISOString()
 
 const getLatestLocalChangeAt = async (): Promise<string | null> => {
-  const [patients, dailyUpdates, vitals, medications, labs, orders] = await Promise.all([
+  const [patients, dailyUpdates, vitals, medications, labs, orders, reportTemplates, customViews, customActions] = await Promise.all([
     db.patients.toArray(),
     db.dailyUpdates.toArray(),
     db.vitals.toArray(),
     db.medications.toArray(),
     db.labs.toArray(),
     db.orders.toArray(),
+    db.reportTemplates.toArray(),
+    db.customViews.toArray(),
+    db.customActions.toArray(),
   ])
 
   let latestTimestamp = 0
@@ -247,11 +256,48 @@ const getLatestLocalChangeAt = async (): Promise<string | null> => {
     }
   }
 
+  // Only catches a template/view/action being created or deleted, not an edit to an existing one
+  // (none of these three carry their own "last edited" timestamp — createdAt never changes after
+  // insert) — same limitation the existing tagGroups/tagDefinitions/tagEvents sync already has.
+  for (const template of reportTemplates) {
+    const parsed = Date.parse(template.createdAt)
+    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
+      latestTimestamp = parsed
+    }
+  }
+
+  for (const view of customViews) {
+    const parsed = Date.parse(view.createdAt)
+    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
+      latestTimestamp = parsed
+    }
+  }
+
+  for (const action of customActions) {
+    const parsed = Date.parse(action.createdAt)
+    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
+      latestTimestamp = parsed
+    }
+  }
+
   return latestTimestamp > 0 ? new Date(latestTimestamp).toISOString() : null
 }
 
 const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
-  const [patients, dailyUpdates, vitals, medications, labs, orders, tagGroups, tagDefinitions, tagEvents] = await Promise.all([
+  const [
+    patients,
+    dailyUpdates,
+    vitals,
+    medications,
+    labs,
+    orders,
+    tagGroups,
+    tagDefinitions,
+    tagEvents,
+    reportTemplates,
+    customViews,
+    customActions,
+  ] = await Promise.all([
     db.patients.toArray(),
     db.dailyUpdates.toArray(),
     db.vitals.toArray(),
@@ -261,6 +307,9 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     db.tagGroups.toArray(),
     db.tagDefinitions.toArray(),
     db.tagEvents.toArray(),
+    db.reportTemplates.toArray(),
+    db.customViews.toArray(),
+    db.customActions.toArray(),
   ])
 
   return {
@@ -276,6 +325,9 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     tagGroups,
     tagDefinitions,
     tagEvents,
+    reportTemplates,
+    customViews,
+    customActions,
   }
 }
 
@@ -305,6 +357,9 @@ const isSyncPayload = (value: unknown): value is SyncPayload => {
     && (candidate.tagGroups === undefined || Array.isArray(candidate.tagGroups))
     && (candidate.tagDefinitions === undefined || Array.isArray(candidate.tagDefinitions))
     && (candidate.tagEvents === undefined || Array.isArray(candidate.tagEvents))
+    && (candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates))
+    && (candidate.customViews === undefined || Array.isArray(candidate.customViews))
+    && (candidate.customActions === undefined || Array.isArray(candidate.customActions))
   )
 }
 
@@ -326,6 +381,15 @@ const getMissingSecondaryTables = (payload: SyncPayload): string[] => {
   if (payload.tagGroups === undefined || payload.tagDefinitions === undefined) {
     missingTables.push('tags')
   }
+  if (payload.reportTemplates === undefined) {
+    missingTables.push('report templates')
+  }
+  if (payload.customViews === undefined) {
+    missingTables.push('custom views')
+  }
+  if (payload.customActions === undefined) {
+    missingTables.push('custom actions')
+  }
 
   return missingTables
 }
@@ -341,7 +405,20 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
 
   await db.transaction(
     'rw',
-    [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents],
+    [
+      db.patients,
+      db.dailyUpdates,
+      db.vitals,
+      db.medications,
+      db.labs,
+      db.orders,
+      db.tagGroups,
+      db.tagDefinitions,
+      db.tagEvents,
+      db.reportTemplates,
+      db.customViews,
+      db.customActions,
+    ],
     async () => {
     await db.patients.clear()
     await db.dailyUpdates.clear()
@@ -400,6 +477,27 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       await db.tagEvents.clear()
       if (payload.tagEvents.length > 0) {
         await db.tagEvents.bulkPut(payload.tagEvents)
+      }
+    }
+
+    if (payload.reportTemplates !== undefined) {
+      await db.reportTemplates.clear()
+      if (payload.reportTemplates.length > 0) {
+        await db.reportTemplates.bulkPut(payload.reportTemplates)
+      }
+    }
+
+    if (payload.customViews !== undefined) {
+      await db.customViews.clear()
+      if (payload.customViews.length > 0) {
+        await db.customViews.bulkPut(payload.customViews)
+      }
+    }
+
+    if (payload.customActions !== undefined) {
+      await db.customActions.clear()
+      if (payload.customActions.length > 0) {
+        await db.customActions.bulkPut(payload.customActions)
       }
     }
   })

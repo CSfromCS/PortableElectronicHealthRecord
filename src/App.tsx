@@ -8855,7 +8855,7 @@ function App() {
                     ['Sync during rounds', 'Tap Sync from the footer (phone) or header (desktop) whenever you finish key edits or before switching devices. Button states: Synced, ↑ Push ready, ↓ Updates available, ⚠ Conflict, or Syncing.'],
                     ['If conflict appears', 'A version picker opens whenever remote data is newer and this device also changed since the last sync. Choose a room version or keep local. Choosing an older version restores it and uploads it as the room’s latest snapshot.'],
                     ['If sync cannot connect', 'PUHRR stops without uploading when room lookup or conflict checks fail. Check the connection and retry; a failed check is never treated as an empty room.'],
-                    ['Keep backup safety', 'Sync includes profile, Problems, vitals, medications, labs, and orders. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
+                    ['Keep backup safety', 'Sync includes profile, Problems, vitals, medications, labs, orders, tags, report templates, custom views, and custom actions. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
                     ['Keep app versions aligned', 'The Problems data format requires the updated app on every linked device. If sync reports an unsupported room version, update PUHRR on both devices before trying again.'],
                   ] as [string, string][]).map(([title, detail], i) => (
                     <li key={i} className='flex gap-2.5 items-start'>
