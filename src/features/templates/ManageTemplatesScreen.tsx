@@ -1177,7 +1177,15 @@ const FormatPatternEditor = ({
         container.appendChild(document.createElement('br'))
       } else {
         const instance = initialVariables[part.id]
-        if (instance) container.appendChild(buildChipElement(part.id, instance))
+        if (instance) {
+          // A leading empty text node gives the caret somewhere to land immediately before the
+          // chip even when nothing else precedes it (e.g. right after a <br>, i.e. the chip is
+          // first on its line) — without it, that position isn't reliably clickable or keyboard-
+          // reachable, and Backspace there falls through to the browser's native handling, which
+          // can end up deleting the chip along with the line break instead of just the break.
+          container.appendChild(document.createTextNode(''))
+          container.appendChild(buildChipElement(part.id, instance))
+        }
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately runs once per mount only; see comment above
@@ -1232,10 +1240,9 @@ const FormatPatternEditor = ({
     onChange(patternText, variables)
   }
 
-  /** Whether the caret sits immediately before/after a chip — browsers are inconsistent about
-   * deleting an atomic contentEditable=false node with a single Backspace/Delete press, so this
-   * is checked explicitly rather than relying on native contentEditable delete behavior. */
-  const getAdjacentChip = (direction: 'before' | 'after'): HTMLElement | null => {
+  /** The sibling node immediately before/after the caret, however it's currently anchored (inside
+   * a text node, or directly in the container/a block element between two other nodes). */
+  const getAdjacentNode = (direction: 'before' | 'after'): Node | null => {
     const container = containerRef.current
     const selection = window.getSelection()
     if (!container || !selection || selection.rangeCount === 0 || !selection.isCollapsed) return null
@@ -1243,15 +1250,30 @@ const FormatPatternEditor = ({
     if (!container.contains(startContainer)) return null
 
     if (startContainer.nodeType === Node.TEXT_NODE) {
-      const sibling = direction === 'before'
+      return direction === 'before'
         ? (startOffset === 0 ? startContainer.previousSibling : null)
         : (startOffset === (startContainer.textContent?.length ?? 0) ? startContainer.nextSibling : null)
-      return sibling instanceof HTMLElement && sibling.dataset.variableId ? sibling : null
     }
-    const node = direction === 'before'
-      ? startContainer.childNodes[startOffset - 1]
-      : startContainer.childNodes[startOffset]
+    return direction === 'before'
+      ? startContainer.childNodes[startOffset - 1] ?? null
+      : startContainer.childNodes[startOffset] ?? null
+  }
+
+  /** Whether the caret sits immediately before/after a chip — browsers are inconsistent about
+   * deleting an atomic contentEditable=false node with a single Backspace/Delete press, so this
+   * is checked explicitly rather than relying on native contentEditable delete behavior. */
+  const getAdjacentChip = (direction: 'before' | 'after'): HTMLElement | null => {
+    const node = getAdjacentNode(direction)
     return node instanceof HTMLElement && node.dataset.variableId ? node : null
+  }
+
+  /** Same idea as `getAdjacentChip`, for a <br> — Backspace/Delete right next to a chip's leading
+   * spacer (see the mount effect above) would otherwise fall through to the browser's native
+   * handling, which can delete the line break AND the adjacent chip in one go instead of just the
+   * break. Checked only once `getAdjacentChip` has ruled out a chip being the adjacent node. */
+  const getAdjacentLineBreak = (direction: 'before' | 'after'): HTMLElement | null => {
+    const node = getAdjacentNode(direction)
+    return node instanceof HTMLElement && node.tagName === 'BR' ? node : null
   }
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1262,10 +1284,18 @@ const FormatPatternEditor = ({
       return
     }
     if (event.key === 'Backspace' || event.key === 'Delete') {
-      const chip = getAdjacentChip(event.key === 'Backspace' ? 'before' : 'after')
+      const adjacentDirection = event.key === 'Backspace' ? 'before' : 'after'
+      const chip = getAdjacentChip(adjacentDirection)
       if (chip) {
         event.preventDefault()
         chip.remove()
+        emitChange()
+        return
+      }
+      const lineBreak = getAdjacentLineBreak(adjacentDirection)
+      if (lineBreak) {
+        event.preventDefault()
+        lineBreak.remove()
         emitChange()
       }
     }
@@ -1341,6 +1371,9 @@ const FormatPatternEditor = ({
     }
     range.deleteContents()
     range.insertNode(chip)
+    // Leading spacer mirrors the one in the mount effect above — same reasoning: gives the caret
+    // somewhere to land immediately before the chip even if it ends up first on its line.
+    chip.parentNode?.insertBefore(document.createTextNode(''), chip)
 
     const spacer = document.createTextNode('')
     chip.parentNode?.insertBefore(spacer, chip.nextSibling)
