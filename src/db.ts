@@ -2,10 +2,17 @@ import Dexie, { type EntityTable } from 'dexie'
 import { normalizeDailyUpdate } from './features/problems/problemUtils'
 import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
-import { seedDefaultCustomActions } from './features/customActions/customActionConstants'
+import { seedDefaultCustomActions, seedFirstInstallCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
-import { DEFAULT_TEMPLATE_EXTRAS, buildDefaultDateTimeFormats, buildDefaultReportTemplates, buildLockedLabsTemplate } from './features/templates/templateDefaults'
+import {
+  DEFAULT_TEMPLATE_EXTRAS,
+  buildDefaultDateTimeFormats,
+  buildDefaultReportTemplates,
+  buildFirstInstallReportTemplates,
+  buildLockedLabsTemplate,
+} from './features/templates/templateDefaults'
 import { buildDefaultBlockVariableConfig } from './features/templates/templateEngine'
+import { buildDefaultCustomViews } from './features/filters/customViewDefaults'
 import type {
   BlockVariableConfig,
   BlockVariableId,
@@ -178,11 +185,17 @@ db.on('populate', async () => {
     (group) => db.tagGroups.add(group) as Promise<number>,
     (tag) => db.tagDefinitions.add(tag) as Promise<number>,
   )
-  await seedDefaultCustomActions(tagIdByName, (action) => db.customActions.add(action) as Promise<number>)
   const now = new Date().toISOString()
-  await db.reportTemplates.bulkAdd(buildDefaultReportTemplates(now))
-  await db.reportTemplates.add(buildLockedLabsTemplate(now, 2))
+  const firstInstallTemplates = buildFirstInstallReportTemplates(now, tagIdByName)
+  const templateIds = await db.reportTemplates.bulkAdd(firstInstallTemplates, { allKeys: true })
+  await db.reportTemplates.add(buildLockedLabsTemplate(now, 3))
+  // "End shift" (seeded below) runs the Census Summary template automatically — needs the id
+  // Dexie just assigned it, which is only known after the insert above.
+  const censusSummaryTemplateIndex = firstInstallTemplates.findIndex((template) => template.name === 'Census summary CD vs PD (past 12 hours)')
+  const censusSummaryTemplateId = censusSummaryTemplateIndex === -1 ? undefined : templateIds[censusSummaryTemplateIndex]
+  await seedFirstInstallCustomActions(tagIdByName, censusSummaryTemplateId, (action) => db.customActions.add(action) as Promise<number>)
   await db.dateTimeFormats.bulkAdd(buildDefaultDateTimeFormats(now))
+  await db.customViews.bulkAdd(buildDefaultCustomViews(now, tagIdByName))
 })
 
 db.version(5).stores({
