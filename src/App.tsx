@@ -5470,17 +5470,15 @@ function App() {
     // outside the patients-scoped transaction below — Dexie transactions can only touch the
     // tables they declare, and get-or-create may need to write to either of those two.
     const serviceGroupId = await ensureServiceGroupId(tagGroups ?? [])
-    const mainServiceTag = await getOrCreateServiceTag('Internal Medicine', serviceTags, serviceGroupId)
-    const referralServiceTag = await getOrCreateServiceTag('Pulmonology', serviceTags, serviceGroupId)
+    const mainServiceTag = await getOrCreateServiceTag('Pulmonology', serviceTags, serviceGroupId)
+    const referralServiceTagEndo = await getOrCreateServiceTag('Endocrinology', serviceTags, serviceGroupId)
+    const referralServiceTagCV = await getOrCreateServiceTag('Cardiovascular', serviceTags, serviceGroupId)
     const mainServiceTagId = mainServiceTag.id
-    const referralServiceTagId = referralServiceTag.id
-    // "Main" (Relationship) and "EHR" (Chart Type) are unambiguous, always-seeded defaults —
-    // unlike Category's CD/PD, which are institution-specific enough that guessing wrong here
-    // would just be confusing rather than a realistic demo.
-    const generalTagIds = [
-      (tagDefinitions ?? []).find((tag) => tag.name === 'Main')?.id,
-      (tagDefinitions ?? []).find((tag) => tag.name === 'EHR')?.id,
-    ].filter((id): id is number => id !== undefined)
+    const referralServiceTagIds = [referralServiceTagEndo.id, referralServiceTagCV.id]
+      .filter((id): id is number => id !== undefined)
+    const generalTagIds = ['CD', 'Main', 'EHR']
+      .map((name) => (tagDefinitions ?? []).find((tag) => tag.name === name)?.id)
+      .filter((id): id is number => id !== undefined)
 
     const [cxrFrontBlob, cxrLateralBlob] = await Promise.all([
       buildSamplePhotoBlob('Chest X-ray — PA view'),
@@ -5492,8 +5490,8 @@ function App() {
       samplePatientId = await db.patients.add({
         lastModified: now,
         createdAt: now,
-        roomNumber: '512A',
-        ward: 'Medicine Ward B',
+        roomNumber: '212A',
+        ward: 'Med Ward',
         lastName: 'DELA CRUZ',
         firstName: 'Juan',
         middleName: 'Santos',
@@ -5504,16 +5502,17 @@ function App() {
         referralDate: today,
         referralTime: '10:30',
         mainServiceTagIds: mainServiceTagId !== undefined ? [mainServiceTagId] : [],
-        referralServiceTagIds: referralServiceTagId !== undefined ? [referralServiceTagId] : [],
+        referralServiceTagIds,
         attendingPhysician: 'Dr. Maria C. Garcia',
         admissionDiagnosisUnassigned: '',
         admissionDiagnosisByService: {
-          ...(mainServiceTagId !== undefined ? { [mainServiceTagId]: 'Community-acquired pneumonia (RLL), improving' } : {}),
-          ...(referralServiceTagId !== undefined ? { [referralServiceTagId]: 'CAP (RLL) — co-management; evaluate for underlying structural lung disease given ex-smoker history' } : {}),
+          ...(mainServiceTagId !== undefined ? { [mainServiceTagId]: 'CAP-MR' } : {}),
+          ...(referralServiceTagEndo.id !== undefined ? { [referralServiceTagEndo.id]: 'T2DM, well controlled (HbA1c 5.5%)' } : {}),
+          ...(referralServiceTagCV.id !== undefined ? { [referralServiceTagCV.id]: 'HTN st II, controlled' } : {}),
         },
         dischargeDiagnosisUnassigned: '',
         dischargeDiagnosisByService: {},
-        clinicalSummary: 'CAP improving on empiric antibiotics with stable hemodynamics and improving respiratory symptoms. Continue monitoring trends and prepare for oral step-down when afebrile and clinically stable.',
+        clinicalSummary: 'Typical fever, cough, dyspnea for 5 days + crackles',
         database: [
           'Chief Complaint:\n5 days cough, fever, and dyspnea',
           'History of Present Illness:\n57-year-old male with productive cough and intermittent fever for 5 days, associated with mild dyspnea on exertion. No chest pain. Symptoms improved after IV antibiotics.',
@@ -5628,8 +5627,8 @@ function App() {
         assessment: 'CAP, clinically improving with stable cardiorespiratory parameters.',
         plans: 'Continue current antibiotics today then reassess de-escalation.\nRepeat CBC/electrolytes tomorrow.\nCoordinate discharge planning once clinically stable.',
         checklist: [
-          { text: 'Repeat CBC/electrolytes tomorrow morning.', completed: false },
-          { text: 'Chest CT with contrast', completed: true },
+          { text: 'Follow up sputum GS/CS', completed: false, notes: 'Specimen collected this morning' },
+          { text: 'CXR', completed: true },
         ],
         lastUpdated: now,
       })
@@ -5755,7 +5754,7 @@ function App() {
           patientId: samplePatientId,
           orderDate: today,
           orderTime: '09:00',
-          service: 'Internal Medicine',
+          service: 'Pulmo',
           orderText: 'Repeat chest x-ray PA/Lateral on hospital day 3',
           note: 'Assess interval resolution of infiltrates',
           status: 'active',
@@ -5765,7 +5764,7 @@ function App() {
           patientId: samplePatientId,
           orderDate: today,
           orderTime: '11:00',
-          service: 'Internal Medicine',
+          service: 'CV',
           orderText: 'CBC and electrolytes tomorrow 6 AM',
           note: 'Monitor response to treatment',
           status: 'active',
