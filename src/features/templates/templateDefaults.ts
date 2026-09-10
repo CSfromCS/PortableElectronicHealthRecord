@@ -175,6 +175,8 @@ export const buildFirstInstallReportTemplates = (now: string, tagIdByName: Map<s
       sortOrder: 4,
       createdAt: now,
       ...DEFAULT_TEMPLATE_EXTRAS,
+      patientSeparator: 'custom',
+      customPatientSeparator: ', ',
       groupingEnabled: true,
       groupSelectionMode: 'automatic',
       groupTagIds: [tagIdByName.get('CD'), tagIdByName.get('PD')].filter((id): id is number => id !== undefined),

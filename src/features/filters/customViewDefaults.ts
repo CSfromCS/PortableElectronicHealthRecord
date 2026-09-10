@@ -32,7 +32,7 @@ export const buildDefaultCustomViews = (now: string, tagIdByName: Map<string, nu
   return [
     view('CD main', [cdTagId, mainTagId], 'AND', 0),
     view('PD Main', [pdTagId, mainTagId], 'AND', 1),
-    view('CD referral', [cdTagId, referralTagId], 'OR', 2),
-    view('PD referral', [pdTagId, referralTagId], 'OR', 3),
+    view('CD referral', [cdTagId, referralTagId], 'AND', 2),
+    view('PD referral', [pdTagId, referralTagId], 'AND', 3),
   ]
 }
