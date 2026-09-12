@@ -221,6 +221,8 @@ export const appendChecklistItemsForPatientDate = async (
     patientId,
     date,
     problems: toPendingProblemBlocks(latestPriorUpdate?.problems),
+    subjective: '',
+    objective: '',
     assessment: '',
     plans: '',
     checklist,

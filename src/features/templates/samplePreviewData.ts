@@ -88,6 +88,8 @@ const SAMPLE_DAILY_UPDATES: DailyUpdate[] = [
     patientId: -999,
     date: TODAY_ISO,
     problems: [{ id: createVariableId(), title: 'Sample problem', notes: 'Sample notes for preview', completed: false }],
+    subjective: 'Sample subjective text for preview',
+    objective: 'Sample objective text for preview',
     assessment: '',
     plans: '',
     checklist: [{ text: 'Sample checklist item', completed: false }],

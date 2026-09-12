@@ -17,6 +17,7 @@ import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { cn } from '@/lib/utils'
 import type {
   AutomaticGroupLabelOverride,
@@ -209,7 +210,7 @@ const JoinModePicker = ({
           onChange={(event) => onCustomChange(event.target.value)}
           placeholder={'e.g. ";" or a line break plus more text'}
         />
-        <p className='text-xs text-clay'>Press Enter here for an actual line break between entries.</p>
+        <FieldTip>Press Enter here for an actual line break between entries.</FieldTip>
       </>
     ) : null}
   </div>
@@ -473,11 +474,11 @@ const GroupFormatCard = ({
             />
             <span className='text-sm font-semibold text-espresso'>Enable tag combo grouping for this template</span>
           </label>
-          <p className='text-xs text-clay'>
+          <FieldTip>
             Buckets patients by tag combo before the Main Template renders — each group can show a label, a
             patient tally, the matching patients themselves, and new-admission/referral/discharge/sign-out/expired
             tallies and lists.
-          </p>
+          </FieldTip>
         </div>
 
         {form.groupingEnabled ? (
@@ -490,7 +491,7 @@ const GroupFormatCard = ({
               value={form.groupLookbackHours}
               onChange={(event) => onChange({ groupLookbackHours: Math.max(1, Number.parseInt(event.target.value, 10) || 1) })}
             />
-            <p className='text-xs text-clay'>Measured back from the moment the report is generated, not frozen at save time — shared by New Admissions/Referrals/Discharged/Signed Out/Expired.</p>
+            <FieldTip>Measured back from the moment the report is generated, not frozen at save time — shared by New Admissions/Referrals/Discharged/Signed Out/Expired.</FieldTip>
           </div>
 
           <button
@@ -517,7 +518,7 @@ const GroupFormatCard = ({
                   <div className='space-y-1.5'>
                     <Label className='text-xs'>Which tags group patients</Label>
                     <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(form.groupTagIds)} onToggle={toggleAutomaticTag} collapsible />
-                    <p className='text-xs text-clay'>Each selected tag becomes its own output group, covering patients currently carrying that tag.</p>
+                    <FieldTip>Each selected tag becomes its own output group, covering patients currently carrying that tag.</FieldTip>
                   </div>
 
                   {representedGroupIds.size > 1 ? (
@@ -537,11 +538,11 @@ const GroupFormatCard = ({
                           </Button>
                         ))}
                       </div>
-                      <p className='text-xs text-clay'>
+                      <FieldTip>
                         {form.groupCombineMode === 'OR'
                           ? 'One group per selected tag, regardless of which Tag Group it came from.'
                           : 'One group per combination of one tag from each represented Tag Group — a patient only counts in a combo group if they carry every tag in it.'}
-                      </p>
+                      </FieldTip>
                     </div>
                   ) : null}
                 </div>
@@ -635,11 +636,11 @@ const GroupFormatCard = ({
                 onChange({ groupPatternText, groupVariables })
               }}
             />
-            <p className='text-xs text-clay'>
+            <FieldTip>
               "Patient Info" and each status's "(list)" field render their matching patients through the Patient
               Template, joined the same way as "Between patients" — a list resolves to nothing when empty, so a
               required separator placed right next to one can vanish along with it.
-            </p>
+            </FieldTip>
           </div>
 
           <JoinModePicker
@@ -812,11 +813,11 @@ const BlockVariableConfigDialog = ({
                       value={config.entryCount}
                       onChange={(event) => setConfig((previous) => ({ ...previous, entryCount: Math.max(1, Number.parseInt(event.target.value, 10) || 1) }))}
                     />
-                    <p className='text-xs text-clay'>
+                    <FieldTip>
                       {isGrouped
                         ? 'Set to 1 for just the single most recent day.'
                         : 'Set to 1 for just the single most recent entry. Setting this to 2 for Labs keeps the existing side-by-side comparison formatting.'}
-                    </p>
+                    </FieldTip>
                   </div>
                 ) : null}
 
@@ -889,12 +890,12 @@ const BlockVariableConfigDialog = ({
                             />
                           </div>
                         </div>
-                        <p className='text-xs text-clay'>
+                        <FieldTip>
                           A start date and time are required. Leaving "Until" blank fills it in with the exact date and time you save this — so the template keeps showing the same fixed window every time it's used later, rather than always meaning "up to whenever it happens to run."
-                        </p>
+                        </FieldTip>
                       </div>
                     ) : null}
-                    <p className='text-xs text-clay'>A fixed date range only produces useful output on dates within it — prefer a relative option for a template you'll reuse.</p>
+                    <FieldTip>A fixed date range only produces useful output on dates within it — prefer a relative option for a template you'll reuse.</FieldTip>
                   </div>
                 ) : null}
               </div>
@@ -931,16 +932,37 @@ const BlockVariableConfigDialog = ({
                 ) : null}
 
                 {variableId === 'problems' ? (
-                  <div className='grid grid-cols-2 gap-2'>
-                    <div className='space-y-1'>
-                      <Label className='text-xs'>Resolved glyph</Label>
-                      <Input value={config.resolvedGlyph} onChange={(event) => setConfig((previous) => ({ ...previous, resolvedGlyph: event.target.value }))} />
+                  <>
+                    <div className='grid grid-cols-2 gap-2'>
+                      <div className='space-y-1'>
+                        <Label className='text-xs'>Resolved glyph</Label>
+                        <Input value={config.resolvedGlyph} onChange={(event) => setConfig((previous) => ({ ...previous, resolvedGlyph: event.target.value }))} />
+                      </div>
+                      <div className='space-y-1'>
+                        <Label className='text-xs'>Unresolved glyph</Label>
+                        <Input value={config.unresolvedGlyph} onChange={(event) => setConfig((previous) => ({ ...previous, unresolvedGlyph: event.target.value }))} />
+                      </div>
                     </div>
-                    <div className='space-y-1'>
-                      <Label className='text-xs'>Unresolved glyph</Label>
-                      <Input value={config.unresolvedGlyph} onChange={(event) => setConfig((previous) => ({ ...previous, unresolvedGlyph: event.target.value }))} />
+                    <div className='space-y-1.5'>
+                      <Label className='text-xs'>Include below each day's problems</Label>
+                      {([
+                        ['includeSubjective', 'Subjective'],
+                        ['includeObjective', 'Objective'],
+                        ['includeAssessment', 'Assessment'],
+                        ['includePlans', 'Plan'],
+                      ] as const).map(([field, label]) => (
+                        <label key={field} className='flex items-center gap-2.5 cursor-pointer'>
+                          <input
+                            type='checkbox'
+                            className='h-4 w-4 accent-action-primary'
+                            checked={config[field]}
+                            onChange={(event) => setConfig((previous) => ({ ...previous, [field]: event.target.checked }))}
+                          />
+                          <span className='text-sm text-espresso'>{label}</span>
+                        </label>
+                      ))}
                     </div>
-                  </div>
+                  </>
                 ) : null}
 
                 <JoinModePicker
@@ -1013,9 +1035,9 @@ const BlockVariableConfigDialog = ({
               </>
             ) : (
               <div className='border-t border-clay/15 pt-3 space-y-3'>
-                <p className='text-xs text-clay'>
+                <FieldTip>
                   Labs' comparison-mode formatting is generated automatically and isn't field-composable — but how the date shows, and how results are separated, still are.
-                </p>
+                </FieldTip>
                 <div className='space-y-1'>
                   <Label className='text-xs'>Date display</Label>
                   <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
@@ -1184,7 +1206,7 @@ const TagsVariableConfigDialog = ({
                 <Button type='button' size='sm' variant={config.emojiRendering === 'emoji' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setConfig((previous) => ({ ...previous, emojiRendering: 'emoji' }))}>Emoji glyph</Button>
                 <Button type='button' size='sm' variant={config.emojiRendering === 'name' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setConfig((previous) => ({ ...previous, emojiRendering: 'name' }))}>Plain name</Button>
               </div>
-              <p className='text-xs text-clay'>Text-with-Color tags always render as their plain name.</p>
+              <FieldTip>Text-with-Color tags always render as their plain name.</FieldTip>
             </div>
           </div>
         </ScrollArea>
@@ -1756,11 +1778,11 @@ const FormatPatternEditor = ({
           <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Add Variable
         </Button>
       </div>
-      <p className='text-xs text-clay'>
+      <FieldTip>
         {variableScope === 'currentDateTimeOnly'
           ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time — this prints once per run, so no patient-specific variable is available here.'
           : 'Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags block — or a date/time variable — to change its settings.'}
-      </p>
+      </FieldTip>
 
       <VariablePickerDialog
         open={pickerOpen}
@@ -2175,9 +2197,9 @@ export const ManageTemplatesScreen = ({
         {editingTemplateId === null ? (
           <>
             <div className='flex items-center justify-between gap-2 flex-wrap'>
-              <p className='text-xs text-clay max-w-[55%]'>
+              <FieldTip className='max-w-[55%]'>
                 Templates control which fields appear in a report and in what arrangement — replacing the old fixed export formats.
-              </p>
+              </FieldTip>
               <div className='flex gap-2 flex-wrap justify-end'>
                 <Button size='sm' variant='outline' onClick={onManageDateTimeFormats}>Date & Time Formats</Button>
                 <Button size='sm' onClick={() => setEditingTemplateId('new')}>

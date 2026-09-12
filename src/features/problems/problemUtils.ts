@@ -85,6 +85,8 @@ export const normalizeDailyUpdate = (value: unknown): DailyUpdate => {
     patientId,
     date,
     problems,
+    subjective: typeof candidate.subjective === 'string' ? candidate.subjective : '',
+    objective: typeof candidate.objective === 'string' ? candidate.objective : '',
     assessment: typeof candidate.assessment === 'string' ? candidate.assessment : '',
     plans: typeof candidate.plans === 'string' ? candidate.plans : '',
     checklist,

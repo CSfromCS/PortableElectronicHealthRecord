@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { AUTOMATION_ROLE_FAMILY_LABELS } from './tagConstants'
 import type { TagAmbiguity } from './tagUtils'
 
@@ -33,7 +34,7 @@ export const AmbiguityBadge = ({ ambiguity }: { ambiguity: TagAmbiguity }) => {
               <div>
                 <p className='font-semibold'>Multiple Terminal tags applied:</p>
                 <p className='text-clay'>{ambiguity.terminalConflicts.map((tag) => tag.name).join(', ')}</p>
-                <p className='text-xs text-clay mt-1'>The patient is excluded from active views regardless — this only flags which terminal state applies.</p>
+                <FieldTip className='mt-1'>The patient is excluded from active views regardless — this only flags which terminal state applies.</FieldTip>
               </div>
             ) : null}
             {Array.from(ambiguity.automationRoleConflicts.entries()).map(([family, tags]) => (
@@ -42,7 +43,7 @@ export const AmbiguityBadge = ({ ambiguity }: { ambiguity: TagAmbiguity }) => {
                 <p className='text-clay'>{tags.map((tag) => tag.name).join(', ')}</p>
               </div>
             ))}
-            <p className='text-xs text-clay'>This is informational only — it does not hide the patient or block editing.</p>
+            <FieldTip>This is informational only — it does not hide the patient or block editing.</FieldTip>
           </div>
         </DialogContent>
       </Dialog>

@@ -155,7 +155,11 @@ h1, h2, h3, h4, h5, h6 {
 .autogrow-field::after {
   content: attr(data-grow-value) ' ';
   white-space: pre-wrap;
-  word-break: break-word;
+  /* Must match the view-mode text wrapper's wrap algorithm (Tailwind's `break-words`, i.e.
+     overflow-wrap) exactly — word-break: break-word wraps unbroken tokens differently, which
+     made this mirror's height diverge from the view-mode box's height on wrap-boundary content
+     and reflow neighboring fields out from under a focus() call mid-commit. */
+  overflow-wrap: break-word;
   visibility: hidden;
   padding: 0;
   font: inherit;

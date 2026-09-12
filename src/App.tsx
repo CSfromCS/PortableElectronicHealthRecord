@@ -53,6 +53,7 @@ import {
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { useEntrySelection } from '@/lib/useEntrySelection'
@@ -441,6 +442,8 @@ type BackupPayload = {
 
 const initialDailyUpdateForm: DailyUpdateFormState = {
   problems: [],
+  subjective: '',
+  objective: '',
   assessment: '',
   plans: '',
   checklist: [],
@@ -2483,6 +2486,8 @@ function App() {
     setDailyUpdateId(normalizedUpdate.id)
     setDailyUpdateForm({
       problems: normalizeProblemBlocks(normalizedUpdate.problems),
+      subjective: normalizedUpdate.subjective,
+      objective: normalizedUpdate.objective,
       assessment: normalizedUpdate.assessment,
       plans: normalizedUpdate.plans,
       checklist: normalizeChecklistItems(normalizedUpdate.checklist),
@@ -2494,6 +2499,8 @@ function App() {
     const normalizedUpdate = normalizeDailyUpdate(update)
     setDailyUpdateForm({
       problems: normalizeProblemBlocks(normalizedUpdate.problems),
+      subjective: normalizedUpdate.subjective,
+      objective: normalizedUpdate.objective,
       assessment: normalizedUpdate.assessment,
       plans: normalizedUpdate.plans,
       checklist: toPendingChecklistItems(normalizedUpdate.checklist),
@@ -5627,6 +5634,8 @@ function App() {
             completed: false,
           },
         ],
+        subjective: 'Feels better today, cough much less frequent, tolerating oral diet well. No fever overnight, no dyspnea at rest.',
+        objective: 'Afebrile, RR 18, SpO2 96% room air. Chest with decreasing bibasal crackles. Ambulating in room without desaturation.',
         assessment: 'CAP, clinically improving with stable cardiorespiratory parameters.',
         plans: 'Continue current antibiotics today then reassess de-escalation.\nRepeat CBC/electrolytes tomorrow.\nCoordinate discharge planning once clinically stable.',
         checklist: [
@@ -6994,7 +7003,7 @@ function App() {
                 <TabsContent value='database'>
                   <div className='space-y-1'>
                     <Label htmlFor='profile-database'>Database</Label>
-                    <p className='text-xs text-clay'>Unstructured scratch pad — chief complaint, history, exam findings, clerk notes, or anything else that doesn't need its own field.</p>
+                    <FieldTip>Unstructured scratch pad — chief complaint, history, exam findings, clerk notes, or anything else that doesn't need its own field.</FieldTip>
                     <TapToEditField
                       ariaLabel='Database'
                       emptyText='Tap to add chief complaint, HPI, PMH, PE, clerk notes…'
@@ -7021,7 +7030,7 @@ function App() {
                 <TabsContent value='problems'>
                   <div className='space-y-3'>
                     {renderDailyDateHeader('problems')}
-                    <p className='text-xs text-clay'>Copies all problem blocks in their current order, assessment, and plan. Only pending checklist items carry over from the source date. Unresolved problems also carry forward automatically when you move to a new date.</p>
+                    <FieldTip>Copies all problem blocks in their current order, subjective, objective, assessment, and plan. Only pending checklist items carry over from the source date. Unresolved problems also carry forward automatically when you move to a new date.</FieldTip>
                     <ProblemListEditor
                       problems={dailyUpdateForm.problems}
                       onChange={(problems) => {
@@ -7033,10 +7042,65 @@ function App() {
                       onOpenPhotoById={openPhotoById}
                     />
                     <div className='space-y-1'>
+                      <Label>Subjective</Label>
+                      <TapToEditField
+                        ariaLabel='Subjective'
+                        emptyText='Tap to add subjective findings'
+                        className='px-1.5'
+                        value={dailyUpdateForm.subjective}
+                        onCommit={(nextValue) => {
+                          setDailyUpdateForm({ ...dailyUpdateForm, subjective: nextValue })
+                          setDailyDirty(true)
+                        }}
+                        renderView={(text) => (
+                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                        )}
+                        renderEditor={({ value, onChange }) => (
+                          <PhotoMentionField
+                            ariaLabel='Subjective'
+                            placeholder='Subjective'
+                            value={value}
+                            onChange={onChange}
+                            attachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        )}
+                      />
+                    </div>
+                    <div className='space-y-1'>
+                      <Label>Objective</Label>
+                      <TapToEditField
+                        ariaLabel='Objective'
+                        emptyText='Tap to add objective findings'
+                        className='px-1.5'
+                        value={dailyUpdateForm.objective}
+                        onCommit={(nextValue) => {
+                          setDailyUpdateForm({ ...dailyUpdateForm, objective: nextValue })
+                          setDailyDirty(true)
+                        }}
+                        renderView={(text) => (
+                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                        )}
+                        renderEditor={({ value, onChange }) => (
+                          <PhotoMentionField
+                            ariaLabel='Objective'
+                            placeholder='Objective'
+                            value={value}
+                            onChange={onChange}
+                            attachments={mentionableAttachments}
+                            attachmentByTitle={mentionableAttachmentByTitle}
+                            onOpenPhotoById={openPhotoById}
+                          />
+                        )}
+                      />
+                    </div>
+                    <div className='space-y-1'>
                       <Label>Assessment</Label>
                       <TapToEditField
                         ariaLabel='Assessment'
                         emptyText='Tap to add an assessment'
+                        className='px-1.5'
                         value={dailyUpdateForm.assessment}
                         onCommit={(nextValue) => {
                           setDailyUpdateForm({ ...dailyUpdateForm, assessment: nextValue })
@@ -7063,6 +7127,7 @@ function App() {
                       <TapToEditField
                         ariaLabel='Daily plan'
                         emptyText='Tap to add a plan'
+                        className='px-1.5'
                         value={dailyUpdateForm.plans}
                         onCommit={(nextValue) => {
                           setDailyUpdateForm({ ...dailyUpdateForm, plans: nextValue })
@@ -7110,7 +7175,7 @@ function App() {
                       </div>
                     ) : null}
                     <div className='space-y-2'>
-                      <p className='text-xs text-clay'>Tap any line to edit it, or the blank line at the end to add a new one. Press Enter to split at the cursor into a new item; Backspace at the start of a line merges it back into the one above (undoes a split). Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</p>
+                      <FieldTip>Tap any line to edit it, or the blank line at the end to add a new one. Press Enter to split at the cursor into a new item; Backspace at the start of a line merges it back into the one above (undoes a split). Completed items move to the bottom automatically. Drag any item to set a different order. On mobile, press and hold the handle then drag. Keyboard: focus the handle then press Ctrl/⌘ + ↑/↓.</FieldTip>
                       <div className='space-y-2'>
                         {withTrailingBlankChecklistItem(dailyUpdateForm.checklist).map((item, index) => (
                           renderDailyChecklistItem(item, index, index >= dailyUpdateForm.checklist.length)
@@ -8583,7 +8648,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Export backup</p>
-                      <p className='text-xs text-clay mt-0.5'>Download all patient data as JSON (photos excluded)</p>
+                      <FieldTip className='mt-0.5'>Download all patient data as JSON (photos excluded)</FieldTip>
                     </div>
                   </button>
                   <input
@@ -8603,7 +8668,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Import backup</p>
-                      <p className='text-xs text-clay mt-0.5'>Restore from backup JSON — replaces text data, keeps current photos</p>
+                      <FieldTip className='mt-0.5'>Restore from backup JSON — replaces text data, keeps current photos</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8616,7 +8681,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Review all photos</p>
-                      <p className='text-xs text-clay mt-0.5'>Manage linked or orphan photos across all patients</p>
+                      <FieldTip className='mt-0.5'>Manage linked or orphan photos across all patients</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8634,7 +8699,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-action-danger'>Clear inactive patients</p>
-                      <p className='text-xs text-clay mt-0.5'>Permanently removes all patient records with a Terminal tag applied</p>
+                      <FieldTip className='mt-0.5'>Permanently removes all patient records with a Terminal tag applied</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8650,7 +8715,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Edit sync settings</p>
-                      <p className='text-xs text-clay mt-0.5'>Change room code or device name for this device</p>
+                      <FieldTip className='mt-0.5'>Change room code or device name for this device</FieldTip>
                     </div>
                   </button>
                 </div>
@@ -8669,7 +8734,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Manage Tags</p>
-                      <p className='text-xs text-clay mt-0.5'>Create, edit, and reorder tags and tag groups</p>
+                      <FieldTip className='mt-0.5'>Create, edit, and reorder tags and tag groups</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8682,7 +8747,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Manage Custom Actions</p>
-                      <p className='text-xs text-clay mt-0.5'>Configure checklist-generating, tag-effect buttons scoped by Category/Relationship</p>
+                      <FieldTip className='mt-0.5'>Configure checklist-generating, tag-effect buttons scoped by Category/Relationship</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8694,8 +8759,8 @@ function App() {
                       <LayoutGrid className='h-4 w-4 text-action-primary' />
                     </div>
                     <div className='min-w-0'>
-                      <p className='text-sm font-semibold text-espresso'>Patient Tabs</p>
-                      <p className='text-xs text-clay mt-0.5'>Show, hide, and reorder the tabs shown inside a patient</p>
+                      <p className='text-sm font-semibold text-espresso'>Patient Tabs &amp; Tips</p>
+                      <FieldTip className='mt-0.5'>Show, hide, and reorder patient tabs — also where the Hide field tips toggle lives</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8708,7 +8773,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Manage Templates</p>
-                      <p className='text-xs text-clay mt-0.5'>Create and edit report Format Patterns used in Reports</p>
+                      <FieldTip className='mt-0.5'>Create and edit report Format Patterns used in Reports</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8721,7 +8786,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Manage Custom Views</p>
-                      <p className='text-xs text-clay mt-0.5'>Rename, edit, reorder, or delete saved Tag+Ward filter combos</p>
+                      <FieldTip className='mt-0.5'>Rename, edit, reorder, or delete saved Tag+Ward filter combos</FieldTip>
                     </div>
                   </button>
                 </div>
@@ -8740,7 +8805,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Show onboarding / install</p>
-                      <p className='text-xs text-clay mt-0.5'>Reopen the welcome screen and app install prompt</p>
+                      <FieldTip className='mt-0.5'>Reopen the welcome screen and app install prompt</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8753,7 +8818,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Add sample patient</p>
-                      <p className='text-xs text-clay mt-0.5'>Load a demo patient (Juan Dela Cruz) with sample data</p>
+                      <FieldTip className='mt-0.5'>Load a demo patient (Juan Dela Cruz) with sample data</FieldTip>
                     </div>
                   </button>
                   <button
@@ -8766,7 +8831,7 @@ function App() {
                     </div>
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-espresso'>Send feedback</p>
-                      <p className='text-xs text-clay mt-0.5'>Report issues or suggest features on GitHub</p>
+                      <FieldTip className='mt-0.5'>Report issues or suggest features on GitHub</FieldTip>
                     </div>
                   </button>
                 </div>
@@ -8789,7 +8854,7 @@ function App() {
                     ['Navigate on mobile', 'The bottom bar shows your visible patient tabs in a scrollable row — swipe or tap to switch. Use ← Back to return to the patient list.'],
                     ['Customize your tabs', 'Go to Settings → Patient Tabs to hide tabs you don\'t use and drag the rest into your preferred order. Hiding a tab only hides it — the data underneath is never deleted.'],
                     ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. On mobile, swipe left or right anywhere on the patient view to move to the next or previous patient (by room number order) instead. Discharged patients are hidden from this quick-switch list, and you can scroll through the list when many active patients are present.'],
-                    ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes. Drag blocks to set their priority. Unresolved problems carry forward to the next date automatically — mark one Resolved once it no longer needs tracking. Tap Copy latest entry to copy the previous problem blocks in order, assessment, and plan.'],
+                    ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes, then fill in Subjective, Objective, Assessment, and Plan below them. Drag blocks to set their priority. Unresolved problems carry forward to the next date automatically — mark one Resolved once it no longer needs tracking. Tap Copy latest entry to copy the previous problem blocks in order, subjective, objective, assessment, and plan.'],
                     ['Track a daily checklist', 'Open Checklist, add short tasks for the date, and check them off as you go. Pending items carry forward automatically to the next date; completed items move to the bottom. Drag any item to override that order.'],
                     ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Completing an item moves it to the bottom; reopening it moves it before the first completed item. Drag any item to override that order.'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],

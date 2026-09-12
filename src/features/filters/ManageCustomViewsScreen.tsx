@@ -11,6 +11,7 @@ import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { cn } from '@/lib/utils'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { BulkTagPicker } from '@/features/tags/BulkTagPicker'
 import { TagChip } from '@/features/tags/TagChip'
 import type { CustomView, TagDefinition, TagGroupDefinition } from '@/types'
@@ -134,9 +135,9 @@ export const ManageCustomViewsScreen = ({
         </div>
       </CardHeader>
       <CardContent className='px-4 pb-4 space-y-3'>
-        <p className='text-xs text-clay'>
+        <FieldTip>
           Saved Tag+Ward filter combos, shared across the Patients list, Master Checklist, and Reports picker filters. Save one from any of those filter dialogs, or add/edit one here.
-        </p>
+        </FieldTip>
 
         {orderedViews.length === 0 ? (
           <p className='text-xs text-clay'>No Custom Views saved yet — tap "New View" above to add one.</p>

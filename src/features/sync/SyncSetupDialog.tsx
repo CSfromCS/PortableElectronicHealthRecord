@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Eye, EyeOff } from 'lucide-react'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { sha256Hex } from './crypto'
 
 export type SetupDeviceName = string
@@ -87,7 +88,7 @@ export function SyncSetupDialog({
         <div className='space-y-3'>
           <div className='space-y-1'>
             <Label htmlFor='sync-room-code'>Room key</Label>
-            <p className='text-xs text-clay'>Use the same Room key on your phone and laptop to join the same encrypted sync room.</p>
+            <FieldTip>Use the same Room key on your phone and laptop to join the same encrypted sync room.</FieldTip>
             <div className='relative'>
               <Input
                 id='sync-room-code'
@@ -119,7 +120,7 @@ export function SyncSetupDialog({
               placeholder='Juan Dela Cruz'
               autoComplete='name'
             />
-            <p className='text-xs text-clay'>Your name, used as a <strong>username</strong> to identify who made changes.</p>
+            <FieldTip>Your name, used as a <strong>username</strong> to identify who made changes.</FieldTip>
           </div>
           <div className='space-y-1'>
             <Label htmlFor='sync-device-name'>Device name</Label>
@@ -130,7 +131,7 @@ export function SyncSetupDialog({
               placeholder='Phone'
               autoComplete='off'
             />
-            <p className='text-xs text-clay'>Use a unique name per device (example: Phone, Clerk-Laptop) so you can tell where each sync came from.</p>
+            <FieldTip>Use a unique name per device (example: Phone, Clerk-Laptop) so you can tell where each sync came from.</FieldTip>
           </div>
           <div className='rounded-md border border-clay/25 bg-blush-sand/45 p-2'>
             <p className='text-xs text-clay'>Device tag</p>

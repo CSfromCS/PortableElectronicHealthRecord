@@ -8,6 +8,7 @@ import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder, dropIndicatorClassName } from '@/lib/dnd/useDragReorder'
 import { cn } from '@/lib/utils'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import type { TagDefinition, TagGroupDefinition } from '@/types'
 import { TagChip } from '@/features/tags/TagChip'
 import {
@@ -60,7 +61,7 @@ const TagOrderLevelEditor = ({
 
   return (
     <div className='ml-8 mt-1.5 space-y-1.5 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-2'>
-      <p className='text-xs text-clay'>Patients with the earliest-listed tag sort first; patients with none of these tags sort last.</p>
+      <FieldTip>Patients with the earliest-listed tag sort first; patients with none of these tags sort last.</FieldTip>
       {orderedTags.length > 0 ? (
         <ul className='space-y-1'>
           {orderedTags.map((tag) => (
@@ -150,9 +151,9 @@ export const PatientSortConfigDialog = ({
         <DialogHeader>
           <DialogTitle>Sort patients</DialogTitle>
         </DialogHeader>
-        <p className='text-xs text-clay -mt-2'>
+        <FieldTip className='-mt-2'>
           Shared by the Patients list, Master Checklist, and the Reports patient picker — changing it here updates all three. Each level only breaks ties left by the one above it.
-        </p>
+        </FieldTip>
         <ScrollArea className='max-h-[60vh] pr-3'>
           <div className='space-y-2'>
             {config.levels.map((level, index) => (

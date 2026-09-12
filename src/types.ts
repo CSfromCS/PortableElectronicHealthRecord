@@ -191,6 +191,8 @@ export interface DailyUpdate {
   patientId: number
   date: string
   problems: ProblemBlock[]
+  subjective: string
+  objective: string
   assessment: string
   plans: string
   checklist: { text: string; completed: boolean; notes?: string }[]
@@ -323,7 +325,7 @@ export type OrdersEntryFieldId = 'entryDate' | 'entryTime' | 'service' | 'orderT
 /** `resolvedMarker` resolves to `resolvedGlyph`/`unresolvedGlyph` on the config, same pattern as
  * Checklist's Checkbox field — e.g. " (resolved)"/"" (default) or "✅"/"⭕". */
 export type ProblemsEntryFieldId = 'problemIndex' | 'problemTitle' | 'problemNotes' | 'resolvedMarker'
-export type ChecklistEntryFieldId = 'checkbox' | 'itemText'
+export type ChecklistEntryFieldId = 'checkbox' | 'itemText' | 'itemNotes'
 /** `statusMarker` is a fixed literal (" (discontinued)" / " (completed)" / "" for active) — unlike
  * Checklist/Problems' two-state markers, Medications has three statuses, so a simple glyph pair
  * doesn't fit; not user-configurable for now. */
@@ -390,6 +392,14 @@ export interface BlockVariableConfig {
   /** Problems only: same idea as checkedGlyph/uncheckedGlyph, for the "Resolved Marker" field. */
   resolvedGlyph: string
   unresolvedGlyph: string
+  /** Problems only: whether each day's freeform Subjective/Objective/Assessment/Plan text
+   * (`DailyUpdate.subjective`/`objective`/`assessment`/`plans` — not per-problem fields, so they
+   * can't live in `entryPatternText` like `problemTitle`/`problemNotes`) is appended, labeled, below
+   * that day's problem entries. */
+  includeSubjective: boolean
+  includeObjective: boolean
+  includeAssessment: boolean
+  includePlans: boolean
   /** Medications only: which statuses to include — MedicationEntry carries no date, so there's no
    * range mode to filter by; this is the equivalent axis. */
   includeActiveMedications: boolean
