@@ -595,6 +595,7 @@ export const buildDefaultBlockVariableConfig = (variableId: BlockVariableId): Bl
   includeObjective: false,
   includeAssessment: false,
   includePlans: false,
+  soapFieldsPosition: 'after',
   includeActiveMedications: true,
   includeDiscontinuedMedications: false,
   includeCompletedMedications: false,
@@ -869,7 +870,7 @@ const resolveProblemsBlock = (config: BlockVariableConfig, updates: DailyUpdate[
       const problemsBody = problems
         .map((problem, index) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId) => resolveProblemsEntryField(fieldId, problem, index, config)))
         .join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
-      const body = [problemsBody, ...soapLines].filter(Boolean).join('\n')
+      const body = (config.soapFieldsPosition === 'before' ? [...soapLines, problemsBody] : [problemsBody, ...soapLines]).filter(Boolean).join('\n')
       if (!config.showGroupHeader) return body
       return [renderGroupHeader(update.date, config, ctx), body].join('\n')
     })

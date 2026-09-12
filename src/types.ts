@@ -400,6 +400,9 @@ export interface BlockVariableConfig {
   includeObjective: boolean
   includeAssessment: boolean
   includePlans: boolean
+  /** Problems only: whether the enabled Subjective/Objective/Assessment/Plan lines above render
+   * before or after that day's problem entries — same idea as medicationNotesPosition. */
+  soapFieldsPosition: 'before' | 'after'
   /** Medications only: which statuses to include — MedicationEntry carries no date, so there's no
    * range mode to filter by; this is the equivalent axis. */
   includeActiveMedications: boolean

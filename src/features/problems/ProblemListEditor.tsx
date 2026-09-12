@@ -200,10 +200,11 @@ export function ProblemListEditor({
                     size='sm'
                     className={cn('h-5 shrink-0 gap-0.5 px-1 text-[11px]', problem.completed ? 'text-action-edit' : 'text-clay')}
                     aria-pressed={problem.completed}
+                    aria-label={problem.completed ? `Mark problem ${index + 1} as unresolved` : `Mark problem ${index + 1} as resolved`}
                     onClick={() => toggleProblemCompleted(problem.id)}
                   >
                     {problem.completed ? <CheckCircle2 className='h-3 w-3' aria-hidden='true' /> : <Circle className='h-3 w-3' aria-hidden='true' />}
-                    {problem.completed ? 'Resolved' : 'Mark resolved'}
+                    Resolved
                   </Button>
                 </div>
                 <div className='space-y-1'>
@@ -220,7 +221,6 @@ export function ProblemListEditor({
                       <PhotoMentionField
                         ariaLabel={`Notes for problem ${index + 1}`}
                         placeholder='Plan, trend, pending workup, or other notes'
-                        className='min-h-28'
                         value={value}
                         onChange={onChange}
                         attachments={attachments}

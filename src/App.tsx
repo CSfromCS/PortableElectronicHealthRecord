@@ -1037,10 +1037,21 @@ function App() {
     () => (tagGroups ?? []).find((group) => group.name === SERVICE_TAG_GROUP_NAME)?.id,
     [tagGroups],
   )
-  const serviceTags = useMemo(
-    () => (tagDefinitions ?? []).filter((tag) => tag.groupId !== undefined && tag.groupId === serviceGroupId),
-    [tagDefinitions, serviceGroupId],
-  )
+  // Most-used-first, so the picker's suggestion list (ServiceTagMultiSelect/ServiceTagSelect)
+  // surfaces likely picks before the user types anything — ties fall back to creation order.
+  const serviceTags = useMemo(() => {
+    const candidates = (tagDefinitions ?? []).filter((tag) => tag.groupId !== undefined && tag.groupId === serviceGroupId)
+    const usageCounts = new Map<number, number>()
+    for (const patient of patients ?? []) {
+      for (const tagId of [...patient.mainServiceTagIds, ...patient.referralServiceTagIds]) {
+        usageCounts.set(tagId, (usageCounts.get(tagId) ?? 0) + 1)
+      }
+    }
+    return [...candidates].sort((a, b) => {
+      const countDiff = (usageCounts.get(b.id ?? -1) ?? 0) - (usageCounts.get(a.id ?? -1) ?? 0)
+      return countDiff !== 0 ? countDiff : a.sortOrder - b.sortOrder
+    })
+  }, [tagDefinitions, serviceGroupId, patients])
   const nonServiceTagDefinitions = useMemo(
     () => (tagDefinitions ?? []).filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId),
     [tagDefinitions, serviceGroupId],
@@ -6979,7 +6990,6 @@ function App() {
                           <PhotoMentionField
                             ariaLabel='Clinical Summary'
                             placeholder='Clinical Summary'
-                            className='min-h-32'
                             value={value}
                             onChange={onChange}
                             attachments={mentionableAttachments}
@@ -7016,7 +7026,6 @@ function App() {
                         <PhotoMentionField
                           ariaLabel='Database'
                           placeholder='Chief complaint, HPI, PMH, PE, clerk notes…'
-                          className='min-h-72'
                           value={value}
                           onChange={onChange}
                           attachments={mentionableAttachments}

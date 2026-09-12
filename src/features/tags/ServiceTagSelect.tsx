@@ -23,7 +23,6 @@ export const ServiceTagSelect = ({ ariaLabel, placeholder, value, availableTags,
     const normalizedQuery = query.trim().toLowerCase()
     return availableTags
       .filter((tag) => !normalizedQuery || tag.name.toLowerCase().includes(normalizedQuery))
-      .slice(0, 6)
   }, [availableTags, query])
 
   const selectSuggestion = (tag: TagDefinition) => {

@@ -44,7 +44,6 @@ export const ServiceDiagnosisFields = ({
           <PhotoMentionField
             ariaLabel={label}
             placeholder={label}
-            className='min-h-24'
             value={value}
             onChange={onChange}
             attachments={mentionableAttachments}
@@ -79,7 +78,6 @@ export const ServiceDiagnosisFields = ({
                 <PhotoMentionField
                   ariaLabel={`${label} — ${serviceName}`}
                   placeholder={`${serviceName} ${label}`}
-                  className='min-h-16'
                   value={value}
                   onChange={onChange}
                   attachments={mentionableAttachments}

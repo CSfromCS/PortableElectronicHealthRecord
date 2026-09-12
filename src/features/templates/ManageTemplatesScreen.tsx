@@ -944,7 +944,7 @@ const BlockVariableConfigDialog = ({
                       </div>
                     </div>
                     <div className='space-y-1.5'>
-                      <Label className='text-xs'>Include below each day's problems</Label>
+                      <Label className='text-xs'>Include for each day's problems</Label>
                       {([
                         ['includeSubjective', 'Subjective'],
                         ['includeObjective', 'Objective'],
@@ -961,6 +961,12 @@ const BlockVariableConfigDialog = ({
                           <span className='text-sm text-espresso'>{label}</span>
                         </label>
                       ))}
+                      {config.includeSubjective || config.includeObjective || config.includeAssessment || config.includePlans ? (
+                        <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+                          <Button type='button' size='sm' variant={config.soapFieldsPosition === 'before' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setConfig((previous) => ({ ...previous, soapFieldsPosition: 'before' }))}>Before the list</Button>
+                          <Button type='button' size='sm' variant={config.soapFieldsPosition === 'after' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setConfig((previous) => ({ ...previous, soapFieldsPosition: 'after' }))}>After the list</Button>
+                        </div>
+                      ) : null}
                     </div>
                   </>
                 ) : null}
