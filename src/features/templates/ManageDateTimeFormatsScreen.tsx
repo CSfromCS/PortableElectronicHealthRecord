@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { DragHandle } from '@/lib/dnd/DragHandle'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { cn } from '@/lib/utils'
 import type { DateTimeComponentId, DateTimeFormatDefinition } from '@/types'
@@ -158,9 +159,9 @@ export const ManageDateTimeFormatsScreen = ({
         {editingId === null ? (
           <>
             <div className='flex items-center justify-between gap-2 flex-wrap'>
-              <p className='text-xs text-clay max-w-[70%]'>
+              <FieldTip className='max-w-[70%]'>
                 Saved formats appear as options wherever a date/time variable is configured in a template.
-              </p>
+              </FieldTip>
               <Button size='sm' onClick={() => setEditingId('new')}>
                 <Plus className='h-3.5 w-3.5' aria-hidden='true' /> New format
               </Button>

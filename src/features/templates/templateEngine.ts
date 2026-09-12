@@ -328,7 +328,7 @@ export const BLOCK_JOIN_MODE_LABELS: Record<BlockJoinMode, string> = {
 export const VITALS_ENTRY_FIELD_ORDER: VitalsEntryFieldId[] = ['entryDate', 'entryTime', 'bp', 'hr', 'rr', 'temp', 'spo2', 'note']
 export const ORDERS_ENTRY_FIELD_ORDER: OrdersEntryFieldId[] = ['entryDate', 'entryTime', 'service', 'orderText', 'status', 'note']
 export const PROBLEMS_ENTRY_FIELD_ORDER: ProblemsEntryFieldId[] = ['problemIndex', 'problemTitle', 'problemNotes', 'resolvedMarker']
-export const CHECKLIST_ENTRY_FIELD_ORDER: ChecklistEntryFieldId[] = ['checkbox', 'itemText']
+export const CHECKLIST_ENTRY_FIELD_ORDER: ChecklistEntryFieldId[] = ['checkbox', 'itemText', 'itemNotes']
 export const MEDICATIONS_ENTRY_FIELD_ORDER: MedicationsEntryFieldId[] = ['medication', 'dose', 'route', 'frequency', 'note', 'statusMarker']
 
 export const ENTRY_FIELD_ORDER_BY_BLOCK: Record<BlockVariableId, string[]> = {
@@ -353,7 +353,7 @@ export const ENTRY_FIELD_LABELS_BY_BLOCK: Record<BlockVariableId, Record<string,
     problemIndex: 'Number', problemTitle: 'Title', problemNotes: 'Notes', resolvedMarker: 'Resolved Marker',
   },
   checklist: {
-    checkbox: 'Checkbox', itemText: 'Item Text',
+    checkbox: 'Checkbox', itemText: 'Item Text', itemNotes: 'Item Notes',
   },
   medications: {
     medication: 'Medication', dose: 'Dose', route: 'Route', frequency: 'Frequency', note: 'Note', statusMarker: 'Status Marker',
@@ -481,12 +481,13 @@ const resolveProblemsEntryField = (fieldId: string, problem: ProblemBlock, index
 
 const resolveChecklistEntryField = (
   fieldId: string,
-  item: { text: string; completed: boolean },
+  item: { text: string; completed: boolean; notes?: string },
   config: BlockVariableConfig,
 ): string => {
   switch (fieldId as ChecklistEntryFieldId) {
     case 'checkbox': return item.completed ? config.checkedGlyph : config.uncheckedGlyph
     case 'itemText': return item.text.trim()
+    case 'itemNotes': return (item.notes ?? '').trim()
     default: return ''
   }
 }
@@ -590,6 +591,11 @@ export const buildDefaultBlockVariableConfig = (variableId: BlockVariableId): Bl
   uncheckedGlyph: ' ',
   resolvedGlyph: ' (resolved)',
   unresolvedGlyph: '',
+  includeSubjective: false,
+  includeObjective: false,
+  includeAssessment: false,
+  includePlans: false,
+  soapFieldsPosition: 'after',
   includeActiveMedications: true,
   includeDiscontinuedMedications: false,
   includeCompletedMedications: false,
@@ -851,10 +857,20 @@ const resolveProblemsBlock = (config: BlockVariableConfig, updates: DailyUpdate[
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((update) => {
       const problems = (update.problems ?? []).filter((problem) => problem.title.trim() || problem.notes.trim())
-      if (problems.length === 0) return ''
-      const body = problems
+      // Subjective/Objective/Assessment/Plan are per-date DailyUpdate fields, not per-problem
+      // entries, so they can't live in entryPatternText like problemTitle/problemNotes — instead
+      // each enabled one is appended, labeled, below that date's problem entries (SOAP order).
+      const soapLines = [
+        config.includeSubjective && update.subjective?.trim() ? `Subjective: ${update.subjective.trim()}` : '',
+        config.includeObjective && update.objective?.trim() ? `Objective: ${update.objective.trim()}` : '',
+        config.includeAssessment && update.assessment?.trim() ? `Assessment: ${update.assessment.trim()}` : '',
+        config.includePlans && update.plans?.trim() ? `Plan: ${update.plans.trim()}` : '',
+      ].filter(Boolean)
+      if (problems.length === 0 && soapLines.length === 0) return ''
+      const problemsBody = problems
         .map((problem, index) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId) => resolveProblemsEntryField(fieldId, problem, index, config)))
         .join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
+      const body = (config.soapFieldsPosition === 'before' ? [...soapLines, problemsBody] : [problemsBody, ...soapLines]).filter(Boolean).join('\n')
       if (!config.showGroupHeader) return body
       return [renderGroupHeader(update.date, config, ctx), body].join('\n')
     })

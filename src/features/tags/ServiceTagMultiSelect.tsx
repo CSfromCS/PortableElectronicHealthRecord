@@ -42,7 +42,6 @@ export const ServiceTagMultiSelect = ({
     return availableTags
       .filter((tag) => tag.id === undefined || !selectedIds.has(tag.id))
       .filter((tag) => !normalizedQuery || tag.name.toLowerCase().includes(normalizedQuery))
-      .slice(0, 6)
   }, [availableTags, query, selectedIds])
 
   const trimmedQuery = query.trim()

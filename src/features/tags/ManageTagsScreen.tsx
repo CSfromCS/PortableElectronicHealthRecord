@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
@@ -599,7 +600,7 @@ export const ManageTagsScreen = ({
                     placeholder={tagForm.name || 'Text shown on the badge'}
                     className='w-40'
                   />
-                  <p className='text-xs text-clay'>What the badge shows (e.g. "Ref" for "Referral"). Leave blank to show the tag's name.</p>
+                  <FieldTip>What the badge shows (e.g. "Ref" for "Referral"). Leave blank to show the tag's name.</FieldTip>
                 </div>
               </>
             )}

@@ -11,6 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { DragHandle } from '@/lib/dnd/DragHandle'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { useDragReorder, dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
@@ -376,7 +377,7 @@ const DateConditionPicker = ({
     <div className='space-y-2'>
       <div className='space-y-1'>
         <Label className='text-xs'>Days of week</Label>
-        <p className='text-[11px] text-clay'>Leave all unselected to match every day of the week.</p>
+        <FieldTip className='text-[11px]'>Leave all unselected to match every day of the week.</FieldTip>
         <div className='flex flex-wrap gap-1'>
           {DAY_OF_WEEK_LABELS.map((label, day) => (
             <Button
@@ -394,7 +395,7 @@ const DateConditionPicker = ({
       </div>
       <div className='space-y-1'>
         <Label className='text-xs'>Days of month</Label>
-        <p className='text-[11px] text-clay'>Leave all unselected to match every day of the month.</p>
+        <FieldTip className='text-[11px]'>Leave all unselected to match every day of the month.</FieldTip>
         <div className='grid grid-cols-7 gap-1 max-w-80'>
           {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
             <Button
@@ -545,9 +546,9 @@ const ConditionCard = ({
           {scope === 'patient' ? (
             <div className='space-y-1'>
               <Label className='text-xs'>Required tags</Label>
-              <p className='text-[11px] text-clay'>
+              <FieldTip className='text-[11px]'>
                 Matches a patient who has every tag selected below applied (in any tag group, including a specific Main/Referral Service).
-              </p>
+              </FieldTip>
               <RequiredTagsPicker tags={tags} groups={groups} selectedTagIds={requiredTagIdSet} onToggle={toggleRequiredTag} />
             </div>
           ) : null}
@@ -782,9 +783,9 @@ export const ManageCustomActionsScreen = ({
       </CardHeader>
       <CardContent className='px-4 pb-4 space-y-4'>
         <div className='flex items-center justify-between gap-2 flex-wrap'>
-          <p className='text-xs text-clay max-w-[70%]'>
+          <FieldTip className='max-w-[70%]'>
             Custom Actions append checklist items and/or add or remove tags, either manually via a button or automatically when a tag is added.
-          </p>
+          </FieldTip>
           <Button size='sm' variant='outline' onClick={openCreate}>
             <Plus className='h-3.5 w-3.5 mr-1' /> Add action
           </Button>
@@ -866,11 +867,11 @@ export const ManageCustomActionsScreen = ({
                     General (no patient)
                   </label>
                 </div>
-                <p className='text-xs text-clay'>
+                <FieldTip>
                   {form.scope === 'general'
                     ? 'Appends to the General checklist instead of a specific patient’s. Manual trigger only, and no tag effects or tag-based conditions, since no patient is involved.'
                     : 'Appends to a specific patient’s checklist and/or tags when triggered.'}
-                </p>
+                </FieldTip>
               </div>
 
               <div className='space-y-1'>
@@ -912,16 +913,16 @@ export const ManageCustomActionsScreen = ({
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className='text-xs text-clay'>Fires the instant this tag transitions from absent to present on a patient.</p>
+                  <FieldTip>Fires the instant this tag transitions from absent to present on a patient.</FieldTip>
                 </div>
               ) : null}
 
               <div className='space-y-2 rounded-xl border border-clay/25 bg-warm-ivory/50 p-3'>
                 <div>
                   <Label>{form.scope === 'general' ? 'Runs every time' : 'Applies to every patient'}</Label>
-                  <p className='text-xs text-clay'>
+                  <FieldTip>
                     Runs unconditionally whenever this action is triggered — no condition needs to be defined below for this to run.
-                  </p>
+                  </FieldTip>
                 </div>
                 <div className='space-y-1'>
                   <Label className='text-xs'>Checklist items</Label>
@@ -947,11 +948,11 @@ export const ManageCustomActionsScreen = ({
                     <Plus className='h-3.5 w-3.5 mr-1' /> Add condition
                   </Button>
                 </div>
-                <p className='text-xs text-clay'>
+                <FieldTip>
                   {form.scope === 'general'
                     ? 'Adds extra checklist items on top of the ones above, only on specific days of the week or month. Each condition matches independently — several can apply on the same day.'
                     : 'Adds extra checklist items and tag effects on top of the unconditional ones above, scoped to patients with a specific combination of tags applied and/or specific days of the week or month. Each condition matches independently — several can apply to the same patient at once. A patient this action does nothing for (no unconditional items/effects and no condition met) is left unaffected and flagged rather than guessed at.'}
-                </p>
+                </FieldTip>
                 <div className='space-y-3'>
                   {form.conditions.map((condition, index) => (
                     <div
@@ -985,9 +986,9 @@ export const ManageCustomActionsScreen = ({
                 <div className='space-y-3 rounded-xl border border-clay/25 bg-warm-ivory/50 p-3'>
                   <div>
                     <Label>Also run a template (optional)</Label>
-                    <p className='text-xs text-clay'>
+                    <FieldTip>
                       Runs after the checklist items/tag effects above: renders the chosen template across every patient matching the filter below, copies the result to the clipboard, and opens the preview. The filter only pre-selects patients — every matching patient can still be individually included or excluded each time this runs, since it's impossible to know in advance which ones should be skipped.
-                    </p>
+                    </FieldTip>
                   </div>
                   <div className='space-y-1'>
                     <Label>Template</Label>

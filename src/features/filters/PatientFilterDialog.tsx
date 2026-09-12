@@ -9,6 +9,7 @@ import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import { BulkTagPicker } from '@/features/tags/BulkTagPicker'
 import { cn } from '@/lib/utils'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import type { CustomView, TagDefinition, TagGroupDefinition } from '@/types'
 import { PATIENT_POOL_CRITERIA, patientPoolCriteriaNeedWindow } from './patientFilterUtils'
 import type { DateTimeWindow, PatientPoolCriterion, TagFilterMode, TagWardFilterState } from './patientFilterUtils'
@@ -165,7 +166,7 @@ export const PatientFilterDialog = ({
                     </div>
                   ))}
                 </div>
-                <p className='text-xs text-clay'>Tap a view to apply its tags and wards here.</p>
+                <FieldTip>Tap a view to apply its tags and wards here.</FieldTip>
               </div>
             ) : null}
 
@@ -242,7 +243,7 @@ export const PatientFilterDialog = ({
                   Save
                 </Button>
               </div>
-              <p className='text-xs text-clay'>Saves the tags and wards currently checked above — not the Special/Timebound facet below, which isn't part of a View.</p>
+              <FieldTip>Saves the tags and wards currently checked above — not the Special/Timebound facet below, which isn't part of a View.</FieldTip>
             </div>
 
             {pool ? (
@@ -251,9 +252,9 @@ export const PatientFilterDialog = ({
                   <Clock className='h-3.5 w-3.5 text-action-primary shrink-0' aria-hidden='true' />
                   <p className='text-[11px] font-bold uppercase tracking-widest text-action-primary'>Special/Timebound Filter</p>
                 </div>
-                <p className='text-xs text-clay'>
+                <FieldTip>
                   Unique to this picker — not available on the Patients list or Master Checklist filters. Narrows the pool by clinical status (Active/Admitted/Discharged/Referred), optionally within a shared time window.
-                </p>
+                </FieldTip>
                 <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
                   {PATIENT_POOL_CRITERIA.map((criterion) => (
                     <label key={criterion.id} className='flex items-center gap-2.5 py-1 cursor-pointer'>
@@ -280,11 +281,11 @@ export const PatientFilterDialog = ({
                       />
                       <span className='text-sm text-espresso'>Limit to a time window</span>
                     </label>
-                    <p className='text-xs text-clay'>
+                    <FieldTip>
                       {pool.useWindow
                         ? 'Shared window for Admitted/Discharged/Referred. Leave a field blank to use its default (last 12 hours, ending now).'
                         : 'Unchecked: Admitted/Discharged/Referred match regardless of when.'}
-                    </p>
+                    </FieldTip>
                     <div className={cn('grid grid-cols-2 gap-2', !pool.useWindow && 'opacity-40 pointer-events-none')}>
                       <div className='space-y-1'>
                         <Label className='text-xs'>From date</Label>

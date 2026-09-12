@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label'
 import { MentionText, PhotoMentionField, type MentionablePhoto } from '@/features/photos/photoMentions'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { moveItemByKey } from '@/lib/dnd/reorderList'
 import { dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReorder'
 import { cn } from '@/lib/utils'
@@ -102,7 +103,7 @@ export function ProblemListEditor({
       <div className='flex items-center justify-between gap-2'>
         <div>
           <Label>Problems List</Label>
-          <p className='text-xs text-clay'>Drag blocks to set priority. Unresolved problems carry forward to the next date automatically; mark a problem Resolved once it no longer needs daily tracking.</p>
+          <FieldTip>Drag blocks to set priority. Unresolved problems carry forward to the next date automatically; mark a problem Resolved once it no longer needs daily tracking.</FieldTip>
         </div>
         <Button
           type='button'
@@ -175,6 +176,7 @@ export function ProblemListEditor({
                     <TapToEditField
                       ariaLabel={`Problem ${index + 1} title`}
                       emptyText='Tap to name this problem'
+                      className='px-1.5'
                       value={problem.title}
                       onCommit={(nextValue) => updateProblem(problem.id, 'title', nextValue)}
                       renderView={(text) => (
@@ -196,18 +198,20 @@ export function ProblemListEditor({
                     type='button'
                     variant='ghost'
                     size='sm'
-                    className={cn('h-6 shrink-0 gap-1 px-1.5 text-xs', problem.completed ? 'text-action-edit' : 'text-clay')}
+                    className={cn('h-5 shrink-0 gap-0.5 px-1 text-[11px]', problem.completed ? 'text-action-edit' : 'text-clay')}
                     aria-pressed={problem.completed}
+                    aria-label={problem.completed ? `Mark problem ${index + 1} as unresolved` : `Mark problem ${index + 1} as resolved`}
                     onClick={() => toggleProblemCompleted(problem.id)}
                   >
-                    {problem.completed ? <CheckCircle2 className='h-3.5 w-3.5' aria-hidden='true' /> : <Circle className='h-3.5 w-3.5' aria-hidden='true' />}
-                    {problem.completed ? 'Resolved' : 'Mark resolved'}
+                    {problem.completed ? <CheckCircle2 className='h-3 w-3' aria-hidden='true' /> : <Circle className='h-3 w-3' aria-hidden='true' />}
+                    Resolved
                   </Button>
                 </div>
                 <div className='space-y-1'>
                   <TapToEditField
                     ariaLabel={`Notes for problem ${index + 1}`}
                     emptyText='Tap to add notes'
+                    className='px-1.5'
                     value={problem.notes}
                     onCommit={(value) => updateProblem(problem.id, 'notes', value)}
                     renderView={(text) => (
@@ -217,7 +221,6 @@ export function ProblemListEditor({
                       <PhotoMentionField
                         ariaLabel={`Notes for problem ${index + 1}`}
                         placeholder='Plan, trend, pending workup, or other notes'
-                        className='min-h-28'
                         value={value}
                         onChange={onChange}
                         attachments={attachments}

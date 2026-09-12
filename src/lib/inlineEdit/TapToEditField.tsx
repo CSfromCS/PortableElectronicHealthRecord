@@ -122,12 +122,6 @@ export const TapToEditField = ({
   const debounceRef = useRef<number | null>(null)
   const lastCommittedRef = useRef(value)
   const pendingCaretOffsetRef = useRef<number | null>(null)
-  // True only for an autoEnter-triggered entry (a caller just created/split this field's value
-  // elsewhere and is programmatically moving focus into it) — not a real user tap. Mobile
-  // browsers auto-scroll a newly focused field into view, which for a genuine tap is invisible
-  // (the user's own gesture already put it on screen) but for this side-effect focus reads as an
-  // unprompted jolt, especially in quick succession (e.g. rapid-fire checklist item creation).
-  const pendingSkipScrollRef = useRef(false)
 
   const clearDebounce = () => {
     if (debounceRef.current === null) return
@@ -144,9 +138,8 @@ export const TapToEditField = ({
 
   useEffect(() => clearDebounce, [])
 
-  const enterEditMode = (caretOffset: number | null, skipScroll = false) => {
+  const enterEditMode = (caretOffset: number | null) => {
     pendingCaretOffsetRef.current = caretOffset
-    pendingSkipScrollRef.current = skipScroll
     setDraft(value)
     lastCommittedRef.current = value
     setIsEditing(true)
@@ -157,7 +150,7 @@ export const TapToEditField = ({
   // re-trigger this on their own.
   useEffect(() => {
     if (!autoEnter) return
-    enterEditMode(autoEnter.caretOffset, true)
+    enterEditMode(autoEnter.caretOffset)
     onAutoEnterHandled?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoEnter])
@@ -208,7 +201,11 @@ export const TapToEditField = ({
     if (!node) return
     const field = findEditableField(node)
     if (!field) return
-    field.focus({ preventScroll: pendingSkipScrollRef.current })
+    // Always preventScroll: a click can only land here on text that's already on screen, and a
+    // sibling field committing in the same React commit can otherwise shift this field's
+    // position between mount and focus — letting the browser's native scroll-into-view "correct"
+    // to that shifted position reads as an unprompted jump even though the caret lands correctly.
+    field.focus({ preventScroll: true })
     const maxOffset = field.value.length
     const requestedOffset = pendingCaretOffsetRef.current
     const caretPosition = requestedOffset === null ? maxOffset : Math.max(0, Math.min(requestedOffset, maxOffset))

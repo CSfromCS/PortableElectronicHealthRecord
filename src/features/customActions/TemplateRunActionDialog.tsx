@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { formatFullName, joinNonBlank } from '@/lib/patientIdentity'
+import { FieldTip } from '@/lib/tips/FieldTip'
 import { classifyTemplateRepeatMode } from '@/features/templates/templateEngine'
 import type { CustomAction, Patient, ReportTemplate } from '@/types'
 
@@ -55,9 +56,9 @@ export const TemplateRunActionDialog = ({
           <p className='text-sm text-action-danger'>This action's template no longer exists — edit it in Manage Custom Actions to pick a new one.</p>
         ) : (
           <>
-            <p className='text-xs text-clay -mt-2'>
+            <FieldTip className='-mt-2'>
               Runs "{template.name}" and copies the result to the clipboard. Every patient matching this action's saved filter is included by default — deselect any that don't belong this time.
-            </p>
+            </FieldTip>
             <div className='flex items-center justify-between gap-2 flex-wrap'>
               <p className='text-xs text-clay'>{selectedPatients.length} of {patients.length} selected</p>
               <div className='flex gap-1.5 flex-wrap justify-end'>
