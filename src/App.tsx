@@ -6577,14 +6577,14 @@ function App() {
               <p className='text-xs text-clay/65 mt-0.5 font-medium'>Portable Unofficial Health Record, Really!</p>
             </div>
           </div>
-          <div className='hidden sm:flex items-center justify-end gap-2'>
+          <div className='hidden sm:flex flex-wrap items-center justify-end gap-2'>
             <SyncButton
               status={syncButtonStatus}
               onClick={() => void runSyncNow()}
               disabled={isSyncBusy}
               lastSyncedAt={syncConfig?.lastSyncedAt ?? null}
             />
-            <div className='flex gap-0.5 bg-blush-sand/60 rounded-xl p-1 border border-clay/15 shadow-sm'>
+            <div className='flex shrink-0 gap-0.5 bg-blush-sand/60 rounded-xl p-1 border border-clay/15 shadow-sm'>
               <Button variant={view === 'patients' ? 'default' : 'ghost'} size='sm' onClick={() => setView('patients')}>Patients</Button>
               {canShowFocusedPatientNavButton ? (
                 <Button
