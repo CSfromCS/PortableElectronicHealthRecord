@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Bookmark, ChevronLeft, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Bookmark, ChevronLeft, Copy, Pencil, Plus, Trash2 } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,6 +16,7 @@ import { BulkTagPicker } from '@/features/tags/BulkTagPicker'
 import { TagChip } from '@/features/tags/TagChip'
 import { isWardTagCustomized } from '@/features/tags/wardTagUtils'
 import { PatientSortConfigDialog } from '@/features/patients/PatientSortConfigDialog'
+import { createPatientSortLevelId } from '@/features/patients/patientSort'
 import type { CustomView, PatientSortConfig, TagDefinition, TagGroupDefinition } from '@/types'
 import type { TagFilterMode } from './patientFilterUtils'
 
@@ -52,6 +53,14 @@ export const ManageCustomViewsScreen = ({
   const orderedViews = [...views].sort((a, b) => a.sortOrder - b.sortOrder)
   const tagsById = new Map(tags.map((tag) => [tag.id, tag]))
   const wardsById = new Map(wards.map((tag) => [tag.id, tag]))
+  // Ward already has its own dedicated checklist below (see `wards`) — excluded from the general
+  // Tags picker so it doesn't also show up there a second time. Kept in the full `tags` list
+  // (unfiltered) for the sort config dialog below, which needs Ward tags selectable for a
+  // "sort by ward order" tag-order level.
+  const nonWardTags = useMemo(() => {
+    const wardIds = new Set(wards.map((tag) => tag.id))
+    return tags.filter((tag) => tag.id === undefined || !wardIds.has(tag.id))
+  }, [tags, wards])
 
   const openCreate = () => {
     setEditingViewId(null)
@@ -120,6 +129,21 @@ export const ManageCustomViewsScreen = ({
     setDeleteTarget(null)
   }
 
+  // Regenerates the sort config's own level ids (if any) so the duplicate's sort editor is fully
+  // independent of the original's, matching how duplicateTemplate handles its own per-instance ids.
+  const duplicateView = async (view: CustomView) => {
+    const nextSortOrder = views.length > 0 ? Math.max(...views.map((v) => v.sortOrder)) + 1 : 0
+    await db.customViews.add({
+      name: `${view.name} (Copy)`,
+      tagIds: [...view.tagIds],
+      tagMode: view.tagMode,
+      wardTagIds: [...view.wardTagIds],
+      sortConfig: view.sortConfig ? { levels: view.sortConfig.levels.map((level) => ({ ...level, id: createPatientSortLevelId() })) } : undefined,
+      sortOrder: nextSortOrder,
+      createdAt: new Date().toISOString(),
+    })
+  }
+
   const reorderViews = async (sourceId: number, targetId: number, position: DropPosition) => {
     const reordered = moveItemByKey(orderedViews, (view) => view.id, sourceId, targetId, position)
     await db.transaction('rw', [db.customViews], async () => {
@@ -170,6 +194,9 @@ export const ManageCustomViewsScreen = ({
                   <span className='flex-1 text-sm font-medium text-espresso truncate'>{view.name}</span>
                   <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${view.name}`} onClick={() => openEdit(view)}>
                     <Pencil className='h-3.5 w-3.5' />
+                  </Button>
+                  <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Duplicate ${view.name}`} onClick={() => void duplicateView(view)}>
+                    <Copy className='h-3.5 w-3.5' />
                   </Button>
                   <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Delete ${view.name}`} onClick={() => setDeleteTarget(view)}>
                     <Trash2 className='h-3.5 w-3.5' />
@@ -238,7 +265,7 @@ export const ManageCustomViewsScreen = ({
                         </Button>
                       </div>
                     </div>
-                    <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(draft.tagIds)} onToggle={toggleDraftTag} />
+                    <BulkTagPicker tags={nonWardTags} groups={groups} selectedTagIds={new Set(draft.tagIds)} onToggle={toggleDraftTag} />
                   </div>
 
                   <div className='space-y-1.5'>

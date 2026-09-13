@@ -1,5 +1,39 @@
 import type { DailyProblemNote, DailyUpdate, MasterProblem } from '@/types'
 
+/** 'a', 'b', 'c', ... for a sub-problem's position among its siblings — appended to the parent's
+ * own number (see `buildMasterProblemLabels`) to form its label, e.g. "1a", "1b". */
+export const subProblemLabelSuffix = (index: number): string => String.fromCharCode(97 + index)
+
+/** Labels every problem the same way the Master Problem List numbers them — "1", "2", ... for
+ * top-level problems (in `sortOrder`) and "1a", "1b", "2a", ... for their sub-problems (also in
+ * `sortOrder`) — so any other view referencing a problem by id (e.g. the Simple Problem List's
+ * group badges) always shows the same number the user sees there, sub-problems included. Accepts
+ * every problem for a patient regardless of status, so a since-resolved problem still labels
+ * correctly. */
+export const buildMasterProblemLabels = (problems: MasterProblem[]): Map<number, string> => {
+  const topLevel = problems.filter((problem) => problem.parentId === null).sort((a, b) => a.sortOrder - b.sortOrder)
+  const childrenByParentId = new Map<number, MasterProblem[]>()
+  problems.forEach((problem) => {
+    if (problem.parentId === null || problem.id === undefined) return
+    const list = childrenByParentId.get(problem.parentId) ?? []
+    list.push(problem)
+    childrenByParentId.set(problem.parentId, list)
+  })
+  childrenByParentId.forEach((list) => list.sort((a, b) => a.sortOrder - b.sortOrder))
+
+  const labels = new Map<number, string>()
+  topLevel.forEach((problem, index) => {
+    if (problem.id === undefined) return
+    labels.set(problem.id, String(index + 1))
+    const children = childrenByParentId.get(problem.id) ?? []
+    children.forEach((child, childIndex) => {
+      if (child.id === undefined) return
+      labels.set(child.id, `${index + 1}${subProblemLabelSuffix(childIndex)}`)
+    })
+  })
+  return labels
+}
+
 export const normalizeDailyProblemNotes = (value: unknown): DailyProblemNote[] => {
   if (!Array.isArray(value)) return []
 
