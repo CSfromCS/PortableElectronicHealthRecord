@@ -206,7 +206,7 @@ import {
   removeTagsFromPatients,
   toggleTagOnPatient,
 } from './features/tags/tagUtils'
-import { SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
+import { SERVICE_TAG_GROUP_NAME, WARD_TAG_GROUP_NAME } from './features/tags/tagConstants'
 import { FilterButton } from './features/filters/FilterButton'
 import { FilterSummary } from './features/filters/FilterSummary'
 import { PatientFilterDialog } from './features/filters/PatientFilterDialog'
@@ -1068,6 +1068,10 @@ function App() {
     () => (tagGroups ?? []).find((group) => group.name === SERVICE_TAG_GROUP_NAME)?.id,
     [tagGroups],
   )
+  const wardGroupId = useMemo(
+    () => (tagGroups ?? []).find((group) => group.name === WARD_TAG_GROUP_NAME)?.id,
+    [tagGroups],
+  )
   // Most-used-first, so the picker's suggestion list (ServiceTagMultiSelect/ServiceTagSelect)
   // surfaces likely picks before the user types anything — ties fall back to creation order.
   const serviceTags = useMemo(() => {
@@ -1083,9 +1087,12 @@ function App() {
       return countDiff !== 0 ? countDiff : a.sortOrder - b.sortOrder
     })
   }, [tagDefinitions, serviceGroupId, patients])
-  const nonServiceTagDefinitions = useMemo(
-    () => (tagDefinitions ?? []).filter((tag) => tag.groupId === undefined || tag.groupId !== serviceGroupId),
-    [tagDefinitions, serviceGroupId],
+  // Excludes Service and Ward tags — both are applied through their own dedicated fields
+  // (ServiceTagMultiSelect/ServiceTagSelect, WardTagSelect), so surfacing them again in the
+  // patient's general tag picker would just be a redundant, confusing way to apply the same tag.
+  const nonServiceOrWardTagDefinitions = useMemo(
+    () => (tagDefinitions ?? []).filter((tag) => tag.groupId === undefined || (tag.groupId !== serviceGroupId && tag.groupId !== wardGroupId)),
+    [tagDefinitions, serviceGroupId, wardGroupId],
   )
 
   // Add-patient form has no patient record yet, so newly created/selected service tags are staged
@@ -1201,8 +1208,8 @@ function App() {
     })
   }
   const bulkTagPickerSelectedTags = useMemo(
-    () => nonServiceTagDefinitions.filter((tag) => tag.id !== undefined && bulkTagPickerSelectedIds.has(tag.id)),
-    [nonServiceTagDefinitions, bulkTagPickerSelectedIds],
+    () => nonServiceOrWardTagDefinitions.filter((tag) => tag.id !== undefined && bulkTagPickerSelectedIds.has(tag.id)),
+    [nonServiceOrWardTagDefinitions, bulkTagPickerSelectedIds],
   )
   const confirmBulkTagAction = async () => {
     if (!bulkTagDialogMode) return
@@ -6961,7 +6968,7 @@ function App() {
                 </DialogHeader>
                 <ScrollArea className='max-h-[60vh] pr-3'>
                   <BulkTagPicker
-                    tags={nonServiceTagDefinitions}
+                    tags={nonServiceOrWardTagDefinitions}
                     groups={tagGroups ?? []}
                     selectedTagIds={bulkTagPickerSelectedIds}
                     onToggle={toggleBulkTagPickerTag}
@@ -7499,7 +7506,7 @@ function App() {
                       {isEditingTags ? (
                         <TagPicker
                           patient={selectedPatient}
-                          tags={nonServiceTagDefinitions}
+                          tags={nonServiceOrWardTagDefinitions}
                           groups={tagGroups ?? []}
                           onToggle={(tag) => {
                             const wasApplied = tag.id !== undefined && (selectedPatient.tagIds ?? []).includes(tag.id)
