@@ -13,13 +13,15 @@ import { dropIndicatorClassName, type DropPosition } from '@/lib/dnd/useDragReor
 import { getMasterProblemColor } from '@/lib/color'
 import { useEntrySelection } from '@/lib/useEntrySelection'
 import { cn } from '@/lib/utils'
+import { buildMasterProblemLabels } from './problemUtils'
 import type { MasterProblem, SimpleProblemItem } from '@/types'
 
 type SimpleProblemListEditorProps = {
   items: SimpleProblemItem[]
-  /** Every top-level master problem for this patient, any status — used only to number the small
-   * badges on each color band (see buildGroupBands) so a badge always matches that problem's real
-   * number in the Master List, even if it's since been resolved. */
+  /** Every master problem for this patient (top-level and sub-problems), any status — used only
+   * to number the small badges on each color band (see buildGroupBands) so a badge always matches
+   * that problem's real number (or "1a"-style sub-problem label) in the Master List, even if it's
+   * since been resolved. */
   allProblems: MasterProblem[]
   /** Top-level, active master problems for this patient — the pickable targets for "group under
    * an existing problem" and for "ungroup from." Grouping under a brand-new problem instead
@@ -87,13 +89,11 @@ export function SimpleProblemListEditor({
   const sortedItems = [...items].sort((a, b) => a.sortOrder - b.sortOrder)
   const allIds = sortedItems.map((item) => item.id).filter((id): id is number => id !== undefined)
 
-  // Same numbering as the Master List's own top-level problems, so a badge here always matches
-  // what the user sees there — computed from every top-level problem regardless of status, not
-  // just the active ones offered for grouping, so a since-resolved problem's badge stays correct.
-  const labelByProblemId = useMemo(() => {
-    const topLevel = allProblems.filter((problem) => problem.parentId === null).sort((a, b) => a.sortOrder - b.sortOrder)
-    return new Map(topLevel.flatMap((problem, index) => (problem.id === undefined ? [] : [[problem.id, String(index + 1)] as const])))
-  }, [allProblems])
+  // Same numbering as the Master List itself (including "1a"-style sub-problem labels), so a
+  // badge here always matches what the user sees there — computed from every problem regardless
+  // of status, not just the active ones offered for grouping, so a since-resolved problem's badge
+  // stays correct.
+  const labelByProblemId = useMemo(() => buildMasterProblemLabels(allProblems), [allProblems])
 
   const commitDraft = () => {
     const text = draftText.trim()

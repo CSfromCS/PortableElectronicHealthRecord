@@ -15,6 +15,7 @@ import { useEntrySelection } from '@/lib/useEntrySelection'
 import { getMasterProblemColor } from '@/lib/color'
 import { formatPartialDateConfirmation, parsePartialDate, toLocalISODate } from '@/lib/dateTime'
 import { cn } from '@/lib/utils'
+import { subProblemLabelSuffix } from './problemUtils'
 import type { MasterProblem } from '@/types'
 
 type MasterProblemListEditorProps = {
@@ -37,7 +38,6 @@ type MasterProblemListEditorProps = {
   onInvalidDate: (message: string) => void
 }
 
-const subProblemLabel = (index: number): string => String.fromCharCode(97 + index)
 const NO_MERGE_TARGET = 'none'
 
 // Shared by the header row and every data row so their cells line up exactly: handle/checkbox,
@@ -120,7 +120,7 @@ export function MasterProblemListEditor({
       rows.push({ problem, label: String(index + 1), colorSourceId: problem.id, isSubProblem: false })
       const children = childrenByParentId.get(problem.id) ?? []
       children.forEach((child, childIndex) => {
-        rows.push({ problem: child, label: `${index + 1}${subProblemLabel(childIndex)}`, colorSourceId: problem.id as number, isSubProblem: true })
+        rows.push({ problem: child, label: `${index + 1}${subProblemLabelSuffix(childIndex)}`, colorSourceId: problem.id as number, isSubProblem: true })
       })
     })
     return rows
