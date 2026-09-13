@@ -1,5 +1,5 @@
 import { db } from '@/db'
-import { toPendingProblemBlocks } from '@/features/problems/problemUtils'
+import { buildActiveDailyProblemNotes } from '@/features/problems/problemUtils'
 import type { DailyUpdate } from '@/types'
 
 export type ChecklistItem = { text: string; completed: boolean; notes?: string }
@@ -216,11 +216,12 @@ export const appendChecklistItemsForPatientDate = async (
   const latestPriorUpdate = selectLatestDailyUpdate(priorUpdates)
 
   const checklist = insertMissingChecklistItems(toPendingChecklistItems(latestPriorUpdate?.checklist), cleanTexts)
+  const activeMasterProblems = await db.masterProblems.where('patientId').equals(patientId).toArray()
 
   await db.dailyUpdates.add({
     patientId,
     date,
-    problems: toPendingProblemBlocks(latestPriorUpdate?.problems),
+    problems: buildActiveDailyProblemNotes(activeMasterProblems, patientId),
     subjective: '',
     objective: '',
     assessment: '',

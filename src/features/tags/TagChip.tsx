@@ -1,16 +1,7 @@
 import type { TagDefinition } from '@/types'
+import { getContrastingTextColor } from '@/lib/color'
 import { cn } from '@/lib/utils'
 import { renderTagDisplayText } from './tagUtils'
-
-const getContrastingTextColor = (backgroundColor: string): string => {
-  const hex = backgroundColor.replace('#', '')
-  if (hex.length !== 6) return '#1a1a1a'
-  const r = Number.parseInt(hex.slice(0, 2), 16)
-  const g = Number.parseInt(hex.slice(2, 4), 16)
-  const b = Number.parseInt(hex.slice(4, 6), 16)
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-  return luminance > 0.6 ? '#1a1a1a' : '#ffffff'
-}
 
 export type TagChipRoleMarker = 'M' | 'R'
 

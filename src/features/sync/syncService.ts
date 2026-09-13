@@ -4,10 +4,12 @@ import type {
   CustomView,
   DailyUpdate,
   LabEntry,
+  MasterProblem,
   MedicationEntry,
   OrderEntry,
   Patient,
   ReportTemplate,
+  SimpleProblemItem,
   TagDefinition,
   TagEvent,
   TagGroupDefinition,
@@ -17,7 +19,11 @@ import { normalizeDailyUpdate } from '@/features/problems/problemUtils'
 import { decryptBlobToPayload, encryptPayloadToBlob, sha256Hex } from './crypto'
 
 const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
-const SYNC_DATA_VERSION = 2
+// Bumped for the Master Problem List: DailyUpdate.problems changed shape from embedded
+// title/notes/completed blocks to {masterProblemId, notes} references against the new
+// masterProblems table — a payload from an older app version would otherwise silently
+// misinterpret that field, so cross-version sync is refused instead (see pullSnapshotWithMeta).
+const SYNC_DATA_VERSION = 3
 const DEFAULT_SYNC_ENDPOINT = 'https://puhr-sync.csfromcs.workers.dev'
 const LEGACY_SYNC_HOSTS = new Set([
   'purh-sync-dfeeeqh8hhdhhfb0.southeastasia-01.azurewebsites.net',
@@ -42,6 +48,8 @@ type SyncPayload = {
   reportTemplates?: ReportTemplate[]
   customViews?: CustomView[]
   customActions?: CustomAction[]
+  masterProblems?: MasterProblem[]
+  simpleProblemItems?: SimpleProblemItem[]
 }
 
 type RemoteDescription = {
@@ -200,7 +208,7 @@ const parseDescription = (descriptionRaw: string): RemoteDescription | null => {
 const toIsoNow = (): string => new Date().toISOString()
 
 const getLatestLocalChangeAt = async (): Promise<string | null> => {
-  const [patients, dailyUpdates, vitals, medications, labs, orders, reportTemplates, customViews, customActions] = await Promise.all([
+  const [patients, dailyUpdates, vitals, medications, labs, orders, reportTemplates, customViews, customActions, masterProblems, simpleProblemItems] = await Promise.all([
     db.patients.toArray(),
     db.dailyUpdates.toArray(),
     db.vitals.toArray(),
@@ -210,6 +218,8 @@ const getLatestLocalChangeAt = async (): Promise<string | null> => {
     db.reportTemplates.toArray(),
     db.customViews.toArray(),
     db.customActions.toArray(),
+    db.masterProblems.toArray(),
+    db.simpleProblemItems.toArray(),
   ])
 
   let latestTimestamp = 0
@@ -280,6 +290,22 @@ const getLatestLocalChangeAt = async (): Promise<string | null> => {
     }
   }
 
+  // Same "only catches creation, not a later edit" limitation as templates/views/actions above —
+  // MasterProblem carries no separate "last edited" timestamp of its own.
+  for (const problem of masterProblems) {
+    const parsed = Date.parse(problem.createdAt)
+    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
+      latestTimestamp = parsed
+    }
+  }
+
+  for (const item of simpleProblemItems) {
+    const parsed = Date.parse(item.createdAt)
+    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
+      latestTimestamp = parsed
+    }
+  }
+
   return latestTimestamp > 0 ? new Date(latestTimestamp).toISOString() : null
 }
 
@@ -297,6 +323,8 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     reportTemplates,
     customViews,
     customActions,
+    masterProblems,
+    simpleProblemItems,
   ] = await Promise.all([
     db.patients.toArray(),
     db.dailyUpdates.toArray(),
@@ -310,6 +338,8 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     db.reportTemplates.toArray(),
     db.customViews.toArray(),
     db.customActions.toArray(),
+    db.masterProblems.toArray(),
+    db.simpleProblemItems.toArray(),
   ])
 
   return {
@@ -328,6 +358,8 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     reportTemplates,
     customViews,
     customActions,
+    masterProblems,
+    simpleProblemItems,
   }
 }
 
@@ -360,6 +392,8 @@ const isSyncPayload = (value: unknown): value is SyncPayload => {
     && (candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates))
     && (candidate.customViews === undefined || Array.isArray(candidate.customViews))
     && (candidate.customActions === undefined || Array.isArray(candidate.customActions))
+    && (candidate.masterProblems === undefined || Array.isArray(candidate.masterProblems))
+    && (candidate.simpleProblemItems === undefined || Array.isArray(candidate.simpleProblemItems))
   )
 }
 
@@ -390,6 +424,12 @@ const getMissingSecondaryTables = (payload: SyncPayload): string[] => {
   if (payload.customActions === undefined) {
     missingTables.push('custom actions')
   }
+  if (payload.masterProblems === undefined) {
+    missingTables.push('master problem list')
+  }
+  if (payload.simpleProblemItems === undefined) {
+    missingTables.push('simple problem list')
+  }
 
   return missingTables
 }
@@ -418,6 +458,8 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       db.reportTemplates,
       db.customViews,
       db.customActions,
+      db.masterProblems,
+      db.simpleProblemItems,
     ],
     async () => {
     await db.patients.clear()
@@ -498,6 +540,20 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       await db.customActions.clear()
       if (payload.customActions.length > 0) {
         await db.customActions.bulkPut(payload.customActions)
+      }
+    }
+
+    if (payload.masterProblems !== undefined) {
+      await db.masterProblems.clear()
+      if (payload.masterProblems.length > 0) {
+        await db.masterProblems.bulkPut(payload.masterProblems)
+      }
+    }
+
+    if (payload.simpleProblemItems !== undefined) {
+      await db.simpleProblemItems.clear()
+      if (payload.simpleProblemItems.length > 0) {
+        await db.simpleProblemItems.bulkPut(payload.simpleProblemItems)
       }
     }
   })

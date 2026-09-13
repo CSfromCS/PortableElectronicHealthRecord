@@ -34,12 +34,13 @@ import type {
   FlatVariableId,
   GroupVariableInstance,
   LabEntry,
+  MasterProblem,
   MedicationEntry,
   OrderEntry,
   Patient,
   PhotoAttachment,
-  ProblemBlock,
   ReportTemplate,
+  SimpleProblemItem,
   TagAutomationRole,
   TagDefinition,
   TagEvent,
@@ -67,6 +68,8 @@ const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
   reportTemplates: EntityTable<ReportTemplate, 'id'>
   dateTimeFormats: EntityTable<DateTimeFormatDefinition, 'id'>
   customViews: EntityTable<CustomView, 'id'>
+  masterProblems: EntityTable<MasterProblem, 'id'>
+  simpleProblemItems: EntityTable<SimpleProblemItem, 'id'>
 }
 
 db.version(1).stores({
@@ -364,7 +367,6 @@ db.version(7).stores({
   // Splits the Profile tab into Profile + Database: Chief Complaint, HPI, PMH, PE, and Clerk
   // notes merge into one unstructured `database` field so no existing text is lost. See issue #70.
   const patientTable = tx.table<Patient, number>('patients')
-  const dailyUpdateTable = tx.table<DailyUpdate, number>('dailyUpdates')
 
   const legacyPatients = await patientTable.toArray()
   for (const patient of legacyPatients) {
@@ -394,12 +396,17 @@ db.version(7).stores({
   }
 
   // Problems now carry an explicit `completed` flag (default false) so they can roll forward
-  // per-date the same way Checklist items already do.
-  const dailyUpdates = await dailyUpdateTable.toArray()
+  // per-date the same way Checklist items already do. `problems` here is still the historical
+  // embedded-block shape (title/notes/completed) that predates the Master Problem List's
+  // masterProblemId-referencing DailyProblemNote, so the table is cast to that legacy shape locally
+  // rather than to the current `DailyUpdate`.
+  type LegacyProblemBlockV7 = { id: string; title: string; notes: string; completed?: boolean }
+  const legacyDailyUpdateTable = tx.table<Omit<DailyUpdate, 'problems'> & { problems: LegacyProblemBlockV7[] }, number>('dailyUpdates')
+  const dailyUpdates = await legacyDailyUpdateTable.toArray()
   await Promise.all(dailyUpdates.map((entry) => {
     if (entry.id === undefined) return Promise.resolve()
-    const problems = entry.problems.map((problem) => ({ ...problem, completed: Boolean((problem as ProblemBlock).completed) }))
-    return dailyUpdateTable.update(entry.id, { problems })
+    const problems = entry.problems.map((problem) => ({ ...problem, completed: Boolean(problem.completed) }))
+    return legacyDailyUpdateTable.update(entry.id, { problems })
   }))
 })
 
@@ -1181,6 +1188,130 @@ db.version(25).stores({
 
     await reportTemplateTable.update(template.id, updates)
   }
+})
+
+db.version(26).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  // Master Problem List: a persistent, per-admission problem identity independent of any single
+  // date — see masterProblems' upgrade below for how existing per-date problem blocks migrate in.
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+}).upgrade(async (tx) => {
+  // Promotes each per-date embedded problem block (title/notes/completed, previously carried
+  // forward by reusing the same string id across dates) into a persistent MasterProblem row, and
+  // reduces every date's own entry to a lightweight {masterProblemId, notes} reference. Carry-
+  // forward already relied on that same block id being reused verbatim across dates, so grouping
+  // every date's blocks by that id reliably reconstructs each problem's full history, including
+  // any title changes (recorded into nameHistory, dated at the date the new title first appears)
+  // and whether/when it was ever marked resolved.
+  type LegacyProblemBlock = { id: string; title: string; notes: string; completed?: boolean }
+  type LegacyDailyUpdate = Omit<DailyUpdate, 'problems'> & { problems: LegacyProblemBlock[] }
+  const legacyDailyUpdateTable = tx.table<LegacyDailyUpdate, number>('dailyUpdates')
+  const dailyUpdateTable = tx.table<DailyUpdate, number>('dailyUpdates')
+  const masterProblemTable = tx.table<MasterProblem, number>('masterProblems')
+
+  const allUpdates = await legacyDailyUpdateTable.toArray()
+  const updatesByPatient = new Map<number, LegacyDailyUpdate[]>()
+  allUpdates.forEach((entry) => {
+    const list = updatesByPatient.get(entry.patientId) ?? []
+    list.push(entry)
+    updatesByPatient.set(entry.patientId, list)
+  })
+
+  for (const [patientId, updates] of updatesByPatient) {
+    const sortedUpdates = [...updates].sort((a, b) => a.date.localeCompare(b.date))
+
+    type BlockOccurrence = { date: string; title: string; completed: boolean }
+    const occurrencesByBlockId = new Map<string, BlockOccurrence[]>()
+    sortedUpdates.forEach((update) => {
+      (update.problems ?? []).forEach((block) => {
+        const list = occurrencesByBlockId.get(block.id) ?? []
+        list.push({ date: update.date, title: block.title, completed: Boolean(block.completed) })
+        occurrencesByBlockId.set(block.id, list)
+      })
+    })
+
+    const masterProblemIdByBlockId = new Map<string, number>()
+    let nextSortOrder = 0
+    for (const [blockId, occurrences] of occurrencesByBlockId) {
+      const nameHistory: MasterProblem['nameHistory'] = []
+      let currentTitle = occurrences[0].title
+      for (let index = 1; index < occurrences.length; index += 1) {
+        const occurrence = occurrences[index]
+        if (occurrence.title !== currentTitle) {
+          if (currentTitle.trim()) nameHistory.push({ name: currentTitle, changedAt: occurrence.date })
+          currentTitle = occurrence.title
+        }
+      }
+
+      const resolvedOccurrences = occurrences.filter((occurrence) => occurrence.completed)
+      const lastResolvedOccurrence = resolvedOccurrences[resolvedOccurrences.length - 1] ?? null
+
+      const newId = await masterProblemTable.add({
+        patientId,
+        parentId: null,
+        sortOrder: nextSortOrder,
+        currentTitle,
+        nameHistory,
+        dateIdentified: occurrences[0].date,
+        status: lastResolvedOccurrence ? 'resolved' : 'active',
+        dateResolved: lastResolvedOccurrence ? lastResolvedOccurrence.date : null,
+        resolutionNotes: '',
+        mergedIntoId: null,
+        createdAt: new Date().toISOString(),
+      })
+      masterProblemIdByBlockId.set(blockId, newId)
+      nextSortOrder += 1
+    }
+
+    await Promise.all(sortedUpdates.map((update) => {
+      if (update.id === undefined) return Promise.resolve()
+      const problems = (update.problems ?? []).flatMap((block) => {
+        const masterProblemId = masterProblemIdByBlockId.get(block.id)
+        return masterProblemId === undefined ? [] : [{ masterProblemId, notes: block.notes }]
+      })
+      return dailyUpdateTable.update(update.id, { problems })
+    }))
+  }
+})
+
+db.version(27).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+  // Simple Problem List (salient features, simplified from the Database tab, later grouped under
+  // Master Problems) — a new table, nothing to migrate.
+  simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
 })
 
 export { db }
