@@ -16,8 +16,10 @@ import {
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from './db'
 import type {
+  DailyProblemNote,
   DailyUpdate,
   LabEntry,
+  MasterProblem,
   MedicationEntry,
   OrderEntry,
   Patient,
@@ -62,6 +64,7 @@ import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import {
   formatDateShortMonthDay,
   formatCalculatedNumber,
+  getEffectiveAdmitDate,
   parseNumericInput,
   toLocalISODate,
   toLocalTime,
@@ -118,7 +121,9 @@ import {
   type ReviewablePhotoAttachment,
 } from './features/photos/photoMentions'
 import { ProblemListEditor } from './features/problems/ProblemListEditor'
-import { normalizeDailyUpdate, normalizeProblemBlocks, toPendingProblemBlocks } from './features/problems/problemUtils'
+import { MasterProblemListEditor } from './features/problems/MasterProblemListEditor'
+import { SimpleProblemListEditor } from './features/problems/SimpleProblemListEditor'
+import { buildActiveDailyProblemNotes, normalizeDailyProblemNotes, normalizeDailyUpdate } from './features/problems/problemUtils'
 const TabSettingsScreen = lazy(() =>
   import('./features/tabs/TabSettingsScreen').then((module) => ({ default: module.TabSettingsScreen })),
 )
@@ -684,6 +689,11 @@ function App() {
   // demographics header.
   const [demographicsEditOverrideByPatientId, setDemographicsEditOverrideByPatientId] = useState<Map<number, boolean>>(new Map())
   const demographicsCollapseDefaultSeedRef = useRef<Map<number, boolean>>(new Map())
+  // Snapshot of a Master Problem's title from just before an active rename edit session started —
+  // see beginMasterProblemTitleEdit/finalizeMasterProblemTitleEdit below — so a burst of
+  // debounced-autosave commits during one edit session logs a single nameHistory entry when the
+  // field actually loses focus, not one per intermediate autosave commit.
+  const masterProblemRenameSessionsRef = useRef<Map<number, string>>(new Map())
   const [searchQuery, setSearchQuery] = useState('')
   const [isAddPatientCollapsed, setIsAddPatientCollapsed] = useState(() => loadAddPatientCollapsed())
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active')
@@ -816,6 +826,19 @@ function App() {
     setPendingDeleteAction(null)
   }, [pendingDeleteAction])
   const [selectedTab, setSelectedTab] = useState<PatientTabId>('profile')
+  // Split screen (desktop only, see SPLIT_SCREEN_TAB_IDS) — view and edit any two of the
+  // Database/Simple List/MPL/Problems tabs side by side, each with its own independent tab choice.
+  const [splitScreenEnabled, setSplitScreenEnabled] = useState(false)
+  const [splitLeftTab, setSplitLeftTab] = useState<PatientTabId>('simpleList')
+  const [splitRightTab, setSplitRightTab] = useState<PatientTabId>('masterList')
+  // #root's max-width is set globally in index.css for the normal single-column reading layout —
+  // split screen needs real room for two panes, so widen it (50%) only while active.
+  useEffect(() => {
+    const root = document.getElementById('root')
+    if (!root) return
+    root.classList.toggle('split-screen-wide', splitScreenEnabled)
+    return () => root.classList.remove('split-screen-wide')
+  }, [splitScreenEnabled])
   const [patientTabSettings, setPatientTabSettings] = useState<PatientTabSetting[]>(() => loadPatientTabSettings())
   const updatePatientTabSettings = useCallback((next: PatientTabSetting[]) => {
     setPatientTabSettings(next)
@@ -997,6 +1020,8 @@ function App() {
   const reportTemplates = useLiveQuery(() => db.reportTemplates.toArray(), [])
   const dateTimeFormats = useLiveQuery(() => db.dateTimeFormats.toArray(), [])
   const customViews = useLiveQuery(() => db.customViews.toArray(), [])
+  const allMasterProblems = useLiveQuery(() => db.masterProblems.toArray(), [])
+  const allSimpleProblemItems = useLiveQuery(() => db.simpleProblemItems.toArray(), [])
   const orderedCustomViews = useMemo(() => [...(customViews ?? [])].sort((a, b) => a.sortOrder - b.sortOrder), [customViews])
   // Custom Views: named, saved Tag+Ward combos shared across the Patients list, Master Checklist,
   // and Reports picker filters — save/rename/delete here since they're just Dexie CRUD, same as
@@ -1293,8 +1318,18 @@ function App() {
       }
     }
 
+    // Only catches a master problem being created, not a later edit (rename/resolve/merge) — it
+    // carries no separate "last edited" timestamp of its own, same limitation this already accepts
+    // for report templates/custom views/custom actions.
+    for (const problem of allMasterProblems ?? []) {
+      const parsed = Date.parse(problem.createdAt)
+      if (Number.isFinite(parsed) && parsed > latestTimestamp) {
+        latestTimestamp = parsed
+      }
+    }
+
     return latestTimestamp > 0 ? new Date(latestTimestamp).toISOString() : null
-  }, [allDailyUpdates, patients])
+  }, [allDailyUpdates, allMasterProblems, patients])
 
   const hasLocalChangesSinceLastSync = useMemo(() => {
     const lastSyncedMs = syncConfig?.lastSyncedAt ? Date.parse(syncConfig.lastSyncedAt) : Number.NaN
@@ -1854,6 +1889,23 @@ function App() {
     })
     return grouped
   }, [allDailyUpdates])
+
+  // Global lookup (Dexie ids are unique across patients) — resolves a DailyProblemNote's
+  // masterProblemId to its canonical title/status for the Problems tab and report templates.
+  const masterProblemsById = useMemo(
+    () => new Map((allMasterProblems ?? []).flatMap((problem) => (problem.id === undefined ? [] : [[problem.id, problem] as const]))),
+    [allMasterProblems],
+  )
+
+  const masterProblemsForSelectedPatient = useMemo(() => {
+    if (selectedPatientId === null) return []
+    return (allMasterProblems ?? []).filter((problem) => problem.patientId === selectedPatientId)
+  }, [allMasterProblems, selectedPatientId])
+
+  const simpleProblemItemsForSelectedPatient = useMemo(() => {
+    if (selectedPatientId === null) return []
+    return (allSimpleProblemItems ?? []).filter((item) => item.patientId === selectedPatientId)
+  }, [allSimpleProblemItems, selectedPatientId])
 
   const selectedPatientOrders = useMemo(() => {
     if (selectedPatientId === null) return []
@@ -2480,13 +2532,14 @@ function App() {
   const loadDailyUpdate = useCallback(async (patientId: number, date: string) => {
     const update = await db.dailyUpdates.where('[patientId+date]').equals([patientId, date]).first()
     if (!update) {
+      const activeMasterProblems = await db.masterProblems.where('patientId').equals(patientId).toArray()
       const priorUpdates = (await db.dailyUpdates.where('patientId').equals(patientId).toArray())
         .filter((entry) => entry.date < date)
       const latestPriorUpdate = selectLatestDailyUpdate(priorUpdates)
       setDailyUpdateId(undefined)
       setDailyUpdateForm({
         ...initialDailyUpdateForm,
-        problems: toPendingProblemBlocks(latestPriorUpdate?.problems),
+        problems: buildActiveDailyProblemNotes(activeMasterProblems, patientId),
         checklist: toPendingChecklistItems(latestPriorUpdate?.checklist),
       })
       setDailyDirty(false)
@@ -2496,7 +2549,7 @@ function App() {
     const normalizedUpdate = normalizeDailyUpdate(update)
     setDailyUpdateId(normalizedUpdate.id)
     setDailyUpdateForm({
-      problems: normalizeProblemBlocks(normalizedUpdate.problems),
+      problems: normalizeDailyProblemNotes(normalizedUpdate.problems),
       subjective: normalizedUpdate.subjective,
       objective: normalizedUpdate.objective,
       assessment: normalizedUpdate.assessment,
@@ -2509,7 +2562,7 @@ function App() {
   const applyDailyUpdateToForm = useCallback((update: DailyUpdate) => {
     const normalizedUpdate = normalizeDailyUpdate(update)
     setDailyUpdateForm({
-      problems: normalizeProblemBlocks(normalizedUpdate.problems),
+      problems: normalizeDailyProblemNotes(normalizedUpdate.problems),
       subjective: normalizedUpdate.subjective,
       objective: normalizedUpdate.objective,
       assessment: normalizedUpdate.assessment,
@@ -4189,7 +4242,7 @@ function App() {
           patientId: selectedPatientId,
           date: dailyDate,
           ...dailyUpdateForm,
-          problems: normalizeProblemBlocks(dailyUpdateForm.problems),
+          problems: normalizeDailyProblemNotes(dailyUpdateForm.problems),
           checklist: normalizeChecklistItems(dailyUpdateForm.checklist),
           lastUpdated: new Date().toISOString(),
         })
@@ -4208,6 +4261,596 @@ function App() {
     },
     [dailyDate, dailyUpdateForm, dailyUpdateId, selectedPatientId, touchPatientLastModified],
   )
+
+  // Master Problem List — a persistent, per-admission MasterProblem row per problem (separate
+  // from the per-date DailyProblemNote references in dailyUpdateForm.problems above). Adding a
+  // problem from either the Problems tab or the Master List tab creates one of these AND appends a
+  // reference to whichever date is currently open, so both tabs immediately show the same items.
+  const addMasterProblem = async (parentId: number | null, title = ''): Promise<number | null> => {
+    if (selectedPatientId === null) return null
+    const siblingCount = (allMasterProblems ?? []).filter((problem) => problem.patientId === selectedPatientId && problem.parentId === parentId).length
+    const newId = await db.masterProblems.add({
+      patientId: selectedPatientId,
+      parentId,
+      sortOrder: siblingCount,
+      currentTitle: title,
+      nameHistory: [],
+      dateIdentified: '',
+      status: 'active',
+      dateResolved: null,
+      resolutionNotes: '',
+      mergedIntoId: null,
+      createdAt: new Date().toISOString(),
+    })
+    if (typeof newId !== 'number') return null
+    setDailyUpdateForm((previous) => ({ ...previous, problems: [...previous.problems, { masterProblemId: newId, notes: '' }] }))
+    setDailyDirty(true)
+    return newId
+  }
+
+  // Renaming is just editing the title — no separate "rename mode". Only a real rename (the
+  // problem already had a non-blank title) is logged to nameHistory; the initial naming isn't.
+  // TapToEditField autosaves on a typing pause (~400ms) as well as on blur, so a title field's
+  // onCommit (below) fires repeatedly during one edit session — it always just autosaves
+  // currentTitle (no data-loss risk from a mid-typing crash/navigation). History is logged
+  // separately, only once the field truly loses focus: beginMasterProblemTitleEdit snapshots the
+  // title as it was *before this edit session started* (called from TapToEditField's
+  // onEnterEditMode, before any autosave can overwrite it), and finalizeMasterProblemTitleEdit
+  // (called from onFinalCommit, i.e. on blur) compares that snapshot against the final value and
+  // logs exactly one history entry for the whole session — not one per intermediate autosave.
+  const beginMasterProblemTitleEdit = (masterProblemId: number) => {
+    const existing = (allMasterProblems ?? []).find((problem) => problem.id === masterProblemId)
+    if (existing) masterProblemRenameSessionsRef.current.set(masterProblemId, existing.currentTitle)
+  }
+
+  const renameMasterProblem = async (masterProblemId: number, nextTitle: string) => {
+    const existing = (allMasterProblems ?? []).find((problem) => problem.id === masterProblemId)
+    if (!existing || existing.currentTitle === nextTitle) return
+    await db.masterProblems.update(masterProblemId, { currentTitle: nextTitle })
+  }
+
+  const finalizeMasterProblemTitleEdit = async (masterProblemId: number, finalTitle: string) => {
+    const originalTitle = masterProblemRenameSessionsRef.current.get(masterProblemId)
+    masterProblemRenameSessionsRef.current.delete(masterProblemId)
+    if (originalTitle === undefined || !originalTitle.trim() || originalTitle === finalTitle) return
+    const latest = await db.masterProblems.get(masterProblemId)
+    if (!latest || latest.currentTitle === originalTitle) return
+    await db.masterProblems.update(masterProblemId, { nameHistory: [...latest.nameHistory, { name: originalTitle, changedAt: dailyDate }] })
+  }
+
+  const updateMasterProblemDateIdentified = async (masterProblemId: number, nextValue: string) => {
+    await db.masterProblems.update(masterProblemId, { dateIdentified: nextValue })
+  }
+
+  // The Problems tab's single-click "Resolved" toggle — a fast in/out flip with no date/notes
+  // prompt, using whichever date is currently open. The Master List tab's Resolve/Merge (below)
+  // are the richer, deliberate versions of the same status change.
+  const toggleMasterProblemResolved = async (masterProblemId: number) => {
+    const existing = (allMasterProblems ?? []).find((problem) => problem.id === masterProblemId)
+    if (!existing) return
+    if (existing.status === 'resolved') {
+      await db.masterProblems.update(masterProblemId, { status: 'active', dateResolved: null, resolutionNotes: '', mergedIntoId: null })
+    } else {
+      await db.masterProblems.update(masterProblemId, { status: 'resolved', dateResolved: dailyDate, resolutionNotes: '' })
+    }
+  }
+
+  // The single Resolve action (Merge folded in as an optional "resolved into" reference — a
+  // resolved problem with no target is a plain resolution, one with a target is what used to be a
+  // separate Merge action). Resolved-into is a structured id, not free text, so it can't go stale
+  // if the target problem is later renamed. Accepts multiple ids at once for the Master List's
+  // bulk "Resolve" action and for resolving a problem together with its sub-problems.
+  const resolveMasterProblems = async (masterProblemIds: number[], dateResolved: string, resolutionNotes: string, resolvedIntoId: number | null) => {
+    await Promise.all(masterProblemIds.map((id) => db.masterProblems.update(id, { status: 'resolved', dateResolved, resolutionNotes, mergedIntoId: resolvedIntoId })))
+  }
+
+  const reopenMasterProblem = async (masterProblemId: number) => {
+    await db.masterProblems.update(masterProblemId, { status: 'active', dateResolved: null, resolutionNotes: '', mergedIntoId: null })
+  }
+
+  const reopenMasterProblems = async (masterProblemIds: number[]) => {
+    await Promise.all(masterProblemIds.map((id) => reopenMasterProblem(id)))
+  }
+
+  const removeMasterProblemNameHistoryEvent = async (masterProblemId: number, eventIndex: number) => {
+    const existing = (allMasterProblems ?? []).find((problem) => problem.id === masterProblemId)
+    if (!existing) return
+    const nameHistory = existing.nameHistory.filter((_, index) => index !== eventIndex)
+    await db.masterProblems.update(masterProblemId, { nameHistory })
+  }
+
+  // Hard-deletes the given problems (and cascades to any sub-problems, already included by the
+  // caller — see MasterProblemListEditor's bulkDeleteIds) and scrubs them out of whichever date is
+  // currently open. A saved day that references a deleted problem simply hides that stale
+  // reference (see ProblemListEditor's visibleDailyProblems filter) rather than crashing on it.
+  const deleteMasterProblems = async (masterProblemIds: number[]) => {
+    await db.masterProblems.bulkDelete(masterProblemIds)
+    const idSet = new Set(masterProblemIds)
+    setDailyUpdateForm((previous) => {
+      const filtered = previous.problems.filter((entry) => !idSet.has(entry.masterProblemId))
+      return filtered.length === previous.problems.length ? previous : { ...previous, problems: filtered }
+    })
+    setDailyDirty(true)
+  }
+
+  // Every structural move (drag-reorder/bulk promote/bulk demote/transfer) renumbers the full
+  // affected sibling group to dense 0..n-1 sortOrders rather than patching individual values, so
+  // gaps/duplicates can't accumulate across repeated moves.
+  const renumberMasterProblemSortOrders = async (orderedIds: number[]) => {
+    await Promise.all(orderedIds.map((id, index) => db.masterProblems.update(id, { sortOrder: index })))
+  }
+
+  // The Master List's order (MasterProblem.sortOrder) and the Problems tab's order
+  // (dailyUpdateForm.problems, for whichever date is currently open) are kept mirrored in both
+  // directions. This direction — after a Master List structural change — re-reads the patient's
+  // problems fresh from IndexedDB (rather than trusting the live-query state, which may not have
+  // caught up yet) and reorders whichever of today's problems are affected to match, without
+  // touching any other already-saved date's own array.
+  const syncDailyProblemsOrderToMasterProblems = async () => {
+    if (selectedPatientId === null) return
+    const freshProblems = await db.masterProblems.where('patientId').equals(selectedPatientId).toArray()
+    const topLevel = freshProblems.filter((problem) => problem.parentId === null).sort((a, b) => a.sortOrder - b.sortOrder)
+    const childrenByParentId = new Map<number, MasterProblem[]>()
+    freshProblems.forEach((problem) => {
+      if (problem.parentId === null || problem.id === undefined) return
+      const list = childrenByParentId.get(problem.parentId) ?? []
+      list.push(problem)
+      childrenByParentId.set(problem.parentId, list)
+    })
+    childrenByParentId.forEach((list) => list.sort((a, b) => a.sortOrder - b.sortOrder))
+
+    const orderedIds: number[] = []
+    topLevel.forEach((problem) => {
+      if (problem.id === undefined) return
+      orderedIds.push(problem.id)
+      ;(childrenByParentId.get(problem.id) ?? []).forEach((child) => { if (child.id !== undefined) orderedIds.push(child.id) })
+    })
+
+    setDailyUpdateForm((previous) => {
+      const notesByMasterProblemId = new Map(previous.problems.map((entry) => [entry.masterProblemId, entry]))
+      const reordered = orderedIds.flatMap((id) => {
+        const entry = notesByMasterProblemId.get(id)
+        return entry ? [entry] : []
+      })
+      return reordered.length === previous.problems.length ? { ...previous, problems: reordered } : previous
+    })
+  }
+
+  // The other direction — after a Problems tab drag-reorder — assigns each affected MasterProblem
+  // a new sortOrder based on its relative position among same-parent siblings within today's
+  // (freshly reordered) list, so the Master List and future new dates inherit the same order.
+  const syncMasterProblemOrderFromDailyProblems = async (nextDailyProblems: DailyProblemNote[]) => {
+    const nextIndexByParentId = new Map<number | null, number>()
+    const updates: { id: number; sortOrder: number }[] = []
+    nextDailyProblems.forEach((entry) => {
+      const problem = masterProblemsById.get(entry.masterProblemId)
+      if (!problem || problem.id === undefined) return
+      const nextIndex = nextIndexByParentId.get(problem.parentId) ?? 0
+      nextIndexByParentId.set(problem.parentId, nextIndex + 1)
+      if (problem.sortOrder !== nextIndex) updates.push({ id: problem.id, sortOrder: nextIndex })
+    })
+    await Promise.all(updates.map(({ id, sortOrder }) => db.masterProblems.update(id, { sortOrder })))
+  }
+
+  const reorderMasterProblemSiblings = async (_parentId: number | null, orderedIds: number[]) => {
+    await renumberMasterProblemSortOrders(orderedIds)
+    await syncDailyProblemsOrderToMasterProblems()
+  }
+
+  // Drag-and-drop transfer: reparents a problem to newParentId (null = top-level) and positions it
+  // immediately before/after referenceId within that new sibling group — used for both a plain
+  // same-parent drag-reorder and a cross-parent drag (nesting a sub-problem under a different main
+  // problem, or un-nesting one back to top-level by dropping it near a top-level problem's edge).
+  // Refuses to make a problem that already has its own sub-problems into someone else's
+  // sub-problem, which would otherwise strand its children three levels deep.
+  const transferMasterProblem = async (masterProblemId: number, newParentId: number | null, referenceId: number, position: 'before' | 'after') => {
+    const snapshot = allMasterProblems ?? []
+    const sourceProblem = snapshot.find((problem) => problem.id === masterProblemId)
+    if (!sourceProblem) return
+    if (newParentId !== null && snapshot.some((problem) => problem.parentId === masterProblemId)) return
+
+    const oldParentId = sourceProblem.parentId
+    const newSiblingIds = snapshot
+      .filter((problem) => problem.parentId === newParentId && problem.id !== masterProblemId)
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((problem) => problem.id)
+      .filter((id): id is number => id !== undefined)
+    const referenceIndex = newSiblingIds.indexOf(referenceId)
+    const insertIndex = referenceIndex === -1 ? newSiblingIds.length : (position === 'before' ? referenceIndex : referenceIndex + 1)
+    const nextSiblingIds = [...newSiblingIds]
+    nextSiblingIds.splice(insertIndex, 0, masterProblemId)
+
+    if (oldParentId !== newParentId) await db.masterProblems.update(masterProblemId, { parentId: newParentId })
+    await renumberMasterProblemSortOrders(nextSiblingIds)
+
+    if (oldParentId !== newParentId) {
+      const oldSiblingIds = snapshot
+        .filter((problem) => problem.parentId === oldParentId && problem.id !== masterProblemId)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((problem) => problem.id)
+        .filter((id): id is number => id !== undefined)
+      await renumberMasterProblemSortOrders(oldSiblingIds)
+    }
+    await syncDailyProblemsOrderToMasterProblems()
+  }
+
+  // Bulk-promotes every selected problem to top-level, appended in the order they were selected;
+  // renumbers both the new top-level order and any sibling group a promoted problem left behind.
+  const bulkPromoteMasterProblemsToTopLevel = async (masterProblemIds: number[]) => {
+    if (selectedPatientId === null || masterProblemIds.length === 0) return
+    const snapshot = allMasterProblems ?? []
+    const idsToPromote = new Set(masterProblemIds)
+    const topLevelIds = snapshot
+      .filter((problem) => problem.patientId === selectedPatientId && problem.parentId === null)
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((problem) => problem.id)
+      .filter((id): id is number => id !== undefined)
+    const nextTopLevelIds = [...topLevelIds.filter((id) => !idsToPromote.has(id)), ...masterProblemIds]
+
+    await Promise.all(masterProblemIds.map((id) => db.masterProblems.update(id, { parentId: null })))
+    await renumberMasterProblemSortOrders(nextTopLevelIds)
+
+    const oldParentIds = new Set(
+      snapshot.filter((problem) => problem.id !== undefined && idsToPromote.has(problem.id)).map((problem) => problem.parentId),
+    )
+    for (const oldParentId of oldParentIds) {
+      if (oldParentId === null) continue
+      const remainingChildIds = snapshot
+        .filter((problem) => problem.parentId === oldParentId && problem.id !== undefined && !idsToPromote.has(problem.id))
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((problem) => problem.id)
+        .filter((id): id is number => id !== undefined)
+      await renumberMasterProblemSortOrders(remainingChildIds)
+    }
+    await syncDailyProblemsOrderToMasterProblems()
+  }
+
+  // Bulk-demotes every selected problem into a sub-problem of newParentId, appended in selection
+  // order after that parent's existing children; renumbers whatever groups lost/gained members.
+  const bulkMakeMasterProblemsSubProblems = async (masterProblemIds: number[], newParentId: number) => {
+    if (selectedPatientId === null) return
+    const snapshot = allMasterProblems ?? []
+    const idsToMove = new Set(masterProblemIds.filter((id) => id !== newParentId))
+    if (idsToMove.size === 0) return
+
+    const existingChildIds = snapshot
+      .filter((problem) => problem.parentId === newParentId && problem.id !== undefined && !idsToMove.has(problem.id))
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((problem) => problem.id)
+      .filter((id): id is number => id !== undefined)
+    const nextChildIds = [...existingChildIds, ...masterProblemIds.filter((id) => idsToMove.has(id))]
+
+    await Promise.all([...idsToMove].map((id) => db.masterProblems.update(id, { parentId: newParentId })))
+    await renumberMasterProblemSortOrders(nextChildIds)
+
+    const affectedOldParentIds = new Set(
+      snapshot.filter((problem) => problem.id !== undefined && idsToMove.has(problem.id)).map((problem) => problem.parentId),
+    )
+    for (const oldParentId of affectedOldParentIds) {
+      const remainingIds = snapshot
+        .filter((problem) => problem.patientId === selectedPatientId && problem.parentId === oldParentId && problem.id !== undefined && !idsToMove.has(problem.id))
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((problem) => problem.id)
+        .filter((id): id is number => id !== undefined)
+      await renumberMasterProblemSortOrders(remainingIds)
+    }
+    await syncDailyProblemsOrderToMasterProblems()
+  }
+
+  // Simple Problem List — a persistent, per-patient (not per-date) checklist-style scratch list
+  // for simplifying the Database tab into salient features, which get grouped (color-coded) under
+  // a Master Problem (new or existing) once their significance is clear. Deliberately independent
+  // of the per-date DailyUpdate flow above: these items aren't daily progress notes, just a
+  // one-time (or ongoing) admission-simplification worksheet. Editing mirrors the Checklist tab
+  // (Enter splits at the cursor into a new item, Backspace at the start merges into the previous
+  // one, drag reorders) — see splitSimpleProblemItem/mergeSimpleProblemItemIntoPrevious/
+  // reorderSimpleProblemItems below — adapted to write directly to this real per-patient table
+  // rather than to an embedded array.
+  const getSimpleProblemItemsForSelectedPatient = () => (allSimpleProblemItems ?? [])
+    .filter((item) => item.patientId === selectedPatientId)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+
+  const renumberSimpleProblemItems = async (orderedIds: number[]) => {
+    await Promise.all(orderedIds.map((id, index) => db.simpleProblemItems.update(id, { sortOrder: index })))
+  }
+
+  const addSimpleProblemItem = async (text: string) => {
+    if (selectedPatientId === null || !text.trim()) return
+    const siblingCount = getSimpleProblemItemsForSelectedPatient().length
+    await db.simpleProblemItems.add({
+      patientId: selectedPatientId,
+      text: text.trim(),
+      sortOrder: siblingCount,
+      groupedMasterProblemIds: [],
+      createdAt: new Date().toISOString(),
+    })
+  }
+
+  const updateSimpleProblemItemText = async (itemId: number, text: string) => {
+    await db.simpleProblemItems.update(itemId, { text })
+  }
+
+  // Enter at a cursor position: the item's own text becomes everything before the cursor, and a
+  // new item (everything after) is inserted immediately following it.
+  const splitSimpleProblemItem = async (itemId: number, fieldValue: string, caretOffset: number): Promise<number | null> => {
+    if (selectedPatientId === null) return null
+    const items = getSimpleProblemItemsForSelectedPatient()
+    const index = items.findIndex((item) => item.id === itemId)
+    if (index === -1) return null
+    await db.simpleProblemItems.update(itemId, { text: fieldValue.slice(0, caretOffset) })
+    const newId = await db.simpleProblemItems.add({
+      patientId: selectedPatientId,
+      text: fieldValue.slice(caretOffset),
+      sortOrder: index + 0.5,
+      groupedMasterProblemIds: [],
+      createdAt: new Date().toISOString(),
+    })
+    if (typeof newId !== 'number') return null
+    const finalOrder = [...items.slice(0, index + 1).map((item) => item.id), newId, ...items.slice(index + 1).map((item) => item.id)]
+      .filter((id): id is number => id !== undefined)
+    await renumberSimpleProblemItems(finalOrder)
+    return newId
+  }
+
+  // Backspace at the start of an item (caret offset 0): appends its live text onto the previous
+  // item and deletes it — undoes a split, or just merges two lines back together.
+  const mergeSimpleProblemItemIntoPrevious = async (itemId: number, currentText: string): Promise<{ previousId: number; caretOffset: number } | null> => {
+    const items = getSimpleProblemItemsForSelectedPatient()
+    const index = items.findIndex((item) => item.id === itemId)
+    if (index <= 0) return null
+    const previous = items[index - 1]
+    if (previous.id === undefined) return null
+    await db.simpleProblemItems.update(previous.id, { text: previous.text + currentText })
+    await db.simpleProblemItems.delete(itemId)
+    const remainingIds = items.filter((item) => item.id !== itemId).map((item) => item.id).filter((id): id is number => id !== undefined)
+    await renumberSimpleProblemItems(remainingIds)
+    return { previousId: previous.id, caretOffset: previous.text.length }
+  }
+
+  const reorderSimpleProblemItems = async (sourceItemId: number, targetItemId: number, position: 'before' | 'after') => {
+    const orderedIds = getSimpleProblemItemsForSelectedPatient().map((item) => item.id).filter((id): id is number => id !== undefined)
+    await renumberSimpleProblemItems(moveItemByKey(orderedIds, (id) => id, sourceItemId, targetItemId, position))
+  }
+
+  const deleteSimpleProblemItems = async (itemIds: number[]) => {
+    await db.simpleProblemItems.bulkDelete(itemIds)
+  }
+
+  const groupSimpleProblemItemsUnderExisting = async (itemIds: number[], masterProblemId: number) => {
+    await Promise.all(itemIds.map(async (itemId) => {
+      const existing = (allSimpleProblemItems ?? []).find((item) => item.id === itemId)
+      if (!existing || existing.groupedMasterProblemIds.includes(masterProblemId)) return
+      await db.simpleProblemItems.update(itemId, { groupedMasterProblemIds: [...existing.groupedMasterProblemIds, masterProblemId] })
+    }))
+  }
+
+  const groupSimpleProblemItemsUnderNewProblem = async (itemIds: number[], title: string) => {
+    const newId = await addMasterProblem(null, title)
+    if (newId === null) return
+    await groupSimpleProblemItemsUnderExisting(itemIds, newId)
+  }
+
+  const ungroupSimpleProblemItemsFromProblem = async (itemIds: number[], masterProblemId: number) => {
+    await Promise.all(itemIds.map(async (itemId) => {
+      const existing = (allSimpleProblemItems ?? []).find((item) => item.id === itemId)
+      if (!existing) return
+      await db.simpleProblemItems.update(itemId, { groupedMasterProblemIds: existing.groupedMasterProblemIds.filter((id) => id !== masterProblemId) })
+    }))
+  }
+
+  // Split screen (desktop only) shows any two of these four "problem workflow" tabs side by
+  // side, each independently pickable — the rest of the tabs stay single-pane only for now. Each
+  // tab's content is pulled out into its own render function so the exact same JSX (and all its
+  // closures over component state) can be shown both in the normal single-tab view below and in
+  // either split-screen pane, without duplicating any of it.
+  const renderDatabaseTabContent = () => (
+    <div className='space-y-1'>
+      <Label htmlFor='profile-database'>Database</Label>
+      <FieldTip>Unstructured scratch pad — chief complaint, history, exam findings, clerk notes, or anything else that doesn't need its own field.</FieldTip>
+      <TapToEditField
+        ariaLabel='Database'
+        emptyText='Tap to add chief complaint, HPI, PMH, PE, clerk notes…'
+        value={profileForm.database}
+        onCommit={(nextValue) => updateProfileField('database', nextValue)}
+        renderView={(text) => (
+          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+        )}
+        renderEditor={({ value, onChange }) => (
+          <PhotoMentionField
+            ariaLabel='Database'
+            placeholder='Chief complaint, HPI, PMH, PE, clerk notes…'
+            value={value}
+            onChange={onChange}
+            attachments={mentionableAttachments}
+            attachmentByTitle={mentionableAttachmentByTitle}
+            onOpenPhotoById={openPhotoById}
+          />
+        )}
+      />
+    </div>
+  )
+
+  const renderSimpleListTabContent = () => (
+    <SimpleProblemListEditor
+      items={simpleProblemItemsForSelectedPatient}
+      groupableProblems={masterProblemsForSelectedPatient.filter((problem) => problem.parentId === null && problem.status === 'active')}
+      onAddItem={(text) => void addSimpleProblemItem(text)}
+      onUpdateItemText={(itemId, text) => void updateSimpleProblemItemText(itemId, text)}
+      onSplitItem={(itemId, fieldValue, caretOffset) => splitSimpleProblemItem(itemId, fieldValue, caretOffset)}
+      onMergeIntoPrevious={(itemId, currentText) => mergeSimpleProblemItemIntoPrevious(itemId, currentText)}
+      onReorderItems={(sourceItemId, targetItemId, position) => void reorderSimpleProblemItems(sourceItemId, targetItemId, position)}
+      onDeleteItems={(itemIds) => void deleteSimpleProblemItems(itemIds)}
+      onGroupUnderExistingProblem={(itemIds, masterProblemId) => void groupSimpleProblemItemsUnderExisting(itemIds, masterProblemId)}
+      onGroupUnderNewProblem={(itemIds, title) => void groupSimpleProblemItemsUnderNewProblem(itemIds, title)}
+      onUngroupFromProblem={(itemIds, masterProblemId) => void ungroupSimpleProblemItemsFromProblem(itemIds, masterProblemId)}
+    />
+  )
+
+  const renderMasterListTabContent = () => (
+    <MasterProblemListEditor
+      problems={masterProblemsForSelectedPatient}
+      admitDate={getEffectiveAdmitDate(selectedPatient?.admitDate ?? '', selectedPatient?.createdAt ?? '')}
+      onAddProblem={(parentId) => void addMasterProblem(parentId)}
+      onRenameProblem={(masterProblemId, nextTitle) => void renameMasterProblem(masterProblemId, nextTitle)}
+      onBeginRename={beginMasterProblemTitleEdit}
+      onFinalizeRename={(masterProblemId, finalTitle) => void finalizeMasterProblemTitleEdit(masterProblemId, finalTitle)}
+      onUpdateDateIdentified={(masterProblemId, nextValue) => void updateMasterProblemDateIdentified(masterProblemId, nextValue)}
+      onResolve={(masterProblemIds, dateResolved, resolutionNotes, resolvedIntoId) => void resolveMasterProblems(masterProblemIds, dateResolved, resolutionNotes, resolvedIntoId)}
+      onReopen={(masterProblemId) => void reopenMasterProblem(masterProblemId)}
+      onBulkReopen={(masterProblemIds) => void reopenMasterProblems(masterProblemIds)}
+      onRemoveNameHistoryEvent={(masterProblemId, eventIndex) => void removeMasterProblemNameHistoryEvent(masterProblemId, eventIndex)}
+      onReorderSiblings={(parentId, orderedIds) => void reorderMasterProblemSiblings(parentId, orderedIds)}
+      onTransferProblem={(masterProblemId, newParentId, referenceId, position) => void transferMasterProblem(masterProblemId, newParentId, referenceId, position)}
+      onBulkPromoteToTopLevel={(masterProblemIds) => void bulkPromoteMasterProblemsToTopLevel(masterProblemIds)}
+      onBulkMakeSubProblem={(masterProblemIds, newParentId) => void bulkMakeMasterProblemsSubProblems(masterProblemIds, newParentId)}
+      onDeleteProblems={(masterProblemIds) => void deleteMasterProblems(masterProblemIds)}
+      onInvalidDate={(message) => setNotice(message)}
+    />
+  )
+
+  const renderProblemsTabContent = () => (
+    <div className='space-y-3'>
+      {renderDailyDateHeader('problems')}
+      <FieldTip>Copies all problem blocks in their current order, subjective, objective, assessment, and plan. Only pending checklist items carry over from the source date. Unresolved problems also carry forward automatically when you move to a new date.</FieldTip>
+      <ProblemListEditor
+        dailyProblems={dailyUpdateForm.problems}
+        onChangeDailyProblems={(problems) => {
+          setDailyUpdateForm((previous) => ({ ...previous, problems }))
+          setDailyDirty(true)
+          void syncMasterProblemOrderFromDailyProblems(problems)
+        }}
+        masterProblemsById={masterProblemsById}
+        onAddProblem={() => void addMasterProblem(null)}
+        onRenameProblem={(masterProblemId, nextTitle) => void renameMasterProblem(masterProblemId, nextTitle)}
+        onBeginRename={beginMasterProblemTitleEdit}
+        onFinalizeRename={(masterProblemId, finalTitle) => void finalizeMasterProblemTitleEdit(masterProblemId, finalTitle)}
+        onToggleResolved={(masterProblemId) => void toggleMasterProblemResolved(masterProblemId)}
+        attachments={mentionableAttachments}
+        attachmentByTitle={mentionableAttachmentByTitle}
+        onOpenPhotoById={openPhotoById}
+      />
+      <div className='space-y-1'>
+        <Label>Subjective</Label>
+        <TapToEditField
+          ariaLabel='Subjective'
+          emptyText='Tap to add subjective findings'
+          className='px-1.5'
+          value={dailyUpdateForm.subjective}
+          onCommit={(nextValue) => {
+            setDailyUpdateForm({ ...dailyUpdateForm, subjective: nextValue })
+            setDailyDirty(true)
+          }}
+          renderView={(text) => (
+            <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+          )}
+          renderEditor={({ value, onChange }) => (
+            <PhotoMentionField
+              ariaLabel='Subjective'
+              placeholder='Subjective'
+              value={value}
+              onChange={onChange}
+              attachments={mentionableAttachments}
+              attachmentByTitle={mentionableAttachmentByTitle}
+              onOpenPhotoById={openPhotoById}
+            />
+          )}
+        />
+      </div>
+      <div className='space-y-1'>
+        <Label>Objective</Label>
+        <TapToEditField
+          ariaLabel='Objective'
+          emptyText='Tap to add objective findings'
+          className='px-1.5'
+          value={dailyUpdateForm.objective}
+          onCommit={(nextValue) => {
+            setDailyUpdateForm({ ...dailyUpdateForm, objective: nextValue })
+            setDailyDirty(true)
+          }}
+          renderView={(text) => (
+            <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+          )}
+          renderEditor={({ value, onChange }) => (
+            <PhotoMentionField
+              ariaLabel='Objective'
+              placeholder='Objective'
+              value={value}
+              onChange={onChange}
+              attachments={mentionableAttachments}
+              attachmentByTitle={mentionableAttachmentByTitle}
+              onOpenPhotoById={openPhotoById}
+            />
+          )}
+        />
+      </div>
+      <div className='space-y-1'>
+        <Label>Assessment</Label>
+        <TapToEditField
+          ariaLabel='Assessment'
+          emptyText='Tap to add an assessment'
+          className='px-1.5'
+          value={dailyUpdateForm.assessment}
+          onCommit={(nextValue) => {
+            setDailyUpdateForm({ ...dailyUpdateForm, assessment: nextValue })
+            setDailyDirty(true)
+          }}
+          renderView={(text) => (
+            <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+          )}
+          renderEditor={({ value, onChange }) => (
+            <PhotoMentionField
+              ariaLabel='Assessment'
+              placeholder='Assessment'
+              value={value}
+              onChange={onChange}
+              attachments={mentionableAttachments}
+              attachmentByTitle={mentionableAttachmentByTitle}
+              onOpenPhotoById={openPhotoById}
+            />
+          )}
+        />
+      </div>
+      <div className='space-y-1'>
+        <Label>Plan</Label>
+        <TapToEditField
+          ariaLabel='Daily plan'
+          emptyText='Tap to add a plan'
+          className='px-1.5'
+          value={dailyUpdateForm.plans}
+          onCommit={(nextValue) => {
+            setDailyUpdateForm({ ...dailyUpdateForm, plans: nextValue })
+            setDailyDirty(true)
+          }}
+          renderView={(text) => (
+            <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+          )}
+          renderEditor={({ value, onChange }) => (
+            <PhotoMentionField
+              ariaLabel='Daily plan'
+              placeholder='Plan'
+              value={value}
+              onChange={onChange}
+              attachments={mentionableAttachments}
+              attachmentByTitle={mentionableAttachmentByTitle}
+              onOpenPhotoById={openPhotoById}
+            />
+          )}
+        />
+      </div>
+    </div>
+  )
+
+  const SPLIT_SCREEN_TAB_IDS: PatientTabId[] = ['database', 'simpleList', 'masterList', 'problems']
+
+  const renderSplitScreenTabContent = (tabId: PatientTabId) => {
+    switch (tabId) {
+      case 'database': return renderDatabaseTabContent()
+      case 'simpleList': return renderSimpleListTabContent()
+      case 'masterList': return renderMasterListTabContent()
+      case 'problems': return renderProblemsTabContent()
+      default: return null
+    }
+  }
 
   useEffect(() => {
     if (selectedPatientId === null || !dailyDirty) return
@@ -4316,6 +4959,7 @@ function App() {
       ordersByPatient: structuredOrdersByPatient,
       medicationsByPatient: structuredMedsByPatient,
       dailyUpdatesByPatient: dailyUpdatesByPatientAllDates,
+      masterProblemsById,
       dateTimeFormatsById,
       allPatients: patients ?? [],
       poolContext: patientPoolContext,
@@ -5507,7 +6151,7 @@ function App() {
     ])
     const cxrUploadGroupId = buildPhotoUploadGroupId()
 
-    await db.transaction('rw', [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments], async () => {
+    await db.transaction('rw', [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments, db.masterProblems], async () => {
       samplePatientId = await db.patients.add({
         lastModified: now,
         createdAt: now,
@@ -5622,27 +6266,36 @@ function App() {
         },
       ])
 
+      const sampleMasterProblemTitles = ['Community-acquired pneumonia, moderate risk', 'Hypertension', 'Type 2 diabetes mellitus']
+      const sampleMasterProblemIds = await Promise.all(sampleMasterProblemTitles.map((title, index) => db.masterProblems.add({
+        patientId: samplePatientId,
+        parentId: null,
+        sortOrder: index,
+        currentTitle: title,
+        nameHistory: [],
+        dateIdentified: today,
+        status: 'active',
+        dateResolved: null,
+        resolutionNotes: '',
+        mergedIntoId: null,
+        createdAt: now,
+      }) as Promise<number>))
+
       await db.dailyUpdates.add({
         patientId: samplePatientId,
         date: today,
         problems: [
           {
-            id: `sample-cap-${samplePatientId}`,
-            title: 'Community-acquired pneumonia, moderate risk',
+            masterProblemId: sampleMasterProblemIds[0],
             notes: 'Cough less frequent, afebrile for >24h, no accessory muscle use, and saturating well on room air. Continue antibiotics and monitor culture results.',
-            completed: false,
           },
           {
-            id: `sample-hypertension-${samplePatientId}`,
-            title: 'Hypertension',
+            masterProblemId: sampleMasterProblemIds[1],
             notes: 'Hemodynamically stable on Amlodipine 10 mg PO OD. No chest pain or palpitations.',
-            completed: false,
           },
           {
-            id: `sample-diabetes-${samplePatientId}`,
-            title: 'Type 2 diabetes mellitus',
+            masterProblemId: sampleMasterProblemIds[2],
             notes: 'Capillary glucose acceptable on Metformin 500 mg PO BID.',
-            completed: false,
           },
         ],
         subjective: 'Feels better today, cough much less frequent, tolerating oral diet well. No fever overnight, no dyspnea at rest.',
@@ -6576,35 +7229,76 @@ function App() {
                 onTouchCancel={resetPatientSwipe}
               >
                 <CardHeader className='sticky top-0 z-20 py-2 px-0 pb-2 bg-warm-ivory/97 backdrop-blur-sm border-b border-clay/15 mx-0 sm:static sm:py-3 sm:px-4 sm:pb-0 sm:bg-transparent sm:backdrop-blur-none sm:border-b-0'>
-                  <Select
-                    value={isPatientActive(selectedPatient, tagsById) ? (selectedPatient.id?.toString() ?? '') : ''}
-                    onValueChange={(value) => {
-                      const nextId = Number.parseInt(value, 10)
-                      if (!Number.isFinite(nextId) || selectedPatient.id === nextId) return
-                      const nextPatient = quickSwitchPatients.find((patient) => patient.id === nextId)
-                      if (!nextPatient) return
-                      void selectPatient(nextPatient, { preserveSelectedTab: true })
-                    }}
-                  >
-                    <SelectTrigger
-                        className='h-auto w-full sm:w-fit max-w-full border-0 bg-transparent px-0 py-0 text-xl font-bold tracking-tight text-espresso shadow-none ring-0 focus:ring-0 focus:ring-offset-0 sm:text-base sm:font-semibold [&>svg]:text-espresso/70'
+                  <div className='flex items-center justify-between gap-2'>
+                    <Select
+                      value={isPatientActive(selectedPatient, tagsById) ? (selectedPatient.id?.toString() ?? '') : ''}
+                      onValueChange={(value) => {
+                        const nextId = Number.parseInt(value, 10)
+                        if (!Number.isFinite(nextId) || selectedPatient.id === nextId) return
+                        const nextPatient = quickSwitchPatients.find((patient) => patient.id === nextId)
+                        if (!nextPatient) return
+                        void selectPatient(nextPatient, { preserveSelectedTab: true })
+                      }}
                     >
-                      <SelectValue placeholder='Switch focused patient' />
-                    </SelectTrigger>
-                    <SelectContent position='item-aligned' className='max-h-[70vh]'>
-                      {quickSwitchPatients.map((patient) => {
-                        if (patient.id === undefined) return null
+                      <SelectTrigger
+                          className='h-auto w-full sm:w-fit max-w-full border-0 bg-transparent px-0 py-0 text-xl font-bold tracking-tight text-espresso shadow-none ring-0 focus:ring-0 focus:ring-offset-0 sm:text-base sm:font-semibold [&>svg]:text-espresso/70'
+                      >
+                        <SelectValue placeholder='Switch focused patient' />
+                      </SelectTrigger>
+                      <SelectContent position='item-aligned' className='max-h-[70vh]'>
+                        {quickSwitchPatients.map((patient) => {
+                          if (patient.id === undefined) return null
 
-                        return (
-                          <SelectItem key={patient.id} value={patient.id.toString()}>
-                            {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' - ')}
-                          </SelectItem>
-                        )
-                      })}
-                    </SelectContent>
-                  </Select>
+                          return (
+                            <SelectItem key={patient.id} value={patient.id.toString()}>
+                              {joinNonBlank([patient.roomNumber, formatFullName(patient)], ' - ')}
+                            </SelectItem>
+                          )
+                        })}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type='button'
+                      variant={splitScreenEnabled ? 'default' : 'outline'}
+                      size='sm'
+                      className='hidden shrink-0 sm:inline-flex'
+                      onClick={() => setSplitScreenEnabled((previous) => !previous)}
+                    >
+                      {splitScreenEnabled ? 'Exit Split Screen' : 'Split Screen View'}
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className='px-0 pb-5 sm:px-4 sm:pb-4'>
+                {splitScreenEnabled ? (
+                  <div className='grid grid-cols-2 gap-4'>
+                    <div className='min-w-0 space-y-3 rounded-lg border border-clay/20 p-3'>
+                      <Select value={splitLeftTab} onValueChange={(value) => setSplitLeftTab(value as PatientTabId)}>
+                        <SelectTrigger className='h-8 w-full text-sm'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SPLIT_SCREEN_TAB_IDS.map((tabId) => (
+                            <SelectItem key={tabId} value={tabId}>{PATIENT_TAB_LABELS[tabId]}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {renderSplitScreenTabContent(splitLeftTab)}
+                    </div>
+                    <div className='min-w-0 space-y-3 rounded-lg border border-clay/20 p-3'>
+                      <Select value={splitRightTab} onValueChange={(value) => setSplitRightTab(value as PatientTabId)}>
+                        <SelectTrigger className='h-8 w-full text-sm'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SPLIT_SCREEN_TAB_IDS.map((tabId) => (
+                            <SelectItem key={tabId} value={tabId}>{PATIENT_TAB_LABELS[tabId]}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {renderSplitScreenTabContent(splitRightTab)}
+                    </div>
+                  </div>
+                ) : (
                 <Tabs value={selectedTab} onValueChange={(v) => setSelectedTab(v as typeof selectedTab)}>
                   <TabsList className='hidden sm:flex h-auto w-full items-stretch gap-0.5 overflow-x-auto px-1 mb-4 mt-2'>
                     {visiblePatientTabs.map((tab) => (
@@ -7011,154 +7705,16 @@ function App() {
                   </div>
                 </TabsContent>
                 <TabsContent value='database'>
-                  <div className='space-y-1'>
-                    <Label htmlFor='profile-database'>Database</Label>
-                    <FieldTip>Unstructured scratch pad — chief complaint, history, exam findings, clerk notes, or anything else that doesn't need its own field.</FieldTip>
-                    <TapToEditField
-                      ariaLabel='Database'
-                      emptyText='Tap to add chief complaint, HPI, PMH, PE, clerk notes…'
-                      value={profileForm.database}
-                      onCommit={(nextValue) => updateProfileField('database', nextValue)}
-                      renderView={(text) => (
-                        <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
-                      )}
-                      renderEditor={({ value, onChange }) => (
-                        <PhotoMentionField
-                          ariaLabel='Database'
-                          placeholder='Chief complaint, HPI, PMH, PE, clerk notes…'
-                          value={value}
-                          onChange={onChange}
-                          attachments={mentionableAttachments}
-                          attachmentByTitle={mentionableAttachmentByTitle}
-                          onOpenPhotoById={openPhotoById}
-                        />
-                      )}
-                    />
-                  </div>
+                  {renderDatabaseTabContent()}
+                </TabsContent>
+                <TabsContent value='simpleList'>
+                  {renderSimpleListTabContent()}
                 </TabsContent>
                 <TabsContent value='problems'>
-                  <div className='space-y-3'>
-                    {renderDailyDateHeader('problems')}
-                    <FieldTip>Copies all problem blocks in their current order, subjective, objective, assessment, and plan. Only pending checklist items carry over from the source date. Unresolved problems also carry forward automatically when you move to a new date.</FieldTip>
-                    <ProblemListEditor
-                      problems={dailyUpdateForm.problems}
-                      onChange={(problems) => {
-                        setDailyUpdateForm((previous) => ({ ...previous, problems }))
-                        setDailyDirty(true)
-                      }}
-                      attachments={mentionableAttachments}
-                      attachmentByTitle={mentionableAttachmentByTitle}
-                      onOpenPhotoById={openPhotoById}
-                    />
-                    <div className='space-y-1'>
-                      <Label>Subjective</Label>
-                      <TapToEditField
-                        ariaLabel='Subjective'
-                        emptyText='Tap to add subjective findings'
-                        className='px-1.5'
-                        value={dailyUpdateForm.subjective}
-                        onCommit={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, subjective: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        renderView={(text) => (
-                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
-                        )}
-                        renderEditor={({ value, onChange }) => (
-                          <PhotoMentionField
-                            ariaLabel='Subjective'
-                            placeholder='Subjective'
-                            value={value}
-                            onChange={onChange}
-                            attachments={mentionableAttachments}
-                            attachmentByTitle={mentionableAttachmentByTitle}
-                            onOpenPhotoById={openPhotoById}
-                          />
-                        )}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Objective</Label>
-                      <TapToEditField
-                        ariaLabel='Objective'
-                        emptyText='Tap to add objective findings'
-                        className='px-1.5'
-                        value={dailyUpdateForm.objective}
-                        onCommit={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, objective: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        renderView={(text) => (
-                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
-                        )}
-                        renderEditor={({ value, onChange }) => (
-                          <PhotoMentionField
-                            ariaLabel='Objective'
-                            placeholder='Objective'
-                            value={value}
-                            onChange={onChange}
-                            attachments={mentionableAttachments}
-                            attachmentByTitle={mentionableAttachmentByTitle}
-                            onOpenPhotoById={openPhotoById}
-                          />
-                        )}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Assessment</Label>
-                      <TapToEditField
-                        ariaLabel='Assessment'
-                        emptyText='Tap to add an assessment'
-                        className='px-1.5'
-                        value={dailyUpdateForm.assessment}
-                        onCommit={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, assessment: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        renderView={(text) => (
-                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
-                        )}
-                        renderEditor={({ value, onChange }) => (
-                          <PhotoMentionField
-                            ariaLabel='Assessment'
-                            placeholder='Assessment'
-                            value={value}
-                            onChange={onChange}
-                            attachments={mentionableAttachments}
-                            attachmentByTitle={mentionableAttachmentByTitle}
-                            onOpenPhotoById={openPhotoById}
-                          />
-                        )}
-                      />
-                    </div>
-                    <div className='space-y-1'>
-                      <Label>Plan</Label>
-                      <TapToEditField
-                        ariaLabel='Daily plan'
-                        emptyText='Tap to add a plan'
-                        className='px-1.5'
-                        value={dailyUpdateForm.plans}
-                        onCommit={(nextValue) => {
-                          setDailyUpdateForm({ ...dailyUpdateForm, plans: nextValue })
-                          setDailyDirty(true)
-                        }}
-                        renderView={(text) => (
-                          <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
-                        )}
-                        renderEditor={({ value, onChange }) => (
-                          <PhotoMentionField
-                            ariaLabel='Daily plan'
-                            placeholder='Plan'
-                            value={value}
-                            onChange={onChange}
-                            attachments={mentionableAttachments}
-                            attachmentByTitle={mentionableAttachmentByTitle}
-                            onOpenPhotoById={openPhotoById}
-                          />
-                        )}
-                      />
-                    </div>
-                  </div>
+                  {renderProblemsTabContent()}
+                </TabsContent>
+                <TabsContent value='masterList'>
+                  {renderMasterListTabContent()}
                 </TabsContent>
                 <TabsContent value='checklist'>
                   <div className='space-y-3'>
@@ -8592,6 +9148,7 @@ function App() {
                   </div>
                 </TabsContent>
               </Tabs>
+                )}
                 </CardContent>
               </Card>
               </>

@@ -53,6 +53,14 @@ type TapToEditFieldProps = {
    * after pressing Enter. Call `onAutoEnterHandled` once consumed so the caller can clear it. */
   autoEnter?: { caretOffset: number } | null
   onAutoEnterHandled?: () => void
+  /** Fires once, right as editing begins — before any autosave commit — for a caller that needs
+   * to snapshot "the value before this edit session" (e.g. to log a single before/after history
+   * entry once editing truly ends, rather than once per intermediate autosave commit). */
+  onEnterEditMode?: () => void
+  /** Fires once when the field actually loses focus (edit session over), in addition to the
+   * regular debounced/blur `onCommit` — for a caller that wants a "typing is done" signal
+   * distinct from every intermediate autosave commit that fires while still actively typing. */
+  onFinalCommit?: (nextValue: string) => void
 }
 
 type EditorHostProps = {
@@ -116,6 +124,8 @@ export const TapToEditField = ({
   onEditorKeyDown,
   autoEnter,
   onAutoEnterHandled,
+  onEnterEditMode,
+  onFinalCommit,
 }: TapToEditFieldProps) => {
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -143,6 +153,7 @@ export const TapToEditField = ({
     setDraft(value)
     lastCommittedRef.current = value
     setIsEditing(true)
+    onEnterEditMode?.()
   }
 
   // Fires only when the caller hands us a genuinely new request object (see autoEnter's doc
@@ -179,6 +190,7 @@ export const TapToEditField = ({
 
   const exitEditMode = () => {
     commit(draft)
+    onFinalCommit?.(draft)
     setIsEditing(false)
   }
 

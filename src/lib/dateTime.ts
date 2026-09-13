@@ -179,6 +179,73 @@ export const parseFlexibleDate = (input: string, referenceDate = new Date()): Fl
   return { ok: false, error: 'Unrecognized date. Try "Jan 1", "1/1", or "Jan 1 2026".' }
 }
 
+export type PartialDatePrecision = 'day' | 'month' | 'year'
+
+export type PartialDateParseResult =
+  | { ok: true; precision: PartialDatePrecision; value: string }
+  | { ok: false; error: string }
+
+/**
+ * Like parseFlexibleDate, but also accepts a date with only a month+year ("Aug 2026", "8/2026",
+ * "2026-08") or only a year ("2019") — for fields like Master Problem's Date Identified/Date
+ * Resolved, where the precision actually known often isn't a specific day. Checks the
+ * unambiguous partial forms first: parseFlexibleDate's day-level patterns are permissive enough
+ * to otherwise misread "august 2026" as day 20, year 2026 (greedily matching "20" as a day and
+ * "26" as a 2-digit year before hitting end of string).
+ */
+export const parsePartialDate = (input: string, referenceDate = new Date()): PartialDateParseResult => {
+  const trimmed = input.trim()
+  if (!trimmed) return { ok: false, error: 'Enter a date.' }
+
+  const yearOnlyMatch = /^(\d{4})$/.exec(trimmed)
+  if (yearOnlyMatch) return { ok: true, precision: 'year', value: yearOnlyMatch[1] }
+
+  const monthNameYearMatch = /^([a-zA-Z]{3,})\.?\s+(\d{4})$/.exec(trimmed)
+  if (monthNameYearMatch) {
+    const [, monthRaw, yearRaw] = monthNameYearMatch
+    const monthIndex = monthIndexFromName(monthRaw)
+    if (monthIndex === null) return { ok: false, error: `Unrecognized month "${monthRaw}".` }
+    return { ok: true, precision: 'month', value: `${yearRaw}-${(monthIndex + 1).toString().padStart(2, '0')}` }
+  }
+
+  const numericMonthYearMatch = /^(\d{1,2})[/-](\d{4})$/.exec(trimmed)
+  if (numericMonthYearMatch) {
+    const [, monthRaw, yearRaw] = numericMonthYearMatch
+    const monthIndex = Number.parseInt(monthRaw, 10) - 1
+    if (monthIndex < 0 || monthIndex > 11) return { ok: false, error: 'Enter a valid month.' }
+    return { ok: true, precision: 'month', value: `${yearRaw}-${(monthIndex + 1).toString().padStart(2, '0')}` }
+  }
+
+  const isoYearMonthMatch = /^(\d{4})[/-](\d{1,2})$/.exec(trimmed)
+  if (isoYearMonthMatch) {
+    const [, yearRaw, monthRaw] = isoYearMonthMatch
+    const monthIndex = Number.parseInt(monthRaw, 10) - 1
+    if (monthIndex < 0 || monthIndex > 11) return { ok: false, error: 'Enter a valid month.' }
+    return { ok: true, precision: 'month', value: `${yearRaw}-${(monthIndex + 1).toString().padStart(2, '0')}` }
+  }
+
+  const fullDate = parseFlexibleDate(trimmed, referenceDate)
+  if (fullDate.ok) return { ok: true, precision: 'day', value: fullDate.iso }
+  return { ok: false, error: 'Unrecognized date. Try "Jan 1", "Aug 2026", or "2019".' }
+}
+
+/** Formats a value produced by parsePartialDate (full "yyyy-mm-dd", "yyyy-mm", or "yyyy") back
+ * into a readable confirmation string at whatever precision it was actually entered at. */
+export const formatPartialDateConfirmation = (value: string): string => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return formatFlexibleDateConfirmation(value)
+
+  const monthYearMatch = /^(\d{4})-(\d{2})$/.exec(value)
+  if (monthYearMatch) {
+    const [, year, monthText] = monthYearMatch
+    const shortMonthName = MONTH_NAMES[Number.parseInt(monthText, 10) - 1]
+    if (!shortMonthName) return value
+    const capitalizedMonth = `${shortMonthName[0].toUpperCase()}${shortMonthName.slice(1, 3)}`
+    return `${capitalizedMonth} ${year}`
+  }
+
+  return value
+}
+
 /** Formats an ISO yyyy-mm-dd date as an unambiguous, fully resolved string, e.g. "January 1, 2026". */
 export const formatFlexibleDateConfirmation = (isoDate: string): string => {
   const [yearText, monthText, dayText] = isoDate.split('-')

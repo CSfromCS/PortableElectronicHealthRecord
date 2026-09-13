@@ -1,6 +1,8 @@
 export type PatientTabId =
   | 'profile'
   | 'database'
+  | 'simpleList'
+  | 'masterList'
   | 'problems'
   | 'checklist'
   | 'vitals'
@@ -12,6 +14,8 @@ export type PatientTabId =
 export const PATIENT_TAB_LABELS: Record<PatientTabId, string> = {
   profile: 'Profile',
   database: 'Database',
+  simpleList: 'Simple List',
+  masterList: 'MPL',
   problems: 'Problems',
   checklist: 'Checklist',
   vitals: 'Vitals',
@@ -24,6 +28,8 @@ export const PATIENT_TAB_LABELS: Record<PatientTabId, string> = {
 export const PATIENT_TAB_DESCRIPTIONS: Record<PatientTabId, string> = {
   profile: 'Demographics, admission/referral dates, service, diagnosis, clinical summary, and tags',
   database: 'Single unstructured scratch pad (chief complaint, HPI, PMH, PE, clerk notes, etc.)',
+  simpleList: 'Checklist-style salient features simplified from the Database — group items under a problem to seed the Master Problem List',
+  masterList: 'Coarse, admission-level outline of the same problems: rename history, resolve with dates/notes, and sub-problems',
   problems: 'Ordered, date-based problem blocks with free-text notes — unresolved problems carry forward automatically',
   checklist: 'Per-date task checklist — pending items carry forward automatically',
   vitals: 'Structured BP/HR/RR/Temp/SpO2 log with date & time entries',
@@ -36,6 +42,8 @@ export const PATIENT_TAB_DESCRIPTIONS: Record<PatientTabId, string> = {
 export const DEFAULT_PATIENT_TAB_ORDER: PatientTabId[] = [
   'profile',
   'database',
+  'simpleList',
+  'masterList',
   'problems',
   'checklist',
   'vitals',

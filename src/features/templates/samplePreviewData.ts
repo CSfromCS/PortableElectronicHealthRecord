@@ -1,8 +1,8 @@
 import { buildPatientPoolContext } from '@/features/filters/patientFilterUtils'
 import { SERVICE_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
 import { toLocalISODate } from '@/lib/dateTime'
-import { buildCurrentDateTimeText, createVariableId, type TemplateRenderContext } from './templateEngine'
-import type { DailyUpdate, DateTimeFormatDefinition, LabEntry, MedicationEntry, OrderEntry, Patient, TagDefinition, TagGroupDefinition, VitalEntry } from '@/types'
+import { buildCurrentDateTimeText, type TemplateRenderContext } from './templateEngine'
+import type { DailyUpdate, DateTimeFormatDefinition, LabEntry, MasterProblem, MedicationEntry, OrderEntry, Patient, TagDefinition, TagGroupDefinition, VitalEntry } from '@/types'
 
 // A fixed past date (e.g. "2026-01-02") eventually drifts out of any relative date-range window
 // (e.g. "last 5 days") a real template's Block variable is configured with, once enough real time
@@ -82,12 +82,29 @@ const SAMPLE_MEDICATIONS: MedicationEntry[] = [
   { id: -2, patientId: -999, sortOrder: 1, medication: 'Ceftriaxone', dose: '2 g', route: 'IV', frequency: 'q24h', note: 'Completed course', status: 'discontinued', createdAt: `${TODAY_ISO}T09:00:00.000Z` },
 ]
 
+const SAMPLE_MASTER_PROBLEMS: MasterProblem[] = [
+  {
+    id: -1,
+    patientId: -999,
+    parentId: null,
+    sortOrder: 0,
+    currentTitle: 'Sample problem',
+    nameHistory: [],
+    dateIdentified: TODAY_ISO,
+    status: 'active',
+    dateResolved: null,
+    resolutionNotes: '',
+    mergedIntoId: null,
+    createdAt: `${TODAY_ISO}T07:00:00.000Z`,
+  },
+]
+
 const SAMPLE_DAILY_UPDATES: DailyUpdate[] = [
   {
     id: -1,
     patientId: -999,
     date: TODAY_ISO,
-    problems: [{ id: createVariableId(), title: 'Sample problem', notes: 'Sample notes for preview', completed: false }],
+    problems: [{ masterProblemId: -1, notes: 'Sample notes for preview' }],
     subjective: 'Sample subjective text for preview',
     objective: 'Sample objective text for preview',
     assessment: '',
@@ -168,6 +185,7 @@ export const buildSamplePreviewContext = (
   ordersByPatient: new Map([[-999, SAMPLE_ORDERS]]),
   medicationsByPatient: new Map([[-999, SAMPLE_MEDICATIONS]]),
   dailyUpdatesByPatient: new Map([[-999, SAMPLE_DAILY_UPDATES]]),
+  masterProblemsById: new Map(SAMPLE_MASTER_PROBLEMS.map((problem) => [problem.id as number, problem])),
   dateTimeFormatsById,
   allPatients: [previewPatient],
   poolContext: buildPatientPoolContext(tagsById, []),

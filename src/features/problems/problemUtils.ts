@@ -1,74 +1,37 @@
-import type { DailyUpdate, ProblemBlock } from '@/types'
+import type { DailyProblemNote, DailyUpdate, MasterProblem } from '@/types'
 
-const LEGACY_DAILY_FIELDS = [
-  ['fluid', 'F'],
-  ['respiratory', 'R'],
-  ['infectious', 'I'],
-  ['cardio', 'C'],
-  ['hema', 'H'],
-  ['metabolic', 'M'],
-  ['output', 'O'],
-  ['neuro', 'N'],
-  ['drugs', 'D'],
-  ['other', 'Other'],
-] as const
-
-export const createProblemBlockId = () => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-
-  return `problem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-export const normalizeProblemBlocks = (value: unknown, idSeed = 'problem'): ProblemBlock[] => {
+export const normalizeDailyProblemNotes = (value: unknown): DailyProblemNote[] => {
   if (!Array.isArray(value)) return []
 
-  return value.flatMap((entry, index) => {
+  return value.flatMap((entry) => {
     if (!entry || typeof entry !== 'object') return []
     const candidate = entry as Record<string, unknown>
-    const title = typeof candidate.title === 'string' ? candidate.title : ''
-    const notes = typeof candidate.notes === 'string' ? candidate.notes : ''
-    if (!title.trim() && !notes.trim()) return []
+    const masterProblemId = typeof candidate.masterProblemId === 'number' && Number.isFinite(candidate.masterProblemId)
+      ? candidate.masterProblemId
+      : null
+    if (masterProblemId === null) return []
 
     return [{
-      id: typeof candidate.id === 'string' && candidate.id.trim()
-        ? candidate.id
-        : `${idSeed}-${index}`,
-      title,
-      notes,
-      completed: Boolean(candidate.completed),
+      masterProblemId,
+      notes: typeof candidate.notes === 'string' ? candidate.notes : '',
     }]
   })
 }
 
-/** Mirrors toPendingChecklistItems: carries only unresolved problems forward onto a new date. */
-export const toPendingProblemBlocks = (value: unknown): ProblemBlock[] =>
-  normalizeProblemBlocks(value).filter((problem) => !problem.completed)
+/** Every currently-active MasterProblem for a patient, materialized as a fresh (blank-note) daily
+ * entry — used to populate a brand-new date's Problems tab, replacing the old model's "copy
+ * whatever wasn't completed on the prior date" (problem identity/status is now canonical on
+ * MasterProblem itself, not derived from whichever date's array a problem last appeared in). */
+export const buildActiveDailyProblemNotes = (masterProblems: MasterProblem[], patientId: number): DailyProblemNote[] =>
+  masterProblems
+    .filter((problem): problem is MasterProblem & { id: number } =>
+      problem.id !== undefined && problem.patientId === patientId && problem.status === 'active')
+    .map((problem) => ({ masterProblemId: problem.id, notes: '' }))
 
 export const normalizeDailyUpdate = (value: unknown): DailyUpdate => {
   const candidate = value as Record<string, unknown>
   const patientId = typeof candidate.patientId === 'number' ? candidate.patientId : 0
   const date = typeof candidate.date === 'string' ? candidate.date : ''
-  const recordId = typeof candidate.id === 'number' ? candidate.id : 'new'
-  const hasProblemsArray = Array.isArray(candidate.problems)
-  let problems = normalizeProblemBlocks(candidate.problems, `problem-${patientId}-${date}`)
-
-  if (!hasProblemsArray) {
-    const legacyNotes = LEGACY_DAILY_FIELDS.flatMap(([field, label]) => {
-      const content = typeof candidate[field] === 'string' ? candidate[field].trim() : ''
-      return content ? [`${label}: ${content}`] : []
-    })
-
-    if (legacyNotes.length > 0) {
-      problems = [{
-        id: `legacy-${patientId}-${date}-${recordId}`,
-        title: 'Legacy daily note',
-        notes: legacyNotes.join('\n'),
-        completed: false,
-      }]
-    }
-  }
 
   const checklist = Array.isArray(candidate.checklist)
     ? candidate.checklist.flatMap((entry) => {
@@ -84,7 +47,7 @@ export const normalizeDailyUpdate = (value: unknown): DailyUpdate => {
     ...(typeof candidate.id === 'number' ? { id: candidate.id } : {}),
     patientId,
     date,
-    problems,
+    problems: normalizeDailyProblemNotes(candidate.problems),
     subjective: typeof candidate.subjective === 'string' ? candidate.subjective : '',
     objective: typeof candidate.objective === 'string' ? candidate.objective : '',
     assessment: typeof candidate.assessment === 'string' ? candidate.assessment : '',

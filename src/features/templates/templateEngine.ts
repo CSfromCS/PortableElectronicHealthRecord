@@ -20,18 +20,19 @@ import type {
   BlockVariableId,
   CensusStatus,
   ChecklistEntryFieldId,
+  DailyProblemNote,
   DailyUpdate,
   DateTimeComponentId,
   DateTimeFormatDefinition,
   FlatVariableId,
   GroupVariableInstance,
   LabEntry,
+  MasterProblem,
   MedicationEntry,
   MedicationsEntryFieldId,
   OrderEntry,
   OrdersEntryFieldId,
   Patient,
-  ProblemBlock,
   ProblemsEntryFieldId,
   ReportTemplate,
   TagAutomationRole,
@@ -469,12 +470,12 @@ const resolveOrdersEntryField = (fieldId: string, entry: OrderEntry, dateTimeFor
   }
 }
 
-const resolveProblemsEntryField = (fieldId: string, problem: ProblemBlock, index: number, config: BlockVariableConfig): string => {
+const resolveProblemsEntryField = (fieldId: string, problem: MasterProblem, note: DailyProblemNote, index: number, config: BlockVariableConfig): string => {
   switch (fieldId as ProblemsEntryFieldId) {
     case 'problemIndex': return String(index + 1)
-    case 'problemTitle': return problem.title.trim() || 'Untitled problem'
-    case 'problemNotes': return problem.notes.trim()
-    case 'resolvedMarker': return problem.completed ? config.resolvedGlyph : config.unresolvedGlyph
+    case 'problemTitle': return problem.currentTitle.trim() || 'Untitled problem'
+    case 'problemNotes': return note.notes.trim()
+    case 'resolvedMarker': return problem.status === 'resolved' ? config.resolvedGlyph : config.unresolvedGlyph
     default: return ''
   }
 }
@@ -619,6 +620,9 @@ export type TemplateRenderContext = {
   ordersByPatient: Map<number, OrderEntry[]>
   medicationsByPatient: Map<number, MedicationEntry[]>
   dailyUpdatesByPatient: Map<number, DailyUpdate[]>
+  /** Global lookup (ids are unique across patients) — resolves a DailyProblemNote's
+   * masterProblemId to its canonical title/status for the Problems Block variable. */
+  masterProblemsById: Map<number, MasterProblem>
   currentDateText: string
   currentTimeText: string
   /** Raw instant behind currentDateText/currentTimeText — needed so Current Date/Current Time can
@@ -856,7 +860,10 @@ const resolveProblemsBlock = (config: BlockVariableConfig, updates: DailyUpdate[
   const groupTexts = [...scoped]
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((update) => {
-      const problems = (update.problems ?? []).filter((problem) => problem.title.trim() || problem.notes.trim())
+      const problems = (update.problems ?? [])
+        .map((note) => ({ note, problem: ctx.masterProblemsById.get(note.masterProblemId) }))
+        .filter((entry): entry is { note: DailyProblemNote; problem: MasterProblem } =>
+          entry.problem !== undefined && Boolean(entry.problem.currentTitle.trim() || entry.note.notes.trim()))
       // Subjective/Objective/Assessment/Plan are per-date DailyUpdate fields, not per-problem
       // entries, so they can't live in entryPatternText like problemTitle/problemNotes — instead
       // each enabled one is appended, labeled, below that date's problem entries (SOAP order).
@@ -868,7 +875,7 @@ const resolveProblemsBlock = (config: BlockVariableConfig, updates: DailyUpdate[
       ].filter(Boolean)
       if (problems.length === 0 && soapLines.length === 0) return ''
       const problemsBody = problems
-        .map((problem, index) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId) => resolveProblemsEntryField(fieldId, problem, index, config)))
+        .map(({ note, problem }, index) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId) => resolveProblemsEntryField(fieldId, problem, note, index, config)))
         .join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
       const body = (config.soapFieldsPosition === 'before' ? [...soapLines, problemsBody] : [problemsBody, ...soapLines]).filter(Boolean).join('\n')
       if (!config.showGroupHeader) return body

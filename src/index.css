@@ -106,6 +106,12 @@ h1, h2, h3, h4, h5, h6 {
   #root {
     padding: 2rem 1rem;
   }
+
+  /* Split screen (desktop only) needs real room for two panes side by side — 50% wider than the
+     normal single-column reading width. Toggled via a class on #root, not a permanent change. */
+  #root.split-screen-wide {
+    max-width: 1440px;
+  }
 }
 
 /* Utility: hide scrollbar for horizontal tab scrolling */

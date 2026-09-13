@@ -178,19 +178,79 @@ export interface CustomActionRun {
   at: string
 }
 
-export interface ProblemBlock {
-  id: string
-  title: string
+/** One entry in a MasterProblem's rename history — logged only for a real rename (the problem
+ * already had a non-blank title before this change), never for its initial naming. */
+export interface MasterProblemNameEvent {
+  name: string
+  changedAt: string
+}
+
+/**
+ * A persistent, per-admission problem identity (the Master Problem List) — independent of any
+ * single date, unlike the daily Problems tab's own per-date progress notes (`DailyProblemNote`
+ * below), which reference this by `masterProblemId`. Rename and resolve are deliberately
+ * independent operations: renaming (any edit to `currentTitle` after its initial naming) only
+ * ever appends to `nameHistory`, and marking resolved only ever sets `status`/`dateResolved` —
+ * neither implies the other. `mergedIntoId` is set only when this problem was resolved because it
+ * turned out to be the same as another (structured, rather than a free-text reference, so it can't
+ * go stale if the target is later renamed).
+ */
+export interface MasterProblem {
+  id?: number
+  patientId: number
+  /** Sub-problem (e.g. "4a" under "4") when set; null = top-level problem. */
+  parentId: number | null
+  /** Manual order among siblings sharing the same parentId. */
+  sortOrder: number
+  currentTitle: string
+  nameHistory: MasterProblemNameEvent[]
+  /** Free text, not a real date — the user may type anything ("2/14", "post-op day 3"). Blank
+   * means "not yet entered"; the UI falls back to showing the patient's admitDate as a placeholder
+   * without ever persisting that fallback. */
+  dateIdentified: string
+  status: 'active' | 'resolved'
+  /** Free text, same rationale as dateIdentified. Meaningful only once status is 'resolved'. */
+  dateResolved: string | null
+  resolutionNotes: string
+  mergedIntoId: number | null
+  createdAt: string
+}
+
+/**
+ * One salient feature captured while simplifying the Database tab into a starting point for the
+ * Master Problem List — a persistent, per-patient (not per-date) checklist-style line, edited with
+ * the same Enter-to-split/Backspace-to-merge/drag-to-reorder interactions as the Checklist tab.
+ * There's no "completed" state here — the checkbox on each row selects it for a bulk action
+ * (Group under problem / Ungroup / Delete), it doesn't mark the item done. Grouping one or more
+ * items under a problem (creating a new MasterProblem, or an existing one) records that link here;
+ * deliberately many-to-many (`groupedMasterProblemIds`, not a single id) since one salient feature
+ * can legitimately support more than one problem (e.g. a single lab value feeding into both an
+ * electrolyte problem and a renal one). Grouping is shown purely as color on the row (this tab is
+ * meant to be used side by side with the Master Problem List, which shows the actual problem
+ * names) — no problem title/chip is rendered here.
+ */
+export interface SimpleProblemItem {
+  id?: number
+  patientId: number
+  text: string
+  sortOrder: number
+  groupedMasterProblemIds: number[]
+  createdAt: string
+}
+
+/** One date's progress note against a persistent MasterProblem — the daily Problems tab's own
+ * per-date record. Title and resolved-state live canonically on the referenced MasterProblem, not
+ * here, so the same problem's identity is shared across every date it's tracked on. */
+export interface DailyProblemNote {
+  masterProblemId: number
   notes: string
-  /** Adopts the Checklist tab's per-date carry-forward model: unresolved problems roll forward to the next date automatically; resolved ones stay put. */
-  completed: boolean
 }
 
 export interface DailyUpdate {
   id?: number
   patientId: number
   date: string
-  problems: ProblemBlock[]
+  problems: DailyProblemNote[]
   subjective: string
   objective: string
   assessment: string
