@@ -2444,6 +2444,19 @@ function App() {
 
   // Ward facet options — shared by all three views' filter dialogs.
   const wardTags = useMemo(() => collectWardTags(tagDefinitions ?? [], tagGroups ?? []), [tagDefinitions, tagGroups])
+  // Same "most-used-first" ordering as serviceTags above, for WardTagSelect's own suggestion list —
+  // kept separate from `wardTags` (alphabetical), which stays alphabetical for the Ward facet
+  // checklists above since that's a full list to scan, not a typeahead's top suggestions.
+  const wardTagsMostUsedFirst = useMemo(() => {
+    const usageCounts = new Map<number, number>()
+    for (const patient of patients ?? []) {
+      if (patient.wardTagId !== undefined) usageCounts.set(patient.wardTagId, (usageCounts.get(patient.wardTagId) ?? 0) + 1)
+    }
+    return [...wardTags].sort((a, b) => {
+      const countDiff = (usageCounts.get(b.id ?? -1) ?? 0) - (usageCounts.get(a.id ?? -1) ?? 0)
+      return countDiff !== 0 ? countDiff : a.sortOrder - b.sortOrder
+    })
+  }, [wardTags, patients])
   // Shared by the Add Patient form and Profile tab's WardTagSelect — creates the "Ward" Tag Group
   // on first use if it's somehow missing (e.g. deleted via Manage Tags), same as Service's pattern.
   const handleCreateWardTag = async (name: string) => {
@@ -6708,7 +6721,7 @@ function App() {
                     ariaLabel='Ward/Location'
                     placeholder='Ward/Location'
                     value={form.wardTagId !== undefined ? tagsById.get(form.wardTagId) : undefined}
-                    availableTags={wardTags}
+                    availableTags={wardTagsMostUsedFirst}
                     onSelectExisting={(tagId) => setForm({ ...form, wardTagId: tagId })}
                     onCreateAndSelect={(name) => { void handleCreateWardTag(name).then((tag) => setForm((previous) => ({ ...previous, wardTagId: tag.id }))) }}
                     onClear={() => setForm({ ...form, wardTagId: undefined })}
@@ -7362,7 +7375,7 @@ function App() {
                                 ariaLabel='Ward/Location'
                                 placeholder='Tap to add a ward/location'
                                 value={profileForm.wardTagId !== undefined ? tagsById.get(profileForm.wardTagId) : undefined}
-                                availableTags={wardTags}
+                                availableTags={wardTagsMostUsedFirst}
                                 onSelectExisting={(tagId) => updateProfileField('wardTagId', tagId)}
                                 onCreateAndSelect={(name) => { void handleCreateWardTag(name).then((tag) => updateProfileField('wardTagId', tag.id)) }}
                                 onClear={() => updateProfileField('wardTagId', undefined)}
