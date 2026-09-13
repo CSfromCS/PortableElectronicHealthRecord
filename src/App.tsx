@@ -215,7 +215,7 @@ import {
   EMPTY_DATE_TIME_WINDOW,
   EMPTY_TAG_WARD_FILTER,
   buildPatientPoolContext,
-  collectDistinctWards,
+  collectWardTags,
   computeDefaultWindowLookback,
   countTagWardSelections,
   describePatientPoolFilter,
@@ -242,10 +242,12 @@ import {
 } from './features/tags/serviceTagUtils'
 import { ServiceTagMultiSelect } from './features/tags/ServiceTagMultiSelect'
 import { ServiceTagSelect } from './features/tags/ServiceTagSelect'
+import { ensureWardGroupId, getOrCreateWardTag, isWardTagCustomized } from './features/tags/wardTagUtils'
+import { WardTagSelect } from './features/tags/WardTagSelect'
 
 type PatientFormState = {
   roomNumber: string
-  ward: string
+  wardTagId: number | undefined
   firstName: string
   lastName: string
   age: string
@@ -254,7 +256,7 @@ type PatientFormState = {
 
 const initialForm: PatientFormState = {
   roomNumber: '',
-  ward: '',
+  wardTagId: undefined,
   firstName: '',
   lastName: '',
   age: '',
@@ -263,7 +265,7 @@ const initialForm: PatientFormState = {
 
 type ProfileFormState = {
   roomNumber: string
-  ward: string
+  wardTagId: number | undefined
   roomLegacyRaw?: string
   firstName: string
   lastName: string
@@ -289,7 +291,7 @@ type ProfileFormState = {
 
 const initialProfileForm: ProfileFormState = {
   roomNumber: '',
-  ward: '',
+  wardTagId: undefined,
   roomLegacyRaw: undefined,
   firstName: '',
   lastName: '',
@@ -661,7 +663,6 @@ const ensurePatientLastModified = (patient: Patient): Patient => {
     lastModified: patient.lastModified ?? patient.admitDate ?? new Date().toISOString(),
     createdAt: patient.createdAt ?? patient.admitDate ?? patient.lastModified ?? new Date().toISOString(),
     tagIds: patient.tagIds ?? [],
-    ward: patient.ward ?? '',
     referralDate: patient.referralDate ?? '',
     mainServiceTagIds: patient.mainServiceTagIds ?? [],
     referralServiceTagIds: patient.referralServiceTagIds ?? [],
@@ -1034,7 +1035,7 @@ function App() {
       name,
       tagIds: filter.tagIds,
       tagMode: filter.tagMode,
-      wards: filter.wards,
+      wardTagIds: filter.wardTagIds,
       sortOrder: nextSortOrder,
       createdAt: new Date().toISOString(),
     })
@@ -1045,7 +1046,12 @@ function App() {
   const deleteCustomView = async (id: number) => {
     await db.customViews.delete(id)
   }
-  const applyCustomView = (view: CustomView): TagWardFilterState => ({ tagIds: view.tagIds, tagMode: view.tagMode, wards: view.wards })
+  // A view's saved sort (if any) applies alongside its filter — leaves whatever sort is already
+  // active untouched when the view has none ("leave it alone"), see CustomView.sortConfig's doc comment.
+  const applyCustomView = (view: CustomView): TagWardFilterState => {
+    if (view.sortConfig) setPatientSortConfig(view.sortConfig)
+    return { tagIds: view.tagIds, tagMode: view.tagMode, wardTagIds: view.wardTagIds }
+  }
   const dateTimeFormatsById = useMemo(() => new Map((dateTimeFormats ?? []).map((format) => [String(format.id), format])), [dateTimeFormats])
   const manualCustomActions = useMemo(
     () => (customActions ?? []).filter((action) => (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
@@ -1555,13 +1561,13 @@ function App() {
   const hasAnyDemographicsFilled = useMemo(
     () => Boolean(
       profileForm.roomNumber.trim()
-      || profileForm.ward.trim()
+      || profileForm.wardTagId !== undefined
       || profileForm.lastName.trim()
       || profileForm.firstName.trim()
       || profileForm.age.trim()
       || profileForm.sex,
     ),
-    [profileForm.roomNumber, profileForm.ward, profileForm.lastName, profileForm.firstName, profileForm.age, profileForm.sex],
+    [profileForm.roomNumber, profileForm.wardTagId, profileForm.lastName, profileForm.firstName, profileForm.age, profileForm.sex],
   )
   const isEditingDemographics = useMemo(() => {
     if (selectedPatient?.id === undefined) return true
@@ -1629,8 +1635,8 @@ function App() {
     const filtered = (patients ?? [])
       .filter((patient) => matchesTagWardFilter(patient, censusFilter))
       .filter((patient) => matchesPatientPool(patient, censusPoolCriteria, censusEffectiveWindow, patientPoolContext))
-    return sortPatientsByConfig(filtered, patientSortConfig)
-  }, [patients, censusFilter, censusPoolCriteria, censusEffectiveWindow, patientPoolContext, patientSortConfig])
+    return sortPatientsByConfig(filtered, patientSortConfig, tagsById)
+  }, [patients, censusFilter, censusPoolCriteria, censusEffectiveWindow, patientPoolContext, patientSortConfig, tagsById])
   const censusSelectablePatientIds = useMemo(
     () => censusSelectablePatients.map((patient) => patient.id).filter((id): id is number => id !== undefined),
     [censusSelectablePatients],
@@ -1954,6 +1960,7 @@ function App() {
     const sortedPatients = sortPatientsByConfig(
       (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)),
       patientSortConfig,
+      tagsById,
     )
 
     const items: MasterChecklistItem[] = [
@@ -2429,7 +2436,13 @@ function App() {
   }, [selectedAttachmentCarouselEntry])
 
   // Ward facet options — shared by all three views' filter dialogs.
-  const distinctWards = useMemo(() => collectDistinctWards(patients ?? []), [patients])
+  const wardTags = useMemo(() => collectWardTags(tagDefinitions ?? [], tagGroups ?? []), [tagDefinitions, tagGroups])
+  // Shared by the Add Patient form and Profile tab's WardTagSelect — creates the "Ward" Tag Group
+  // on first use if it's somehow missing (e.g. deleted via Manage Tags), same as Service's pattern.
+  const handleCreateWardTag = async (name: string) => {
+    const groupId = await ensureWardGroupId(tagGroups ?? [])
+    return getOrCreateWardTag(name, wardTags, groupId)
+  }
 
   // Point 2, issue #81: (Tag facet AND/OR result) AND (ward match, if any) AND (patient pool, in the census view).
   const visiblePatients = useMemo(() => {
@@ -2440,7 +2453,8 @@ function App() {
         ...resolveServiceTagNames(patient.mainServiceTagIds, tagsById),
         ...resolveServiceTagNames(patient.referralServiceTagIds, tagsById),
       ]
-      return [patient.roomNumber, patient.ward, patient.lastName, patient.firstName, ...serviceNames]
+      const wardName = patient.wardTagId !== undefined ? tagsById.get(patient.wardTagId)?.name ?? '' : ''
+      return [patient.roomNumber, wardName, patient.lastName, patient.firstName, ...serviceNames]
         .join(' ')
         .toLowerCase()
         .includes(query)
@@ -2455,7 +2469,7 @@ function App() {
       .filter(matchesQuery)
       .filter((patient) => matchesTagWardFilter(patient, patientListFilter))
 
-    return sortPatientsByConfig(filtered, patientSortConfig)
+    return sortPatientsByConfig(filtered, patientSortConfig, tagsById)
   }, [patients, searchQuery, statusFilter, tagsById, patientListFilter, patientSortConfig])
 
   // Precomputes each visible patient's card data (active state, tags, service tags, ambiguity)
@@ -2499,7 +2513,7 @@ function App() {
       lastModified: now,
       createdAt: now,
       roomNumber: form.roomNumber.trim(),
-      ward: form.ward.trim(),
+      wardTagId: form.wardTagId,
       firstName: form.firstName.trim(),
       lastName: form.lastName.trim(),
       age,
@@ -2663,13 +2677,13 @@ function App() {
       setIsSaving(true)
 
       try {
-        const wardTrimmed = profileForm.ward.trim()
+        const wardAssigned = profileForm.wardTagId !== undefined
         await db.patients.update(selectedPatientId, {
           lastModified: new Date().toISOString(),
           roomNumber: profileForm.roomNumber.trim(),
-          ward: wardTrimmed,
+          wardTagId: profileForm.wardTagId,
           // Resolved once the clerk fills in Ward manually; keep it until then so nothing is lost.
-          roomLegacyRaw: wardTrimmed ? undefined : profileForm.roomLegacyRaw,
+          roomLegacyRaw: wardAssigned ? undefined : profileForm.roomLegacyRaw,
           firstName: profileForm.firstName.trim(),
           lastName: profileForm.lastName.trim(),
           // Blank clears age (rather than 0) — only unparseable-but-non-blank text is rejected
@@ -2724,7 +2738,7 @@ function App() {
 
     setProfileForm({
       roomNumber: patient.roomNumber,
-      ward: patient.ward ?? '',
+      wardTagId: patient.wardTagId,
       roomLegacyRaw: patient.roomLegacyRaw,
       firstName: patient.firstName,
       lastName: patient.lastName,
@@ -3567,11 +3581,11 @@ function App() {
     const filter: TagWardFilterState = {
       tagIds: templateRunReviewAction.templateRunFilterTagIds ?? [],
       tagMode: templateRunReviewAction.templateRunFilterTagMode ?? 'OR',
-      wards: templateRunReviewAction.templateRunFilterWards ?? [],
+      wardTagIds: templateRunReviewAction.templateRunFilterWardTagIds ?? [],
     }
     const filtered = (patients ?? []).filter((patient) => matchesTagWardFilter(patient, filter))
-    return sortPatientsByConfig(filtered, patientSortConfig)
-  }, [templateRunReviewAction, patients, patientSortConfig])
+    return sortPatientsByConfig(filtered, patientSortConfig, tagsById)
+  }, [templateRunReviewAction, patients, patientSortConfig, tagsById])
 
 
   // Resolves the "zero conditions matched" dialog opened above: skip does nothing (the button
@@ -6139,6 +6153,7 @@ function App() {
     const mainServiceTag = await getOrCreateServiceTag('Pulmonology', serviceTags, serviceGroupId)
     const referralServiceTagEndo = await getOrCreateServiceTag('Endocrinology', serviceTags, serviceGroupId)
     const referralServiceTagCV = await getOrCreateServiceTag('Cardiovascular', serviceTags, serviceGroupId)
+    const sampleWardTag = await handleCreateWardTag('Med Ward')
     const mainServiceTagId = mainServiceTag.id
     const referralServiceTagIds = [referralServiceTagEndo.id, referralServiceTagCV.id]
       .filter((id): id is number => id !== undefined)
@@ -6157,7 +6172,7 @@ function App() {
         lastModified: now,
         createdAt: now,
         roomNumber: '212A',
-        ward: 'Med Ward',
+        wardTagId: sampleWardTag.id,
         lastName: 'DELA CRUZ',
         firstName: 'Juan',
         middleName: 'Santos',
@@ -6637,7 +6652,7 @@ function App() {
             tags={tagDefinitions ?? []}
             groups={tagGroups ?? []}
             reportTemplates={reportTemplates ?? []}
-            wards={distinctWards}
+            wards={wardTags}
             onBack={() => setView('settings')}
           />
         ) : view === 'manageCustomViews' ? (
@@ -6645,7 +6660,7 @@ function App() {
             views={orderedCustomViews}
             tags={tagDefinitions ?? []}
             groups={tagGroups ?? []}
-            wards={distinctWards}
+            wards={wardTags}
             onBack={() => setView('settings')}
           />
         ) : view === 'manageTemplates' ? (
@@ -6682,7 +6697,15 @@ function App() {
               <CardContent className='px-3 pb-3'>
                 <form className='grid grid-cols-2 gap-2 sm:grid-cols-3' onSubmit={handleSubmit}>
                   <Input aria-label='Room Number' placeholder='Room Number' value={form.roomNumber} onChange={(event) => setForm({ ...form, roomNumber: event.target.value })} />
-                  <Input aria-label='Ward/Location' placeholder='Ward/Location' value={form.ward} onChange={(event) => setForm({ ...form, ward: event.target.value })} />
+                  <WardTagSelect
+                    ariaLabel='Ward/Location'
+                    placeholder='Ward/Location'
+                    value={form.wardTagId !== undefined ? tagsById.get(form.wardTagId) : undefined}
+                    availableTags={wardTags}
+                    onSelectExisting={(tagId) => setForm({ ...form, wardTagId: tagId })}
+                    onCreateAndSelect={(name) => { void handleCreateWardTag(name).then((tag) => setForm((previous) => ({ ...previous, wardTagId: tag.id }))) }}
+                    onClear={() => setForm({ ...form, wardTagId: undefined })}
+                  />
                   <Input aria-label='Last name' placeholder='Last name' value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value.toUpperCase() })} required />
                   <Input aria-label='First name' placeholder='First name' value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} />
                   <Input aria-label='Age' placeholder='Age' type='number' min='0' value={form.age} onChange={(event) => setForm({ ...form, age: event.target.value })} />
@@ -6843,6 +6866,7 @@ function App() {
                 const hasAnyServiceTags = cardMainServiceTags.length > 0 || cardReferralServiceTags.length > 0
                 const hasVisibleServiceTags = visibleMainServiceTags.length > 0 || visibleReferralServiceTags.length > 0
                 const isPatientSelectedForTagging = patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id)
+                const wardTag = patient.wardTagId !== undefined ? tagsById.get(patient.wardTagId) : undefined
                 return (
                 <Card key={patient.id} className={cn(
                   'border-clay/20 hover:shadow-md hover:border-clay/35 transition-all duration-200 overflow-hidden bg-white/75',
@@ -6885,9 +6909,9 @@ function App() {
                         <span className='truncate font-semibold text-espresso'>{formatFullName(patient)}</span>
                       </p>
                       <p className='flex items-center flex-wrap gap-x-1 gap-y-0.5 text-xs text-clay mt-0.5'>
-                        {patient.ward ? (
+                        {wardTag ? (
                           <>
-                            <span>{patient.ward}</span>
+                            {isWardTagCustomized(wardTag) ? <TagChip tag={wardTag} /> : <span>{wardTag.name}</span>}
                             <span>·</span>
                           </>
                         ) : null}
@@ -7326,15 +7350,15 @@ function App() {
                               />
                             </div>
                             <div className='space-y-1'>
-                              <Label htmlFor='profile-ward' className={fieldLabelClassName(Boolean(profileForm.ward.trim()))}>Ward/Location</Label>
-                              <TapToEditField
+                              <Label htmlFor='profile-ward' className={fieldLabelClassName(profileForm.wardTagId !== undefined)}>Ward/Location</Label>
+                              <WardTagSelect
                                 ariaLabel='Ward/Location'
-                                emptyText='Tap to add a ward/location'
-                                value={profileForm.ward}
-                                onCommit={(nextValue) => updateProfileField('ward', nextValue)}
-                                renderEditor={({ value, onChange }) => (
-                                  <AutoGrowTextField id='profile-ward' value={value} onChange={onChange} />
-                                )}
+                                placeholder='Tap to add a ward/location'
+                                value={profileForm.wardTagId !== undefined ? tagsById.get(profileForm.wardTagId) : undefined}
+                                availableTags={wardTags}
+                                onSelectExisting={(tagId) => updateProfileField('wardTagId', tagId)}
+                                onCreateAndSelect={(name) => { void handleCreateWardTag(name).then((tag) => updateProfileField('wardTagId', tag.id)) }}
+                                onClear={() => updateProfileField('wardTagId', undefined)}
                               />
                             </div>
                             <div className='space-y-1'>
@@ -7433,7 +7457,7 @@ function App() {
                         >
                           <div className='min-w-0'>
                             <p className='truncate text-base font-semibold text-espresso'>
-                              {joinNonBlank([formatRoomWard(profileForm), formatFullName(profileForm)], ' — ')}
+                              {joinNonBlank([formatRoomWard(profileForm, profileForm.wardTagId !== undefined ? tagsById.get(profileForm.wardTagId)?.name ?? '' : ''), formatFullName(profileForm)], ' — ')}
                             </p>
                             <p className='text-xs text-clay mt-0.5'>{joinNonBlank([profileForm.age.trim(), profileForm.sex], ' / ')}</p>
                           </div>
@@ -10097,7 +10121,7 @@ function App() {
           title='Filter patients'
           tags={tagDefinitions ?? []}
           groups={tagGroups ?? []}
-          wards={distinctWards}
+          wards={wardTags}
           filter={patientListFilter}
           onChangeFilter={setPatientListFilter}
           onClear={() => setPatientListFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: patientListFilter.tagMode })}
@@ -10114,7 +10138,7 @@ function App() {
           title='Filter Master Checklist'
           tags={tagDefinitions ?? []}
           groups={tagGroups ?? []}
-          wards={distinctWards}
+          wards={wardTags}
           filter={checklistFilter}
           onChangeFilter={setChecklistFilter}
           onClear={() => setChecklistFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: checklistFilter.tagMode })}
@@ -10131,7 +10155,7 @@ function App() {
           title='Filter census patients'
           tags={tagDefinitions ?? []}
           groups={tagGroups ?? []}
-          wards={distinctWards}
+          wards={wardTags}
           filter={censusFilter}
           onChangeFilter={setCensusFilter}
           pool={{

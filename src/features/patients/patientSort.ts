@@ -1,23 +1,7 @@
 import { getEffectiveAdmitDate } from '@/lib/dateTime'
-import type { Patient } from '@/types'
+import type { Patient, PatientSortConfig, PatientSortDirection, PatientSortField, PatientSortLevel, TagDefinition } from '@/types'
 
-export type PatientSortDirection = 'asc' | 'desc'
-
-export type PatientSortField = 'ward' | 'room' | 'name' | 'admitDate' | 'tagOrder'
-
-export type PatientSortLevel =
-  | { id: string; field: 'ward'; direction: PatientSortDirection }
-  | { id: string; field: 'room'; direction: PatientSortDirection }
-  | { id: string; field: 'name'; direction: PatientSortDirection }
-  | { id: string; field: 'admitDate'; direction: PatientSortDirection }
-  | { id: string; field: 'tagOrder'; direction: PatientSortDirection; tagIds: number[] }
-
-/** Shared across the Patients list, Master Checklist, and the Reports/Census patient picker
- * (issue #129) — one sort configuration, kept in sync across all three rather than each screen
- * computing its own order. */
-export type PatientSortConfig = {
-  levels: PatientSortLevel[]
-}
+export type { PatientSortConfig, PatientSortDirection, PatientSortField, PatientSortLevel }
 
 export const PATIENT_SORT_FIELD_LABELS: Record<PatientSortField, string> = {
   ward: 'Ward',
@@ -62,11 +46,16 @@ const tagOrderRank = (patient: Patient, tagIds: number[]): number => {
   return index === -1 ? tagIds.length : index
 }
 
-const compareByLevel = (a: Patient, b: Patient, level: PatientSortLevel): number => {
+/** Ward is a tag reference, not a string — resolves to the tag's name (blank if unset/unknown) so
+ * 'ward' sort levels and the final tie-break can still compare it as text. */
+const wardName = (patient: Patient, tagsById: Map<number, TagDefinition>): string =>
+  (patient.wardTagId !== undefined ? tagsById.get(patient.wardTagId)?.name : undefined) ?? ''
+
+const compareByLevel = (a: Patient, b: Patient, level: PatientSortLevel, tagsById: Map<number, TagDefinition>): number => {
   const comparison = (() => {
     switch (level.field) {
       case 'ward':
-        return compareNatural(a.ward, b.ward)
+        return compareNatural(wardName(a, tagsById), wardName(b, tagsById))
       case 'room':
         return compareNatural(a.roomNumber, b.roomNumber)
       case 'name':
@@ -82,12 +71,14 @@ const compareByLevel = (a: Patient, b: Patient, level: PatientSortLevel): number
 
 /** Sorts patients per a multi-level sort config — each level only breaks ties left by the ones
  * before it. Falls back to a stable Room-then-Name order once every configured level ties,
- * including when the config has zero levels. */
-export const sortPatientsByConfig = <T extends Patient>(patients: T[], config: PatientSortConfig): T[] => {
+ * including when the config has zero levels. `tagsById` is only consulted by a 'ward' level (to
+ * resolve the patient's ward tag to a name) — pass whatever's already loaded, e.g. from the same
+ * `useLiveQuery(() => db.tagDefinitions...)` every other tag lookup in the app already uses. */
+export const sortPatientsByConfig = <T extends Patient>(patients: T[], config: PatientSortConfig, tagsById: Map<number, TagDefinition>): T[] => {
   const levels = config.levels
   return [...patients].sort((a, b) => {
     for (const level of levels) {
-      const comparison = compareByLevel(a, b, level)
+      const comparison = compareByLevel(a, b, level, tagsById)
       if (comparison !== 0) return comparison
     }
     const byRoom = compareNatural(a.roomNumber, b.roomNumber)

@@ -24,7 +24,7 @@ export const buildDefaultCustomViews = (now: string, tagIdByName: Map<string, nu
     name,
     tagIds: tagIds.filter((id): id is number => id !== undefined),
     tagMode,
-    wards: [],
+    wardTagIds: [],
     sortOrder,
     createdAt: now,
   })

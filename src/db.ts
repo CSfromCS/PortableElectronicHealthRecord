@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie'
 import { normalizeDailyUpdate } from './features/problems/problemUtils'
-import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME } from './features/tags/tagConstants'
+import { DEFAULT_TAG_GROUP_NAMES, DEFAULT_TAG_SEEDS, SERVICE_TAG_GROUP_NAME, WARD_TAG_GROUP_NAME } from './features/tags/tagConstants'
 import { parseLegacyServiceText } from './features/tags/serviceTagParsing'
 import { seedDefaultCustomActions, seedFirstInstallCustomActions } from './features/customActions/customActionConstants'
 import { splitCombinedRoomValue } from './lib/roomSplit'
@@ -338,7 +338,10 @@ db.version(6).stores({
     const roomSplit = splitCombinedRoomValue(legacy.roomNumber ?? '')
 
     delete legacy.service
-    await patientTable.put({
+    // `ward` doesn't exist on the current `Patient` type (see the v28 migration below, which
+    // converts it to `wardTagId`) — still written here since that's what this historical
+    // migration step actually produces for v28 to later consume.
+    const upgraded: Patient & { ward?: string } = {
       ...legacy,
       roomNumber: roomSplit.roomNumber,
       ward: roomSplit.ward,
@@ -346,7 +349,8 @@ db.version(6).stores({
       referralDate: legacy.admitDate,
       mainServiceTagIds,
       referralServiceTagIds,
-    })
+    }
+    await patientTable.put(upgraded)
   }
 })
 
@@ -1312,6 +1316,119 @@ db.version(27).stores({
   // Simple Problem List (salient features, simplified from the Database tab, later grouped under
   // Master Problems) — a new table, nothing to migrate.
   simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
+})
+
+db.version(28).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+  simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
+}).upgrade(async (tx) => {
+  // Replaces the free-text Ward/Location field with tags in a "Ward" Tag Group, mirroring the
+  // v6 Service migration — see wardTagUtils.ts for the runtime (post-migration) get-or-create
+  // equivalent. Unlike Service, new tags here are seeded with NO color/emoji/displayText: an
+  // un-customized ward tag must render as plain text, identical to today's field, until the user
+  // deliberately styles it in Manage Tags.
+  const tagGroupTable = tx.table<TagGroupDefinition, number>('tagGroups')
+  const tagDefinitionTable = tx.table<TagDefinition, number>('tagDefinitions')
+  const patientTable = tx.table<Patient, number>('patients')
+
+  const existingGroups = await tagGroupTable.toArray()
+  let wardGroupId = existingGroups.find((group) => group.name === WARD_TAG_GROUP_NAME)?.id
+  if (wardGroupId === undefined) {
+    const nextSortOrder = existingGroups.length > 0 ? Math.max(...existingGroups.map((group) => group.sortOrder)) + 1 : 0
+    wardGroupId = await tagGroupTable.add({ name: WARD_TAG_GROUP_NAME, sortOrder: nextSortOrder })
+  }
+  const resolvedWardGroupId = wardGroupId
+
+  const wardTags = await tagDefinitionTable.where('groupId').equals(resolvedWardGroupId).toArray()
+  const tagIdByLowerName = new Map<string, number>(
+    wardTags.filter((tag) => tag.id !== undefined).map((tag) => [tag.name.trim().toLowerCase(), tag.id as number]),
+  )
+  let nextTagSortOrder = wardTags.length > 0 ? Math.max(...wardTags.map((tag) => tag.sortOrder)) + 1 : 0
+
+  const getOrCreateTagId = async (name: string): Promise<number> => {
+    const key = name.trim().toLowerCase()
+    const existingId = tagIdByLowerName.get(key)
+    if (existingId !== undefined) return existingId
+
+    const id = await tagDefinitionTable.add({
+      name: name.trim(),
+      displayType: 'color',
+      groupId: resolvedWardGroupId,
+      sortOrder: nextTagSortOrder,
+      visibleOnPatientCard: false,
+      terminal: false,
+      automationRole: 'none',
+      createdAt: new Date().toISOString(),
+    })
+    nextTagSortOrder += 1
+    tagIdByLowerName.set(key, id)
+    return id
+  }
+
+  const legacyPatients = await patientTable.toArray()
+  for (const patient of legacyPatients) {
+    if (patient.id === undefined) continue
+    const legacy = patient as Patient & { ward?: string }
+
+    const wardName = (legacy.ward ?? '').trim()
+    const wardTagId = wardName ? await getOrCreateTagId(wardName) : undefined
+
+    delete legacy.ward
+    await patientTable.put({ ...legacy, wardTagId })
+  }
+
+  // Saved Tag+Ward filters (Custom Views) and a General Custom Action's "also run a template"
+  // filter both stored their own ward selections as raw strings too — convert those the same way.
+  const customViewTable = tx.table<CustomView, number>('customViews')
+  const legacyCustomViews = await customViewTable.toArray()
+  for (const view of legacyCustomViews) {
+    if (view.id === undefined) continue
+    const legacyView = view as CustomView & { wards?: string[] }
+    const wardTagIds: number[] = []
+    for (const name of legacyView.wards ?? []) {
+      const trimmed = name.trim()
+      if (!trimmed) continue
+      const tagId = await getOrCreateTagId(trimmed)
+      if (!wardTagIds.includes(tagId)) wardTagIds.push(tagId)
+    }
+    delete legacyView.wards
+    await customViewTable.put({ ...legacyView, wardTagIds })
+  }
+
+  const customActionTable = tx.table<CustomAction, number>('customActions')
+  const legacyCustomActions = await customActionTable.toArray()
+  for (const action of legacyCustomActions) {
+    if (action.id === undefined) continue
+    const legacyAction = action as CustomAction & { templateRunFilterWards?: string[] }
+    if (legacyAction.templateRunFilterWards === undefined) continue
+
+    const templateRunFilterWardTagIds: number[] = []
+    for (const name of legacyAction.templateRunFilterWards) {
+      const trimmed = name.trim()
+      if (!trimmed) continue
+      const tagId = await getOrCreateTagId(trimmed)
+      if (!templateRunFilterWardTagIds.includes(tagId)) templateRunFilterWardTagIds.push(tagId)
+    }
+    delete legacyAction.templateRunFilterWards
+    await customActionTable.put({ ...legacyAction, templateRunFilterWardTagIds })
+  }
 })
 
 export { db }

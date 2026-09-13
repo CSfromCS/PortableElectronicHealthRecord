@@ -1,5 +1,5 @@
 import { buildPatientPoolContext } from '@/features/filters/patientFilterUtils'
-import { SERVICE_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
+import { SERVICE_TAG_GROUP_NAME, WARD_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
 import { toLocalISODate } from '@/lib/dateTime'
 import { buildCurrentDateTimeText, type TemplateRenderContext } from './templateEngine'
 import type { DailyUpdate, DateTimeFormatDefinition, LabEntry, MasterProblem, MedicationEntry, OrderEntry, Patient, TagDefinition, TagGroupDefinition, VitalEntry } from '@/types'
@@ -21,7 +21,6 @@ export const SAMPLE_PREVIEW_PATIENT: Patient = {
   lastModified: `${TODAY_ISO}T00:00:00.000Z`,
   createdAt: `${TODAY_ISO}T08:00:00.000Z`,
   roomNumber: '512A',
-  ward: 'Medicine Ward',
   lastName: 'CRUZ',
   firstName: 'Maria',
   middleName: 'Santos',
@@ -152,8 +151,17 @@ export const buildSamplePreviewPatient = (
     .map((name) => Array.from(tagsById.values()).find((tag) => tag.name === name)?.id)
     .filter((id): id is number => id !== undefined)
 
+  // Same "resolve against this install's real tags" principle as service/general tags above —
+  // picks whatever Ward tag happens to exist (if any) rather than a fixed name, since Ward values
+  // are entirely install-specific. Falls back to none assigned (blank {{ward}}) otherwise.
+  const wardGroupId = tagGroups.find((group) => group.name === WARD_TAG_GROUP_NAME)?.id
+  const wardTagId = wardGroupId === undefined
+    ? undefined
+    : Array.from(tagsById.values()).find((tag) => tag.groupId === wardGroupId)?.id
+
   return {
     ...SAMPLE_PREVIEW_PATIENT,
+    wardTagId,
     mainServiceTagIds: mainServiceTagId !== undefined ? [mainServiceTagId] : [],
     referralServiceTagIds: referralServiceTagId !== undefined ? [referralServiceTagId] : [],
     admissionDiagnosisByService: {

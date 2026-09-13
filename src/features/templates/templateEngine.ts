@@ -53,7 +53,6 @@ export const PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE: Patient = {
   lastModified: '',
   createdAt: new Date().toISOString(),
   roomNumber: '',
-  ward: '',
   lastName: '',
   firstName: '',
   age: undefined,
@@ -659,7 +658,7 @@ const resolveFlatVariable = (
 ): string => {
   switch (variableId) {
     case 'roomNumber': return patient.roomNumber
-    case 'ward': return patient.ward
+    case 'ward': return patient.wardTagId !== undefined ? ctx.tagsById.get(patient.wardTagId)?.name ?? '' : ''
     case 'lastName': return patient.lastName
     case 'firstName': return patient.firstName
     case 'middleName': return patient.middleName ?? ''

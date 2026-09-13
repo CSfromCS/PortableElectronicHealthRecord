@@ -1,23 +1,24 @@
 import { toLocalISODate, toLocalTime, isWithinDateTimeWindow, getEffectiveAdmitDate, resolveEffectiveDate, resolveEffectiveTime, formatDateMMDD, formatClock } from '@/lib/dateTime'
 import { getAppliedPatientTags } from '@/features/tags/tagUtils'
-import type { Patient, TagDefinition, TagEvent } from '@/types'
+import { WARD_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
+import type { Patient, TagDefinition, TagEvent, TagGroupDefinition } from '@/types'
 
 export type TagFilterMode = 'AND' | 'OR'
 
 export type TagWardFilterState = {
   tagIds: number[]
   tagMode: TagFilterMode
-  wards: string[]
+  wardTagIds: number[]
 }
 
-export const EMPTY_TAG_WARD_FILTER: TagWardFilterState = { tagIds: [], tagMode: 'OR', wards: [] }
+export const EMPTY_TAG_WARD_FILTER: TagWardFilterState = { tagIds: [], tagMode: 'OR', wardTagIds: [] }
 
 export const isTagWardFilterActive = (filter: TagWardFilterState): boolean =>
-  filter.tagIds.length > 0 || filter.wards.length > 0
+  filter.tagIds.length > 0 || filter.wardTagIds.length > 0
 
 /** Combined count of active individual selections across the Tag and Ward facets, for the filter button's badge. */
 export const countTagWardSelections = (filter: TagWardFilterState): number =>
-  filter.tagIds.length + filter.wards.length
+  filter.tagIds.length + filter.wardTagIds.length
 
 export const matchesTagFacet = (patient: Pick<Patient, 'tagIds'>, tagIds: number[], mode: TagFilterMode): boolean => {
   if (tagIds.length === 0) return true
@@ -26,24 +27,24 @@ export const matchesTagFacet = (patient: Pick<Patient, 'tagIds'>, tagIds: number
 }
 
 /** Ward facet is always OR across selections — a patient can only be in one ward at a time, so AND would always match zero. */
-export const matchesWardFacet = (patient: Pick<Patient, 'ward'>, wards: string[]): boolean => {
-  if (wards.length === 0) return true
-  return wards.includes(patient.ward)
+export const matchesWardFacet = (patient: Pick<Patient, 'wardTagId'>, wardTagIds: number[]): boolean => {
+  if (wardTagIds.length === 0) return true
+  return patient.wardTagId !== undefined && wardTagIds.includes(patient.wardTagId)
 }
 
 export const matchesTagWardFilter = (
-  patient: Pick<Patient, 'tagIds' | 'ward'>,
+  patient: Pick<Patient, 'tagIds' | 'wardTagId'>,
   filter: TagWardFilterState,
-): boolean => matchesTagFacet(patient, filter.tagIds, filter.tagMode) && matchesWardFacet(patient, filter.wards)
+): boolean => matchesTagFacet(patient, filter.tagIds, filter.tagMode) && matchesWardFacet(patient, filter.wardTagIds)
 
-/** Distinct, sorted, non-blank ward values across the given patients — the Ward facet's option list. */
-export const collectDistinctWards = (patients: Patient[]): string[] => {
-  const wards = new Set<string>()
-  patients.forEach((patient) => {
-    const ward = patient.ward.trim()
-    if (ward) wards.add(ward)
-  })
-  return [...wards].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+/** Ward tags, sorted by name — the Ward facet's option list (the "Ward" Tag Group's own
+ * `sortOrder` isn't meaningful to the user the way alphabetical is, unlike Service). */
+export const collectWardTags = (tags: TagDefinition[], groups: TagGroupDefinition[]): TagDefinition[] => {
+  const wardGroupId = groups.find((group) => group.name === WARD_TAG_GROUP_NAME)?.id
+  if (wardGroupId === undefined) return []
+  return tags
+    .filter((tag) => tag.groupId === wardGroupId)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
 }
 
 export type PatientPoolCriterion = 'active' | 'admitted' | 'discharged' | 'referred'
@@ -194,8 +195,9 @@ export const describeTagWardFilter = (
     const names = filter.tagIds.map((id) => tagsById.get(id)?.name ?? `#${id}`).join(', ')
     lines.push(`Tags (${filter.tagMode === 'AND' ? 'all of' : 'any of'}): ${names}`)
   }
-  if (filter.wards.length > 0) {
-    lines.push(`Ward (any of): ${filter.wards.join(', ')}`)
+  if (filter.wardTagIds.length > 0) {
+    const names = filter.wardTagIds.map((id) => tagsById.get(id)?.name ?? `#${id}`).join(', ')
+    lines.push(`Ward (any of): ${names}`)
   }
   return lines
 }
