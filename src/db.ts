@@ -1431,4 +1431,105 @@ db.version(28).stores({
   }
 })
 
+// Catch-up for installs that already reached v28 while its customViews/customActions ward
+// conversion above still had a bug (it always overwrote `wardTagIds`/`templateRunFilterWardTagIds`
+// with `[]` instead of skipping records with no legacy `wards` field at all) — Dexie only runs a
+// version's `.upgrade()` once per database, so a bad v28 run needed a new version to retry. Fully
+// idempotent: skips any record that no longer has the legacy string field, so it's a no-op both for
+// installs that already converted correctly and for fresh installs (which never have it).
+db.version(29).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+  simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
+}).upgrade(async (tx) => {
+  const tagGroupTable = tx.table<TagGroupDefinition, number>('tagGroups')
+  const tagDefinitionTable = tx.table<TagDefinition, number>('tagDefinitions')
+
+  const existingGroups = await tagGroupTable.toArray()
+  let wardGroupId = existingGroups.find((group) => group.name === WARD_TAG_GROUP_NAME)?.id
+  if (wardGroupId === undefined) {
+    const nextSortOrder = existingGroups.length > 0 ? Math.max(...existingGroups.map((group) => group.sortOrder)) + 1 : 0
+    wardGroupId = await tagGroupTable.add({ name: WARD_TAG_GROUP_NAME, sortOrder: nextSortOrder })
+  }
+  const resolvedWardGroupId = wardGroupId
+
+  const wardTags = await tagDefinitionTable.where('groupId').equals(resolvedWardGroupId).toArray()
+  const tagIdByLowerName = new Map<string, number>(
+    wardTags.filter((tag) => tag.id !== undefined).map((tag) => [tag.name.trim().toLowerCase(), tag.id as number]),
+  )
+  let nextTagSortOrder = wardTags.length > 0 ? Math.max(...wardTags.map((tag) => tag.sortOrder)) + 1 : 0
+
+  const getOrCreateTagId = async (name: string): Promise<number> => {
+    const key = name.trim().toLowerCase()
+    const existingId = tagIdByLowerName.get(key)
+    if (existingId !== undefined) return existingId
+
+    const id = await tagDefinitionTable.add({
+      name: name.trim(),
+      displayType: 'color',
+      groupId: resolvedWardGroupId,
+      sortOrder: nextTagSortOrder,
+      visibleOnPatientCard: false,
+      terminal: false,
+      automationRole: 'none',
+      createdAt: new Date().toISOString(),
+    })
+    nextTagSortOrder += 1
+    tagIdByLowerName.set(key, id)
+    return id
+  }
+
+  const customViewTable = tx.table<CustomView, number>('customViews')
+  const legacyCustomViews = await customViewTable.toArray()
+  for (const view of legacyCustomViews) {
+    if (view.id === undefined) continue
+    const legacyView = view as CustomView & { wards?: string[] }
+    if (legacyView.wards === undefined) continue
+
+    const wardTagIds: number[] = []
+    for (const name of legacyView.wards) {
+      const trimmed = name.trim()
+      if (!trimmed) continue
+      const tagId = await getOrCreateTagId(trimmed)
+      if (!wardTagIds.includes(tagId)) wardTagIds.push(tagId)
+    }
+    delete legacyView.wards
+    await customViewTable.put({ ...legacyView, wardTagIds })
+  }
+
+  const customActionTable = tx.table<CustomAction, number>('customActions')
+  const legacyCustomActions = await customActionTable.toArray()
+  for (const action of legacyCustomActions) {
+    if (action.id === undefined) continue
+    const legacyAction = action as CustomAction & { templateRunFilterWards?: string[] }
+    if (legacyAction.templateRunFilterWards === undefined) continue
+
+    const templateRunFilterWardTagIds: number[] = []
+    for (const name of legacyAction.templateRunFilterWards) {
+      const trimmed = name.trim()
+      if (!trimmed) continue
+      const tagId = await getOrCreateTagId(trimmed)
+      if (!templateRunFilterWardTagIds.includes(tagId)) templateRunFilterWardTagIds.push(tagId)
+    }
+    delete legacyAction.templateRunFilterWards
+    await customActionTable.put({ ...legacyAction, templateRunFilterWardTagIds })
+  }
+})
+
 export { db }

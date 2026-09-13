@@ -61,7 +61,12 @@ export const WardTagSelect = ({ ariaLabel, placeholder, value, availableTags, on
 
   if (value) {
     return (
-      <span className='inline-flex items-center gap-1.5 rounded-full border border-clay/25 bg-warm-ivory pl-1.5 pr-1 py-0.5'>
+      // `flex w-fit` (not `inline-flex`, unlike ServiceTagSelect's span) — this is used directly
+      // under a stacked <Label> on the Profile tab, and an inline-level box (a bare span, or a div
+      // still displayed inline via `inline-flex`) flows onto the same line as the label instead of
+      // dropping below it the way every other profile field does. `w-fit` keeps the pill's natural
+      // compact width now that it's block-level, instead of stretching to the row's full width.
+      <div className='flex w-fit items-center gap-1.5 rounded-full border border-clay/25 bg-warm-ivory pl-1.5 pr-1 py-0.5'>
         {isWardTagCustomized(value) ? <TagChip tag={value} /> : <span className='text-sm text-espresso'>{value.name}</span>}
         <button
           type='button'
@@ -71,7 +76,7 @@ export const WardTagSelect = ({ ariaLabel, placeholder, value, availableTags, on
         >
           ×
         </button>
-      </span>
+      </div>
     )
   }
 
