@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Copy, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -753,6 +753,35 @@ export const ManageCustomActionsScreen = ({
     setDeleteTarget(null)
   }
 
+  // Regenerates each condition's own id so the duplicate's conditions are fully independent of the
+  // original's, matching how duplicateTemplate handles its own per-instance ids.
+  const duplicateAction = async (action: CustomAction) => {
+    const nextSortOrder = customActions.length > 0 ? Math.max(...customActions.map((a) => a.sortOrder)) + 1 : 0
+    await db.customActions.add({
+      name: `${action.name} (Copy)`,
+      scope: action.scope,
+      triggerType: action.triggerType,
+      triggerTagId: action.triggerTagId,
+      checklistItems: [...action.checklistItems],
+      tagEffects: action.tagEffects.map((effect) => ({ ...effect })),
+      conditions: action.conditions.map((condition) => ({
+        ...condition,
+        id: createCustomActionConditionId(),
+        requiredTagIds: [...condition.requiredTagIds],
+        daysOfWeek: condition.daysOfWeek ? [...condition.daysOfWeek] : condition.daysOfWeek,
+        daysOfMonth: condition.daysOfMonth ? [...condition.daysOfMonth] : condition.daysOfMonth,
+        checklistItems: [...condition.checklistItems],
+        tagEffects: condition.tagEffects.map((effect) => ({ ...effect })),
+      })),
+      templateRunTemplateId: action.templateRunTemplateId,
+      templateRunFilterTagIds: action.templateRunFilterTagIds ? [...action.templateRunFilterTagIds] : undefined,
+      templateRunFilterTagMode: action.templateRunFilterTagMode,
+      templateRunFilterWardTagIds: action.templateRunFilterWardTagIds ? [...action.templateRunFilterWardTagIds] : undefined,
+      sortOrder: nextSortOrder,
+      createdAt: new Date().toISOString(),
+    })
+  }
+
   const reorderActions = async (sourceId: number, targetId: number, position: DropPosition) => {
     const reordered = moveItemByKey(orderedActions, (action) => action.id, sourceId, targetId, position)
     await db.transaction('rw', [db.customActions], async () => {
@@ -819,6 +848,9 @@ export const ManageCustomActionsScreen = ({
               </div>
               <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${action.name}`} onClick={() => openEdit(action)}>
                 <Pencil className='h-3.5 w-3.5' />
+              </Button>
+              <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Duplicate ${action.name}`} onClick={() => void duplicateAction(action)}>
+                <Copy className='h-3.5 w-3.5' />
               </Button>
               <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Delete ${action.name}`} onClick={() => setDeleteTarget(action)}>
                 <Trash2 className='h-3.5 w-3.5' />

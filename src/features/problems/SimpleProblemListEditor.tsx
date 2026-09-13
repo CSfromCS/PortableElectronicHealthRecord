@@ -23,9 +23,9 @@ type SimpleProblemListEditorProps = {
    * that problem's real number (or "1a"-style sub-problem label) in the Master List, even if it's
    * since been resolved. */
   allProblems: MasterProblem[]
-  /** Top-level, active master problems for this patient — the pickable targets for "group under
-   * an existing problem" and for "ungroup from." Grouping under a brand-new problem instead
-   * creates one. */
+  /** Every active master problem for this patient, top-level or sub-problem — the pickable
+   * targets for "group under an existing problem" and for "ungroup from." Grouping under a
+   * brand-new problem instead creates one. */
   groupableProblems: MasterProblem[]
   onAddItem: (text: string) => void
   onUpdateItemText: (itemId: number, text: string) => void
@@ -216,7 +216,9 @@ export function SimpleProblemListEditor({
                 </SelectTrigger>
                 <SelectContent>
                   {groupableProblems.map((problem) => (
-                    <SelectItem key={problem.id} value={String(problem.id)}>{problem.currentTitle || 'Untitled problem'}</SelectItem>
+                    <SelectItem key={problem.id} value={String(problem.id)}>
+                      {problem.id !== undefined ? `${labelByProblemId.get(problem.id) ?? '?'}. ` : ''}{problem.currentTitle || 'Untitled problem'}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -363,7 +365,9 @@ export function SimpleProblemListEditor({
                   </SelectTrigger>
                   <SelectContent>
                     {groupableProblems.map((problem) => (
-                      <SelectItem key={problem.id} value={String(problem.id)}>{problem.currentTitle || 'Untitled problem'}</SelectItem>
+                      <SelectItem key={problem.id} value={String(problem.id)}>
+                        {problem.id !== undefined ? `${labelByProblemId.get(problem.id) ?? '?'}. ` : ''}{problem.currentTitle || 'Untitled problem'}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

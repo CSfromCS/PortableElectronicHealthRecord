@@ -168,7 +168,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, Images, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 const ManageTagsScreen = lazy(() =>
   import('./features/tags/ManageTagsScreen').then((module) => ({ default: module.ManageTagsScreen })),
@@ -1093,6 +1093,15 @@ function App() {
   const nonServiceOrWardTagDefinitions = useMemo(
     () => (tagDefinitions ?? []).filter((tag) => tag.groupId === undefined || (tag.groupId !== serviceGroupId && tag.groupId !== wardGroupId)),
     [tagDefinitions, serviceGroupId, wardGroupId],
+  )
+  // Ward already has its own dedicated facet in the Tag+Ward filter dialogs (Patients list, Master
+  // Checklist, Reports picker, Custom Views, and a Custom Action's "also run a template" filter) —
+  // excluded here too so it doesn't also show up a second time in those dialogs' general Tags list.
+  // Unlike nonServiceOrWardTagDefinitions above, Service stays included here: those same dialogs
+  // never grew their own Service facet, so there's nothing for it to duplicate.
+  const nonWardTagDefinitions = useMemo(
+    () => (tagDefinitions ?? []).filter((tag) => tag.groupId === undefined || tag.groupId !== wardGroupId),
+    [tagDefinitions, wardGroupId],
   )
 
   // Add-patient form has no patient record yet, so newly created/selected service tags are staged
@@ -4250,10 +4259,10 @@ function App() {
     }
 
     try {
-      await navigator.share({
-        files,
-        title: entries.length === 1 ? (entries[0].title || 'Photo') : `${entries.length} photos`,
-      })
+      // No `title`/`text` — some share targets (e.g. Messages) prefill the outgoing message body
+      // with whatever text accompanies a share, and a generic "N photos" caption isn't something
+      // the user actually wants sent alongside the images.
+      await navigator.share({ files })
       setNotice('Shared.')
     } catch (error) {
       const name = error instanceof DOMException ? error.name : ''
@@ -4708,7 +4717,7 @@ function App() {
     <SimpleProblemListEditor
       items={simpleProblemItemsForSelectedPatient}
       allProblems={masterProblemsForSelectedPatient}
-      groupableProblems={masterProblemsForSelectedPatient.filter((problem) => problem.parentId === null && problem.status === 'active')}
+      groupableProblems={masterProblemsForSelectedPatient.filter((problem) => problem.status === 'active')}
       onAddItem={(text) => void addSimpleProblemItem(text)}
       onUpdateItemText={(itemId, text) => void updateSimpleProblemItemText(itemId, text)}
       onSplitItem={(itemId, fieldValue, caretOffset) => splitSimpleProblemItem(itemId, fieldValue, caretOffset)}
@@ -6669,7 +6678,7 @@ function App() {
         ) : view === 'manageCustomActions' ? (
           <ManageCustomActionsScreen
             customActions={customActions ?? []}
-            tags={tagDefinitions ?? []}
+            tags={nonWardTagDefinitions}
             groups={tagGroups ?? []}
             reportTemplates={reportTemplates ?? []}
             wards={wardTags}
@@ -9102,8 +9111,19 @@ function App() {
                                             disabled={isPhotoSaving}
                                             onClick={() => openGalleryForGroup(group)}
                                           >
-                                            <Upload className='h-3.5 w-3.5' />
+                                            <Images className='h-3.5 w-3.5' />
                                           </Button>
+                                          {canUseWebShare ? (
+                                            <Button
+                                              size='icon'
+                                              variant='outline'
+                                              className='h-7 w-7'
+                                              aria-label='Share this photo bundle'
+                                              onClick={() => void sharePhotos(group.entries)}
+                                            >
+                                              <Upload className='h-3.5 w-3.5' />
+                                            </Button>
+                                          ) : null}
                                           <Button
                                             size='icon'
                                             variant='destructive'
@@ -9692,8 +9712,18 @@ function App() {
                             className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
                             onClick={() => openGalleryForGroup(currentViewerGroup)}
                           >
-                            <Upload className='h-4.5 w-4.5' />
+                            <Images className='h-4.5 w-4.5' />
                           </button>
+                          {canUseWebShare ? (
+                            <button
+                              type='button'
+                              aria-label='Share this photo bundle'
+                              className='h-9 w-9 shrink-0 rounded-full bg-black/45 text-white flex items-center justify-center'
+                              onClick={() => void sharePhotos(currentViewerGroup.entries)}
+                            >
+                              <Upload className='h-4.5 w-4.5' />
+                            </button>
+                          ) : null}
                         </>
                       ) : null}
                       <button
@@ -10139,7 +10169,7 @@ function App() {
           open={patientListFilterDialogOpen}
           onOpenChange={setPatientListFilterDialogOpen}
           title='Filter patients'
-          tags={tagDefinitions ?? []}
+          tags={nonWardTagDefinitions}
           groups={tagGroups ?? []}
           wards={wardTags}
           filter={patientListFilter}
@@ -10156,7 +10186,7 @@ function App() {
           open={checklistFilterDialogOpen}
           onOpenChange={setChecklistFilterDialogOpen}
           title='Filter Master Checklist'
-          tags={tagDefinitions ?? []}
+          tags={nonWardTagDefinitions}
           groups={tagGroups ?? []}
           wards={wardTags}
           filter={checklistFilter}
@@ -10173,7 +10203,7 @@ function App() {
           open={censusFilterDialogOpen}
           onOpenChange={setCensusFilterDialogOpen}
           title='Filter census patients'
-          tags={tagDefinitions ?? []}
+          tags={nonWardTagDefinitions}
           groups={tagGroups ?? []}
           wards={wardTags}
           filter={censusFilter}
