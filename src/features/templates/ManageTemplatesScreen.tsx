@@ -2221,7 +2221,7 @@ export const ManageTemplatesScreen = ({
                   <div
                     key={template.id}
                     className={cn(
-                      'flex items-center gap-2 rounded-lg border border-clay/25 bg-white/70 px-3 py-2 transition-shadow',
+                      'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-3 py-2 transition-shadow',
                       templateDrag.isDragging(template.id as number) && 'opacity-50',
                       dropIndicatorClassName(templateDrag.dropIndicator(template.id as number)),
                     )}
@@ -2236,16 +2236,16 @@ export const ManageTemplatesScreen = ({
                       <p className='text-xs text-clay'>{classifyTemplateRepeatMode(template) === 'per-patient' ? 'Per-Patient' : 'Prints Once'}</p>
                     </div>
                     {!template.locked ? (
-                      <Button size='sm' variant='outline' className='h-7 text-xs' aria-label={`Edit ${template.name}`} onClick={() => setEditingTemplateId(template.id as number)}>
-                        <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                      <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${template.name}`} onClick={() => setEditingTemplateId(template.id as number)}>
+                        <Pencil className='h-3.5 w-3.5' />
                       </Button>
                     ) : null}
-                    <Button size='sm' variant='outline' className='h-7 text-xs' aria-label={`Duplicate ${template.name}`} onClick={() => void duplicateTemplate(template)}>
-                      <Copy className='h-3.5 w-3.5' aria-hidden='true' />
+                    <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Duplicate ${template.name}`} onClick={() => void duplicateTemplate(template)}>
+                      <Copy className='h-3.5 w-3.5' />
                     </Button>
                     {!template.locked ? (
-                      <Button size='sm' variant='destructive' className='h-7 text-xs' aria-label={`Delete ${template.name}`} onClick={() => setDeleteTarget(template)}>
-                        <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
+                      <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-action-danger' aria-label={`Delete ${template.name}`} onClick={() => setDeleteTarget(template)}>
+                        <Trash2 className='h-3.5 w-3.5' />
                       </Button>
                     ) : null}
                   </div>
