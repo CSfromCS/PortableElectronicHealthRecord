@@ -4673,6 +4673,7 @@ function App() {
   const renderSimpleListTabContent = () => (
     <SimpleProblemListEditor
       items={simpleProblemItemsForSelectedPatient}
+      allProblems={masterProblemsForSelectedPatient}
       groupableProblems={masterProblemsForSelectedPatient.filter((problem) => problem.parentId === null && problem.status === 'active')}
       onAddItem={(text) => void addSimpleProblemItem(text)}
       onUpdateItemText={(itemId, text) => void updateSimpleProblemItemText(itemId, text)}

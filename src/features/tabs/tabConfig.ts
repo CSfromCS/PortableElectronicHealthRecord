@@ -28,8 +28,8 @@ export const PATIENT_TAB_LABELS: Record<PatientTabId, string> = {
 export const PATIENT_TAB_DESCRIPTIONS: Record<PatientTabId, string> = {
   profile: 'Demographics, admission/referral dates, service, diagnosis, clinical summary, and tags',
   database: 'Single unstructured scratch pad (chief complaint, HPI, PMH, PE, clerk notes, etc.)',
-  simpleList: 'Checklist-style salient features simplified from the Database — group items under a problem to seed the Master Problem List',
-  masterList: 'Coarse, admission-level outline of the same problems: rename history, resolve with dates/notes, and sub-problems',
+  simpleList: 'Prototype, designed for desktop. Checklist-style salient features simplified from the Database — group items under a problem to seed the Master Problem List',
+  masterList: 'Prototype, designed for desktop. Coarse, admission-level outline of the same problems: rename history, resolve with dates/notes, and sub-problems',
   problems: 'Ordered, date-based problem blocks with free-text notes — unresolved problems carry forward automatically',
   checklist: 'Per-date task checklist — pending items carry forward automatically',
   vitals: 'Structured BP/HR/RR/Temp/SpO2 log with date & time entries',
@@ -37,6 +37,22 @@ export const PATIENT_TAB_DESCRIPTIONS: Record<PatientTabId, string> = {
   medications: 'Structured medication list: drug, dose, route, frequency, status, plus drag-to-reorder',
   orders: "Doctor's orders with date, time, service & status tracking",
   photos: 'Categorized image attachments with grouped uploads & carousel',
+}
+
+// Simple List and MPL are desktop-oriented prototypes (see their in-tab notice) — off by default
+// so a mobile-first user's tab bar isn't cluttered with them until they opt in via Settings.
+const DEFAULT_TAB_VISIBILITY: Record<PatientTabId, boolean> = {
+  profile: true,
+  database: true,
+  simpleList: false,
+  masterList: false,
+  problems: true,
+  checklist: true,
+  vitals: true,
+  labs: true,
+  medications: true,
+  orders: true,
+  photos: true,
 }
 
 export const DEFAULT_PATIENT_TAB_ORDER: PatientTabId[] = [
@@ -57,7 +73,7 @@ export type PatientTabSetting = { id: PatientTabId; visible: boolean }
 
 export const DEFAULT_PATIENT_TAB_SETTINGS: PatientTabSetting[] = DEFAULT_PATIENT_TAB_ORDER.map((id) => ({
   id,
-  visible: true,
+  visible: DEFAULT_TAB_VISIBILITY[id],
 }))
 
 // App-local display preference, not clinical data — deliberately kept out of Dexie/sync/backup,
@@ -85,9 +101,10 @@ export const loadPatientTabSettings = (): PatientTabSetting[] => {
       settings.push({ id: tabId, visible: typeof candidate.visible === 'boolean' ? candidate.visible : true })
     }
 
-    // Append any tabs the stored settings predate (e.g. a new tab shipped in an app update).
+    // Append any tabs the stored settings predate (e.g. a new tab shipped in an app update),
+    // respecting that tab's own default visibility rather than assuming visible.
     for (const id of DEFAULT_PATIENT_TAB_ORDER) {
-      if (!seen.has(id)) settings.push({ id, visible: true })
+      if (!seen.has(id)) settings.push({ id, visible: DEFAULT_TAB_VISIBILITY[id] })
     }
 
     return settings.length > 0 ? settings : DEFAULT_PATIENT_TAB_SETTINGS

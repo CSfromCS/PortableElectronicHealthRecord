@@ -1,5 +1,6 @@
-import { useMemo, useState, type CSSProperties, type DragEvent, type TouchEvent } from 'react'
+import { useMemo, useState, type DragEvent, type TouchEvent } from 'react'
 import { CheckCircle2, History, Plus, RotateCcw, X } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -42,12 +43,10 @@ const NO_MERGE_TARGET = 'none'
 // Shared by the header row and every data row so their cells line up exactly: handle/checkbox,
 // Problem, Identified, Resolved, actions. Notes/resolution details render as a full-width line
 // below the row instead of their own column, so the Problem column keeps most of the room.
-const GRID_TEMPLATE_STYLE: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'auto minmax(0,1fr) 5.5rem 5.5rem 6.5rem',
-  columnGap: '0.5rem',
-  alignItems: 'center',
-}
+// On mobile there's no room for Identified/Resolved as their own columns at all — the grid drops
+// to just handle/Problem/actions there, and the dates instead render inline below the title (see
+// the sm:hidden block in each row) while the desktop-only Identified/Resolved cells are hidden.
+const GRID_TEMPLATE_CLASS = 'grid items-center gap-2 grid-cols-[auto_1fr_auto] sm:grid-cols-[auto_minmax(0,1fr)_5.5rem_5.5rem_6.5rem]'
 
 type DropZone = 'before' | 'after' | 'onto'
 
@@ -269,8 +268,7 @@ export function MasterProblemListEditor({
         onClick={selection.selectionMode ? () => selection.toggle(problemId) : undefined}
       >
         <div
-          style={GRID_TEMPLATE_STYLE}
-          className={cn('rounded-md p-2', draggingId === problemId && 'opacity-50', dropZoneClassName(zone))}
+          className={cn(GRID_TEMPLATE_CLASS, 'rounded-md p-2', draggingId === problemId && 'opacity-50', dropZoneClassName(zone))}
           onDragOver={(event: DragEvent<HTMLDivElement>) => {
             if (draggingId === null || draggingId === problemId) return
             event.preventDefault()
@@ -347,6 +345,27 @@ export function MasterProblemListEditor({
                 )}
               </div>
             </div>
+            <div className='mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-clay sm:hidden'>
+              <span className='flex items-center gap-1'>
+                Identified:
+                {selection.selectionMode ? (
+                  <span>{problem.dateIdentified ? formatPartialDateConfirmation(problem.dateIdentified) : admitDateDisplay}</span>
+                ) : (
+                  <TapToEditField
+                    ariaLabel={`Date identified for problem ${label}`}
+                    emptyText={admitDateDisplay}
+                    className='px-1 py-0'
+                    value={problem.dateIdentified}
+                    onCommit={(nextValue) => commitDateIdentified(problemId, nextValue)}
+                    renderView={(text) => <span>{formatPartialDateConfirmation(text)}</span>}
+                    renderEditor={({ value, onChange }) => (
+                      <AutoGrowTextField id={`master-problem-identified-mobile-${problemId}`} aria-label={`Date identified for problem ${label}`} value={value} onChange={onChange} placeholder={admitDateDisplay} />
+                    )}
+                  />
+                )}
+              </span>
+              {isResolved ? <span>Resolved: {formatPartialDateConfirmation(problem.dateResolved ?? '')}</span> : null}
+            </div>
             {hasHistoryEntries && historyExpanded ? (
               <ul className='mt-1 space-y-0.5 text-[11px] text-clay'>
                 {problem.nameHistory.map((event, index) => (
@@ -363,7 +382,7 @@ export function MasterProblemListEditor({
             ) : null}
           </div>
 
-          <div className='text-right text-[11px] text-clay'>
+          <div className='hidden text-right text-[11px] text-clay sm:block'>
             {selection.selectionMode ? (
               <span className='block px-1 py-0.5'>{problem.dateIdentified ? formatPartialDateConfirmation(problem.dateIdentified) : admitDateDisplay}</span>
             ) : (
@@ -381,7 +400,7 @@ export function MasterProblemListEditor({
             )}
           </div>
 
-          <div className='px-1 py-0.5 text-right text-[11px] text-clay'>
+          <div className='hidden px-1 py-0.5 text-right text-[11px] text-clay sm:block'>
             {isResolved ? formatPartialDateConfirmation(problem.dateResolved ?? '') : ''}
           </div>
 
@@ -433,7 +452,10 @@ export function MasterProblemListEditor({
     <div className='space-y-3'>
       <div className='flex items-center justify-between gap-2'>
         <div>
-          <Label>Master Problem List</Label>
+          <div className='flex items-center gap-1.5'>
+            <Label>Master Problem List</Label>
+            <Badge className='border-amber-200 bg-amber-100 text-amber-700'>Prototype — desktop only</Badge>
+          </div>
           <FieldTip>Tap the + on a problem to add a sub-problem under it. Tap the checkmark to resolve, or the rotate icon to reopen. Drag the handle to reorder — drop a problem onto a main problem (middle of the row) to nest it as a sub-problem, or near a row's top/bottom edge to reorder or move it back out. Select problems to resolve, reopen, delete, or promote/demote several at once.</FieldTip>
         </div>
         <div className='flex shrink-0 items-center gap-2'>
@@ -507,7 +529,7 @@ export function MasterProblemListEditor({
         {topLevel.length === 0 ? (
           <p className='py-3 text-center text-sm text-clay'>No problems added yet.</p>
         ) : (
-          <div style={GRID_TEMPLATE_STYLE} className='px-2 text-[11px] font-semibold uppercase tracking-wide text-clay/70'>
+          <div className={cn(GRID_TEMPLATE_CLASS, 'hidden px-2 text-[11px] font-semibold uppercase tracking-wide text-clay/70 sm:grid')}>
             <span />
             <span>Problem</span>
             <span className='text-right'>Identified</span>

@@ -1,5 +1,6 @@
-import { useState, type DragEvent, type KeyboardEvent, type TouchEvent } from 'react'
+import { useMemo, useState, type DragEvent, type KeyboardEvent, type TouchEvent } from 'react'
 import { GripVertical, Plus, Trash2 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -16,6 +17,10 @@ import type { MasterProblem, SimpleProblemItem } from '@/types'
 
 type SimpleProblemListEditorProps = {
   items: SimpleProblemItem[]
+  /** Every top-level master problem for this patient, any status — used only to number the small
+   * badges on each color band (see buildGroupBands) so a badge always matches that problem's real
+   * number in the Master List, even if it's since been resolved. */
+  allProblems: MasterProblem[]
   /** Top-level, active master problems for this patient — the pickable targets for "group under
    * an existing problem" and for "ungroup from." Grouping under a brand-new problem instead
    * creates one. */
@@ -33,21 +38,29 @@ type SimpleProblemListEditorProps = {
 
 type GroupMode = 'new' | 'existing'
 
+type GroupBand = { masterProblemId: number; color: string; leftPercent: number }
+
 /** Color-codes the row for whichever problems it's grouped under — a flat tint for one, an even
  * hard-edged split (left/right/etc.) across as many bands as there are groups for more than one.
- * No problem name/chip is shown here at all — this tab is meant to be read side by side with the
- * Master List, which has the names. */
-const buildGroupBackground = (groupedMasterProblemIds: number[]): string | undefined => {
-  if (groupedMasterProblemIds.length === 0) return undefined
-  const colors = groupedMasterProblemIds.map((id) => getMasterProblemColor(id))
-  if (colors.length === 1) return `${colors[0]}40`
-  const step = 100 / colors.length
-  const stops = colors.flatMap((color, index) => [`${color}55 ${step * index}%`, `${color}55 ${step * (index + 1)}%`])
+ * No problem name/chip is shown — just each band's color plus a small number badge (see
+ * buildGroupBackground) matching that problem's number in the Master List, so two similar-looking
+ * colors are never ambiguous. */
+const buildGroupBands = (groupedMasterProblemIds: number[]): GroupBand[] => {
+  const step = 100 / groupedMasterProblemIds.length
+  return groupedMasterProblemIds.map((id, index) => ({ masterProblemId: id, color: getMasterProblemColor(id), leftPercent: step * index }))
+}
+
+const buildGroupBackground = (bands: GroupBand[]): string | undefined => {
+  if (bands.length === 0) return undefined
+  if (bands.length === 1) return `${bands[0].color}40`
+  const step = 100 / bands.length
+  const stops = bands.flatMap((band, index) => [`${band.color}55 ${step * index}%`, `${band.color}55 ${step * (index + 1)}%`])
   return `linear-gradient(to right, ${stops.join(', ')})`
 }
 
 export function SimpleProblemListEditor({
   items,
+  allProblems,
   groupableProblems,
   onAddItem,
   onUpdateItemText,
@@ -73,6 +86,14 @@ export function SimpleProblemListEditor({
 
   const sortedItems = [...items].sort((a, b) => a.sortOrder - b.sortOrder)
   const allIds = sortedItems.map((item) => item.id).filter((id): id is number => id !== undefined)
+
+  // Same numbering as the Master List's own top-level problems, so a badge here always matches
+  // what the user sees there — computed from every top-level problem regardless of status, not
+  // just the active ones offered for grouping, so a since-resolved problem's badge stays correct.
+  const labelByProblemId = useMemo(() => {
+    const topLevel = allProblems.filter((problem) => problem.parentId === null).sort((a, b) => a.sortOrder - b.sortOrder)
+    return new Map(topLevel.flatMap((problem, index) => (problem.id === undefined ? [] : [[problem.id, String(index + 1)] as const])))
+  }, [allProblems])
 
   const commitDraft = () => {
     const text = draftText.trim()
@@ -170,7 +191,10 @@ export function SimpleProblemListEditor({
     <div className='space-y-3'>
       <div className='flex items-center justify-between gap-2'>
         <div>
-          <Label>Simple Problem List</Label>
+          <div className='flex items-center gap-1.5'>
+            <Label>Simple Problem List</Label>
+            <Badge className='border-amber-200 bg-amber-100 text-amber-700'>Prototype — desktop only</Badge>
+          </div>
           <FieldTip>Write one line per salient feature from the Database tab. Check items and "Group under problem" to color-code them into a Master Problem — an item can belong to more than one (shown as a split color). Enter splits a line, Backspace at the start merges it up, and the handle drags to reorder.</FieldTip>
         </div>
       </div>
@@ -212,13 +236,14 @@ export function SimpleProblemListEditor({
         {sortedItems.map((item, index) => {
           if (item.id === undefined) return null
           const itemId = item.id
-          const background = buildGroupBackground(item.groupedMasterProblemIds)
+          const bands = buildGroupBands(item.groupedMasterProblemIds)
+          const background = buildGroupBackground(bands)
           return (
             <div
               key={itemId}
               data-simple-item-index={index}
               className={cn(
-                'flex items-center gap-2 border-b border-clay/25 py-1 last:border-0',
+                'relative flex items-center gap-2 border-b border-clay/25 py-1 last:border-0',
                 draggingIndex === index && 'opacity-60',
                 dropIndicatorClassName(dropTarget?.index === index && draggingIndex !== null ? dropTarget.position : null),
               )}
@@ -280,6 +305,23 @@ export function SimpleProblemListEditor({
               <Button type='button' variant='ghost' className='h-7 w-7 shrink-0 p-0 text-action-danger' aria-label={`Delete item "${item.text}"`} onClick={() => setPendingDeleteIds([itemId])}>
                 <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
               </Button>
+              {bands.map((band, bandIndex) => {
+                const step = 100 / bands.length
+                const rightPercent = 100 - step * (bandIndex + 1)
+                // The rightmost band's number would otherwise land right under the delete
+                // button (h-7 w-7, plus the row's own gap-2 before it) — pull it left to clear it.
+                const isRightmostBand = bandIndex === bands.length - 1
+                return (
+                  <span
+                    key={band.masterProblemId}
+                    className='pointer-events-none absolute top-0 select-none text-[11px] font-semibold leading-none text-clay'
+                    style={{ right: `calc(${rightPercent}% + ${isRightmostBand ? '34px' : '2px'})` }}
+                    aria-hidden='true'
+                  >
+                    {labelByProblemId.get(band.masterProblemId) ?? '?'}
+                  </span>
+                )
+              })}
             </div>
           )
         })}
