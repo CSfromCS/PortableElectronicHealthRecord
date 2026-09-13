@@ -49,7 +49,7 @@ export const PatientFilterDialog = ({
   title: string
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
-  wards: string[]
+  wards: TagDefinition[]
   filter: TagWardFilterState
   onChangeFilter: (filter: TagWardFilterState) => void
   pool?: PatientPoolFacetProps
@@ -99,10 +99,12 @@ export const PatientFilterDialog = ({
 
   const setTagMode = (mode: TagFilterMode) => onChangeFilter({ ...filter, tagMode: mode })
 
-  const toggleWard = (ward: string) => {
+  const toggleWard = (wardTagId: number) => {
     onChangeFilter({
       ...filter,
-      wards: filter.wards.includes(ward) ? filter.wards.filter((w) => w !== ward) : [...filter.wards, ward],
+      wardTagIds: filter.wardTagIds.includes(wardTagId)
+        ? filter.wardTagIds.filter((id) => id !== wardTagId)
+        : [...filter.wardTagIds, wardTagId],
     })
   }
 
@@ -209,15 +211,15 @@ export const PatientFilterDialog = ({
               ) : (
                 <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
                   {wards.map((ward) => (
-                    <label key={ward} className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                    <label key={ward.id} className='flex items-center gap-2.5 py-1 cursor-pointer'>
                       <input
                         type='checkbox'
                         className='h-4 w-4 accent-action-primary'
-                        checked={filter.wards.includes(ward)}
-                        onChange={() => toggleWard(ward)}
-                        aria-label={`Toggle ward ${ward}`}
+                        checked={ward.id !== undefined && filter.wardTagIds.includes(ward.id)}
+                        onChange={() => ward.id !== undefined && toggleWard(ward.id)}
+                        aria-label={`Toggle ward ${ward.name}`}
                       />
-                      <span className='text-sm text-espresso'>{ward}</span>
+                      <span className='text-sm text-espresso'>{ward.name}</span>
                     </label>
                   ))}
                 </div>
@@ -232,12 +234,12 @@ export const PatientFilterDialog = ({
                   onChange={(event) => setSaveName(event.target.value)}
                   placeholder='e.g. "CD, Ward A"'
                   className='h-8 text-sm'
-                  disabled={filter.tagIds.length === 0 && filter.wards.length === 0}
+                  disabled={filter.tagIds.length === 0 && filter.wardTagIds.length === 0}
                 />
                 <Button
                   size='sm'
                   className='h-8'
-                  disabled={!saveName.trim() || (filter.tagIds.length === 0 && filter.wards.length === 0)}
+                  disabled={!saveName.trim() || (filter.tagIds.length === 0 && filter.wardTagIds.length === 0)}
                   onClick={handleSaveView}
                 >
                   Save

@@ -14,14 +14,17 @@ import { cn } from '@/lib/utils'
 import { FieldTip } from '@/lib/tips/FieldTip'
 import { BulkTagPicker } from '@/features/tags/BulkTagPicker'
 import { TagChip } from '@/features/tags/TagChip'
-import type { CustomView, TagDefinition, TagGroupDefinition } from '@/types'
+import { isWardTagCustomized } from '@/features/tags/wardTagUtils'
+import { PatientSortConfigDialog } from '@/features/patients/PatientSortConfigDialog'
+import type { CustomView, PatientSortConfig, TagDefinition, TagGroupDefinition } from '@/types'
 import type { TagFilterMode } from './patientFilterUtils'
 
 type ViewDraft = {
   name: string
   tagIds: number[]
   tagMode: TagFilterMode
-  wards: string[]
+  wardTagIds: number[]
+  sortConfig?: PatientSortConfig
 }
 
 /** Settings' own entry point for the Custom Views saved from any Tag+Ward filter dialog (Patients
@@ -37,26 +40,28 @@ export const ManageCustomViewsScreen = ({
   views: CustomView[]
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
-  wards: string[]
+  wards: TagDefinition[]
   onBack: () => void
 }) => {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingViewId, setEditingViewId] = useState<number | null>(null)
   const [draft, setDraft] = useState<ViewDraft | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<CustomView | null>(null)
+  const [sortDialogOpen, setSortDialogOpen] = useState(false)
 
   const orderedViews = [...views].sort((a, b) => a.sortOrder - b.sortOrder)
   const tagsById = new Map(tags.map((tag) => [tag.id, tag]))
+  const wardsById = new Map(wards.map((tag) => [tag.id, tag]))
 
   const openCreate = () => {
     setEditingViewId(null)
-    setDraft({ name: '', tagIds: [], tagMode: 'OR', wards: [] })
+    setDraft({ name: '', tagIds: [], tagMode: 'OR', wardTagIds: [] })
     setDialogOpen(true)
   }
 
   const openEdit = (view: CustomView) => {
     setEditingViewId(view.id ?? null)
-    setDraft({ name: view.name, tagIds: view.tagIds, tagMode: view.tagMode, wards: view.wards })
+    setDraft({ name: view.name, tagIds: view.tagIds, tagMode: view.tagMode, wardTagIds: view.wardTagIds, sortConfig: view.sortConfig })
     setDialogOpen(true)
   }
 
@@ -71,14 +76,15 @@ export const ManageCustomViewsScreen = ({
     const name = draft.name.trim()
     if (!name) return
     if (editingViewId !== null) {
-      await db.customViews.update(editingViewId, { name, tagIds: draft.tagIds, tagMode: draft.tagMode, wards: draft.wards })
+      await db.customViews.update(editingViewId, { name, tagIds: draft.tagIds, tagMode: draft.tagMode, wardTagIds: draft.wardTagIds, sortConfig: draft.sortConfig })
     } else {
       const nextSortOrder = views.length > 0 ? Math.max(...views.map((view) => view.sortOrder)) + 1 : 0
       await db.customViews.add({
         name,
         tagIds: draft.tagIds,
         tagMode: draft.tagMode,
-        wards: draft.wards,
+        wardTagIds: draft.wardTagIds,
+        sortConfig: draft.sortConfig,
         sortOrder: nextSortOrder,
         createdAt: new Date().toISOString(),
       })
@@ -95,12 +101,17 @@ export const ManageCustomViewsScreen = ({
     })
   }
 
-  const toggleDraftWard = (ward: string) => {
+  const toggleDraftWard = (wardTagId: number) => {
     if (!draft) return
     setDraft({
       ...draft,
-      wards: draft.wards.includes(ward) ? draft.wards.filter((w) => w !== ward) : [...draft.wards, ward],
+      wardTagIds: draft.wardTagIds.includes(wardTagId) ? draft.wardTagIds.filter((id) => id !== wardTagId) : [...draft.wardTagIds, wardTagId],
     })
+  }
+
+  const toggleDraftUseSort = (useSort: boolean) => {
+    if (!draft) return
+    setDraft({ ...draft, sortConfig: useSort ? (draft.sortConfig ?? { levels: [] }) : undefined })
   }
 
   const confirmDelete = async () => {
@@ -164,7 +175,7 @@ export const ManageCustomViewsScreen = ({
                     <Trash2 className='h-3.5 w-3.5' />
                   </Button>
                 </div>
-                {view.tagIds.length > 0 || view.wards.length > 0 ? (
+                {view.tagIds.length > 0 || view.wardTagIds.length > 0 ? (
                   <div className='flex flex-wrap items-center gap-1 mt-1.5 pl-7'>
                     {view.tagIds.map((tagId) => {
                       const tag = tagsById.get(tagId)
@@ -173,9 +184,14 @@ export const ManageCustomViewsScreen = ({
                     {view.tagIds.length > 1 ? (
                       <span className='text-[10px] text-clay/70'>({view.tagMode === 'AND' ? 'all of these' : 'any of these'})</span>
                     ) : null}
-                    {view.wards.map((ward) => (
-                      <span key={ward} className='text-[10px] text-clay bg-clay/10 rounded-full px-1.5 py-0.5'>{ward}</span>
-                    ))}
+                    {view.wardTagIds.map((wardTagId) => {
+                      const ward = wardsById.get(wardTagId)
+                      if (!ward) return null
+                      return <span key={wardTagId} className='text-[10px] text-clay bg-clay/10 rounded-full px-1.5 py-0.5'>{ward.name}</span>
+                    })}
+                    {view.sortConfig ? (
+                      <span className='text-[10px] text-action-primary bg-action-primary/10 rounded-full px-1.5 py-0.5'>Custom sort</span>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -232,30 +248,63 @@ export const ManageCustomViewsScreen = ({
                     ) : (
                       <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
                         {wards.map((ward) => (
-                          <label key={ward} className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                          <label key={ward.id} className='flex items-center gap-2.5 py-1 cursor-pointer'>
                             <input
                               type='checkbox'
                               className='h-4 w-4 accent-action-primary'
-                              checked={draft.wards.includes(ward)}
-                              onChange={() => toggleDraftWard(ward)}
-                              aria-label={`Toggle ward ${ward}`}
+                              checked={ward.id !== undefined && draft.wardTagIds.includes(ward.id)}
+                              onChange={() => ward.id !== undefined && toggleDraftWard(ward.id)}
+                              aria-label={`Toggle ward ${ward.name}`}
                             />
-                            <span className='text-sm text-espresso'>{ward}</span>
+                            {isWardTagCustomized(ward) ? <TagChip tag={ward} /> : <span className='text-sm text-espresso'>{ward.name}</span>}
                           </label>
                         ))}
                       </div>
                     )}
                   </div>
+
+                  <div className='space-y-1.5'>
+                    <Label>Sort</Label>
+                    <label className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                      <input
+                        type='checkbox'
+                        className='h-4 w-4 accent-action-primary'
+                        checked={draft.sortConfig !== undefined}
+                        onChange={(event) => toggleDraftUseSort(event.target.checked)}
+                        aria-label='Use a custom sort for this view'
+                      />
+                      <span className='text-sm text-espresso'>Use a custom sort for this view</span>
+                    </label>
+                    {draft.sortConfig ? (
+                      <>
+                        <FieldTip>Applying this view also applies this sort — leaving it unchecked leaves whatever sort is already active untouched.</FieldTip>
+                        <Button type='button' variant='outline' size='sm' onClick={() => setSortDialogOpen(true)}>
+                          Configure Sort…
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
               </ScrollArea>
               <div className='flex justify-end gap-2 pt-2'>
                 <Button variant='ghost' onClick={closeEdit}>Cancel</Button>
-                <Button onClick={() => void saveDraft()} disabled={!draft.name.trim() || (draft.tagIds.length === 0 && draft.wards.length === 0)}>Save</Button>
+                <Button onClick={() => void saveDraft()} disabled={!draft.name.trim() || (draft.tagIds.length === 0 && draft.wardTagIds.length === 0)}>Save</Button>
               </div>
             </>
           ) : null}
         </DialogContent>
       </Dialog>
+
+      {draft?.sortConfig ? (
+        <PatientSortConfigDialog
+          open={sortDialogOpen}
+          onOpenChange={setSortDialogOpen}
+          config={draft.sortConfig}
+          onChange={(sortConfig) => setDraft(draft ? { ...draft, sortConfig } : draft)}
+          tags={tags}
+          groups={groups}
+        />
+      ) : null}
 
       <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent>

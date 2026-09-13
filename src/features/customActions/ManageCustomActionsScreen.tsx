@@ -29,6 +29,7 @@ import { createCustomActionConditionId } from './customActionConstants'
 import { BulkTagPicker } from '@/features/tags/BulkTagPicker'
 import { TagChip } from '@/features/tags/TagChip'
 import { bucketTagsByGroup } from '@/features/tags/tagUtils'
+import { isWardTagCustomized } from '@/features/tags/wardTagUtils'
 
 type ChecklistItemDraft = { id: string; text: string }
 
@@ -54,7 +55,7 @@ type CustomActionFormState = {
   templateRunTemplateId: string
   templateRunFilterTagIds: number[]
   templateRunFilterTagMode: 'AND' | 'OR'
-  templateRunFilterWards: string[]
+  templateRunFilterWardTagIds: number[]
 }
 
 const createChecklistItemId = () => {
@@ -82,7 +83,7 @@ const blankCustomActionForm = (): CustomActionFormState => ({
   templateRunTemplateId: '',
   templateRunFilterTagIds: [],
   templateRunFilterTagMode: 'OR',
-  templateRunFilterWards: [],
+  templateRunFilterWardTagIds: [],
 })
 
 const conditionToForm = (condition: CustomActionCondition): ConditionFormState => ({
@@ -105,7 +106,7 @@ const actionToForm = (action: CustomAction): CustomActionFormState => ({
   templateRunTemplateId: action.templateRunTemplateId !== undefined ? String(action.templateRunTemplateId) : '',
   templateRunFilterTagIds: [...(action.templateRunFilterTagIds ?? [])],
   templateRunFilterTagMode: action.templateRunFilterTagMode ?? 'OR',
-  templateRunFilterWards: [...(action.templateRunFilterWards ?? [])],
+  templateRunFilterWardTagIds: [...(action.templateRunFilterWardTagIds ?? [])],
 })
 
 const formChecklistItemsToStrings = (items: ChecklistItemDraft[]): string[] =>
@@ -596,7 +597,7 @@ export const ManageCustomActionsScreen = ({
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
   reportTemplates: ReportTemplate[]
-  wards: string[]
+  wards: TagDefinition[]
   onBack: () => void
 }) => {
   const [formOpen, setFormOpen] = useState(false)
@@ -660,7 +661,7 @@ export const ManageCustomActionsScreen = ({
         }
         // Running a template only makes sense for a General action — switching back to Per
         // Patient drops whatever template/filter was chosen.
-        : { ...previous, scope, templateRunTemplateId: '', templateRunFilterTagIds: [], templateRunFilterTagMode: 'OR', templateRunFilterWards: [] }
+        : { ...previous, scope, templateRunTemplateId: '', templateRunFilterTagIds: [], templateRunFilterTagMode: 'OR', templateRunFilterWardTagIds: [] }
     ))
   }
 
@@ -705,12 +706,12 @@ export const ManageCustomActionsScreen = ({
       templateRunTemplateId: Number.parseInt(form.templateRunTemplateId, 10),
       templateRunFilterTagIds: form.templateRunFilterTagIds,
       templateRunFilterTagMode: form.templateRunFilterTagMode,
-      templateRunFilterWards: form.templateRunFilterWards,
+      templateRunFilterWardTagIds: form.templateRunFilterWardTagIds,
     } : {
       templateRunTemplateId: undefined,
       templateRunFilterTagIds: undefined,
       templateRunFilterTagMode: undefined,
-      templateRunFilterWards: undefined,
+      templateRunFilterWardTagIds: undefined,
     }
 
     if (editingActionId !== null) {
@@ -1055,20 +1056,24 @@ export const ManageCustomActionsScreen = ({
                           <Label>Ward</Label>
                           <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
                             {wards.map((ward) => (
-                              <label key={ward} className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                              <label key={ward.id} className='flex items-center gap-2.5 py-1 cursor-pointer'>
                                 <input
                                   type='checkbox'
                                   className='h-4 w-4 accent-action-primary'
-                                  checked={form.templateRunFilterWards.includes(ward)}
-                                  onChange={() => setForm({
-                                    ...form,
-                                    templateRunFilterWards: form.templateRunFilterWards.includes(ward)
-                                      ? form.templateRunFilterWards.filter((w) => w !== ward)
-                                      : [...form.templateRunFilterWards, ward],
-                                  })}
-                                  aria-label={`Toggle ward ${ward}`}
+                                  checked={ward.id !== undefined && form.templateRunFilterWardTagIds.includes(ward.id)}
+                                  onChange={() => {
+                                    if (ward.id === undefined) return
+                                    const wardTagId = ward.id
+                                    setForm({
+                                      ...form,
+                                      templateRunFilterWardTagIds: form.templateRunFilterWardTagIds.includes(wardTagId)
+                                        ? form.templateRunFilterWardTagIds.filter((id) => id !== wardTagId)
+                                        : [...form.templateRunFilterWardTagIds, wardTagId],
+                                    })
+                                  }}
+                                  aria-label={`Toggle ward ${ward.name}`}
                                 />
-                                <span className='text-sm text-espresso'>{ward}</span>
+                                {isWardTagCustomized(ward) ? <TagChip tag={ward} /> : <span className='text-sm text-espresso'>{ward.name}</span>}
                               </label>
                             ))}
                           </div>

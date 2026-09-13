@@ -5,8 +5,10 @@ import type { Patient } from '@/types'
 export const joinNonBlank = (parts: (string | null | undefined)[], sep: string): string =>
   parts.map((part) => (part ?? '').trim()).filter(Boolean).join(sep)
 
-export const formatRoomWard = (patient: Pick<Patient, 'roomNumber' | 'ward'>): string =>
-  joinNonBlank([patient.roomNumber, patient.ward], ' ')
+/** `wardName` is resolved by the caller (via `wardTagId`/`tagsById`) rather than taken from
+ * `Patient` directly, since Ward is a tag reference now — see `Patient.wardTagId`. */
+export const formatRoomWard = (patient: Pick<Patient, 'roomNumber'>, wardName: string): string =>
+  joinNonBlank([patient.roomNumber, wardName], ' ')
 
 export const formatFullName = (patient: Pick<Patient, 'lastName' | 'firstName'>): string =>
   joinNonBlank([patient.lastName, patient.firstName], ', ')

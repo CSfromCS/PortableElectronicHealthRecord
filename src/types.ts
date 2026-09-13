@@ -4,7 +4,14 @@ export interface Patient {
   /** Set once at creation; used as the computed default for Admission Date and Referral Date until the user types an override. */
   createdAt: string
   roomNumber: string
-  ward: string
+  /** Reference to a TagDefinition row in the "Ward" tag group — singular, since a patient is only
+   * ever in one ward at a time (unlike mainServiceTagIds/referralServiceTagIds' Main/Referral
+   * split). Unset means no ward assigned. A freshly created Ward tag (whether from typing a new
+   * ward name here or migrated from this app's old free-text `ward` field) starts with no
+   * color/emoji/displayText set, so it renders as plain text identical to the old field's
+   * appearance until the user deliberately customizes it in Manage Tags — see getContrastingTextColor's
+   * sibling check `isWardTagCustomized` in `wardTagUtils.ts`. */
+  wardTagId?: number
   /** Set only when the legacy combined Room value couldn't be auto-split into Room Number + Ward; shown as a fallback until manually resolved. */
   roomLegacyRaw?: string
   lastName: string
@@ -61,6 +68,24 @@ export interface TagGroupDefinition {
   sortOrder: number
 }
 
+/** A patient list's own sort configuration — declared here (rather than in the Patients feature
+ * that actually implements `sortPatientsByConfig`) so `CustomView` below can save one without this
+ * file importing a feature-specific type, matching how every other shared shape lives here. */
+export type PatientSortDirection = 'asc' | 'desc'
+
+export type PatientSortField = 'ward' | 'room' | 'name' | 'admitDate' | 'tagOrder'
+
+export type PatientSortLevel =
+  | { id: string; field: 'ward'; direction: PatientSortDirection }
+  | { id: string; field: 'room'; direction: PatientSortDirection }
+  | { id: string; field: 'name'; direction: PatientSortDirection }
+  | { id: string; field: 'admitDate'; direction: PatientSortDirection }
+  | { id: string; field: 'tagOrder'; direction: PatientSortDirection; tagIds: number[] }
+
+export type PatientSortConfig = {
+  levels: PatientSortLevel[]
+}
+
 /** A named, saved Tag+Ward filter combo — lets the user re-apply a commonly-used selection (e.g.
  * "CD, Ward A") on the Patients list, Master Checklist, or Reports patient picker without
  * re-checking every box each time. Shared across all three — a view saved from one applies
@@ -72,9 +97,15 @@ export interface CustomView {
   name: string
   tagIds: number[]
   tagMode: 'AND' | 'OR'
-  wards: string[]
+  /** References to TagDefinition rows in the "Ward" tag group — always OR-matched (a patient has
+   * only one ward), kept as its own facet rather than folded into `tagIds` so it can't be broken
+   * by `tagMode` being 'AND'. */
+  wardTagIds: number[]
   sortOrder: number
   createdAt: string
+  /** Optional saved sort — applying this view also applies this sort when set, and leaves
+   * whatever sort was already active untouched when unset ("leave it alone"). */
+  sortConfig?: PatientSortConfig
 }
 
 export interface TagDefinition {
@@ -164,7 +195,8 @@ export interface CustomAction {
    * comment). */
   templateRunFilterTagIds?: number[]
   templateRunFilterTagMode?: 'AND' | 'OR'
-  templateRunFilterWards?: string[]
+  /** References to TagDefinition rows in the "Ward" tag group — see CustomView.wardTagIds. */
+  templateRunFilterWardTagIds?: number[]
   sortOrder: number
   createdAt: string
 }

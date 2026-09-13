@@ -196,7 +196,7 @@ export const seedFirstInstallCustomActions = async (
       templateRunTemplateId: censusSummaryTemplateId,
       templateRunFilterTagIds: [],
       templateRunFilterTagMode: 'OR',
-      templateRunFilterWards: [],
+      templateRunFilterWardTagIds: [],
       sortOrder: 4,
       createdAt: now,
     },
