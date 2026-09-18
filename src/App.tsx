@@ -2473,6 +2473,22 @@ function App() {
     return getOrCreateWardTag(name, wardTags, groupId)
   }
 
+  // Status filter, Tag/Ward filter, and sort — shared with the header's quick-switch patient
+  // picker (below) so it always lists patients in the same set/order as the main list, minus the
+  // free-text search box (which lives on the list screen itself, out of view once you're on a
+  // patient's tabs, so it shouldn't silently shrink the picker).
+  const filteredSortedPatients = useMemo(() => {
+    const filtered = (patients ?? [])
+      .filter((patient) => {
+        if (statusFilter === 'all') return true
+        const active = isPatientActive(patient, tagsById)
+        return statusFilter === 'active' ? active : !active
+      })
+      .filter((patient) => matchesTagWardFilter(patient, patientListFilter))
+
+    return sortPatientsByConfig(filtered, patientSortConfig, tagsById)
+  }, [patients, statusFilter, tagsById, patientListFilter, patientSortConfig])
+
   // Point 2, issue #81: (Tag facet AND/OR result) AND (ward match, if any) AND (patient pool, in the census view).
   const visiblePatients = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -2489,17 +2505,8 @@ function App() {
         .includes(query)
     }
 
-    const filtered = (patients ?? [])
-      .filter((patient) => {
-        if (statusFilter === 'all') return true
-        const active = isPatientActive(patient, tagsById)
-        return statusFilter === 'active' ? active : !active
-      })
-      .filter(matchesQuery)
-      .filter((patient) => matchesTagWardFilter(patient, patientListFilter))
-
-    return sortPatientsByConfig(filtered, patientSortConfig, tagsById)
-  }, [patients, searchQuery, statusFilter, tagsById, patientListFilter, patientSortConfig])
+    return filteredSortedPatients.filter(matchesQuery)
+  }, [filteredSortedPatients, searchQuery, tagsById])
 
   // Precomputes each visible patient's card data (active state, tags, service tags, ambiguity)
   // once per actual data change, rather than recomputing it inline in the Patients list's render
@@ -2522,14 +2529,9 @@ function App() {
     })
   }, [visiblePatients, tagsById, tagGroups])
 
-  const quickSwitchPatients = useMemo(() => {
-    const compareByRoom = (a: Patient, b: Patient) =>
-      a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-
-    return (patients ?? [])
-      .filter((patient) => isPatientActive(patient, tagsById))
-      .sort(compareByRoom)
-  }, [patients, tagsById])
+  // Same set and order as the main patient list's current status/Tag/Ward filter and sort
+  // (see filteredSortedPatients above) — just without the free-text search narrowing it further.
+  const quickSwitchPatients = filteredSortedPatients
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -2821,8 +2823,8 @@ function App() {
     }
   }
 
-  // Swipe left/right anywhere on the mobile patient view to move through active patients
-  // (same room-number order as the quick-switch picker), staying on the same tab. The card
+  // Swipe left/right anywhere on the mobile patient view to move through patients
+  // (same filtered/sorted order as the quick-switch picker), staying on the same tab. The card
   // tracks the finger 1:1 (translateX) so the gesture is unmistakable before it's even
   // completed, and a name badge with a directional arrow pops in once you cross the
   // deadzone. A confirmed swipe finishes sliding the old card off, then the new patient's
@@ -7285,7 +7287,7 @@ function App() {
                 <CardHeader className='sticky top-0 z-20 py-2 px-0 pb-2 bg-warm-ivory/97 backdrop-blur-sm border-b border-clay/15 mx-0 sm:static sm:py-3 sm:px-4 sm:pb-0 sm:bg-transparent sm:backdrop-blur-none sm:border-b-0'>
                   <div className='flex items-center justify-between gap-2'>
                     <Select
-                      value={isPatientActive(selectedPatient, tagsById) ? (selectedPatient.id?.toString() ?? '') : ''}
+                      value={quickSwitchPatients.some((patient) => patient.id === selectedPatient.id) ? (selectedPatient.id?.toString() ?? '') : ''}
                       onValueChange={(value) => {
                         const nextId = Number.parseInt(value, 10)
                         if (!Number.isFinite(nextId) || selectedPatient.id === nextId) return
@@ -9484,7 +9486,7 @@ function App() {
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
                     ['Navigate on mobile', 'The bottom bar shows your visible patient tabs in a scrollable row — swipe or tap to switch. Use ← Back to return to the patient list.'],
                     ['Customize your tabs', 'Go to Settings → Patient Tabs to hide tabs you don\'t use and drag the rest into your preferred order. Hiding a tab only hides it — the data underneath is never deleted.'],
-                    ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different active patient while staying on the same section. On mobile, swipe left or right anywhere on the patient view to move to the next or previous patient (by room number order) instead. Discharged patients are hidden from this quick-switch list, and you can scroll through the list when many active patients are present.'],
+                    ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different patient while staying on the same section. This quick-switch list matches whatever Status/Tag/Ward filter and sort order you last used on the Patients tab (not its search box), and you can scroll through it when many patients are present. On mobile, swipe left or right anywhere on the patient view to move to the next or previous patient in that same order instead.'],
                     ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes, then fill in Subjective, Objective, Assessment, and Plan below them. Drag blocks to set their priority. Unresolved problems carry forward to the next date automatically — mark one Resolved once it no longer needs tracking. Tap Copy latest entry to copy the previous problem blocks in order, subjective, objective, assessment, and plan.'],
                     ['Track a daily checklist', 'Open Checklist, add short tasks for the date, and check them off as you go. Pending items carry forward automatically to the next date; completed items move to the bottom. Drag any item to override that order.'],
                     ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Completing an item moves it to the bottom; reopening it moves it before the first completed item. Drag any item to override that order.'],
