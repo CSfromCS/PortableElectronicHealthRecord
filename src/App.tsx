@@ -6143,6 +6143,89 @@ function App() {
     exitPatientTaggingSelectionMode()
   }
 
+  // Copies each selected patient's profile row plus their structured Medications, Master Problem
+  // List and Simple Problem List (parent/problem links are remapped to the new rows). Per-date and
+  // history records (daily updates, vitals, labs, orders, photos, tag events, custom action runs)
+  // are deliberately left behind so a copy works as a clean template. createdAt resets to now so
+  // the copy's default Admission/Referral date is today, and "DUPLICATE" is appended to the surname.
+  const duplicateSelectedPatients = async () => {
+    const sourcePatients = (patients ?? []).filter(
+      (patient) => patient.id !== undefined && selectedPatientIdsForTagging.has(patient.id),
+    )
+    if (sourcePatients.length === 0) return
+
+    const now = new Date().toISOString()
+    await db.transaction('rw', [db.patients, db.medications, db.masterProblems, db.simpleProblemItems], async () => {
+      for (const source of sourcePatients) {
+        const sourceId = source.id as number
+        const { id: _omit, ...rest } = source
+        void _omit
+        const newId = await db.patients.add({
+          ...rest,
+          lastName: `${source.lastName.trim()} DUPLICATE`.trim(),
+          createdAt: now,
+          lastModified: now,
+          mainServiceTagIds: [...source.mainServiceTagIds],
+          referralServiceTagIds: [...source.referralServiceTagIds],
+          admissionDiagnosisByService: { ...source.admissionDiagnosisByService },
+          dischargeDiagnosisByService: { ...source.dischargeDiagnosisByService },
+          tagIds: [...source.tagIds],
+        }) as number
+
+        const medications = await db.medications.where('patientId').equals(sourceId).toArray()
+        if (medications.length > 0) {
+          await db.medications.bulkAdd(medications.map(({ id: _medId, ...medication }) => {
+            void _medId
+            return { ...medication, patientId: newId, createdAt: now }
+          }))
+        }
+
+        const problems = await db.masterProblems.where('patientId').equals(sourceId).toArray()
+        const problemIdMap = new Map<number, number>()
+        // Top-level problems first so sub-problems can point at their new parent's id.
+        for (const problem of [...problems].sort((a, b) => Number(a.parentId !== null) - Number(b.parentId !== null))) {
+          const { id: oldProblemId, ...problemRest } = problem
+          const newProblemId = await db.masterProblems.add({
+            ...problemRest,
+            patientId: newId,
+            parentId: problem.parentId === null ? null : (problemIdMap.get(problem.parentId) ?? null),
+            mergedIntoId: null,
+            nameHistory: problem.nameHistory.map((event) => ({ ...event })),
+            createdAt: now,
+          }) as number
+          if (oldProblemId !== undefined) problemIdMap.set(oldProblemId, newProblemId)
+        }
+        // mergedIntoId may point at a sibling copied later, so patch it once every id is known.
+        for (const problem of problems) {
+          if (problem.id === undefined || problem.mergedIntoId === null) continue
+          const newProblemId = problemIdMap.get(problem.id)
+          const newMergedId = problemIdMap.get(problem.mergedIntoId)
+          if (newProblemId !== undefined && newMergedId !== undefined) {
+            await db.masterProblems.update(newProblemId, { mergedIntoId: newMergedId })
+          }
+        }
+
+        const simpleItems = await db.simpleProblemItems.where('patientId').equals(sourceId).toArray()
+        if (simpleItems.length > 0) {
+          await db.simpleProblemItems.bulkAdd(simpleItems.map(({ id: _itemId, ...item }) => {
+            void _itemId
+            return {
+              ...item,
+              patientId: newId,
+              groupedMasterProblemIds: item.groupedMasterProblemIds
+                .map((oldId) => problemIdMap.get(oldId))
+                .filter((mapped): mapped is number => mapped !== undefined),
+              createdAt: now,
+            }
+          }))
+        }
+      }
+    })
+
+    setNotice(`Duplicated ${sourcePatients.length} patient${sourcePatients.length === 1 ? '' : 's'}.`)
+    exitPatientTaggingSelectionMode()
+  }
+
   // A flat, clearly-labeled placeholder — evokes an x-ray without claiming to be one, so the
   // Photos feature has something to demo without fabricating real-looking clinical imagery.
   const buildSamplePhotoBlob = (label: string, width = 800, height = 600): Promise<Blob> => {
@@ -6862,6 +6945,15 @@ function App() {
                       {action.name}
                     </Button>
                   ))}
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 text-xs'
+                    disabled={selectedPatientIdsForTagging.size === 0}
+                    onClick={() => void duplicateSelectedPatients()}
+                  >
+                    Duplicate
+                  </Button>
                   <Button
                     size='sm'
                     variant='destructive'
@@ -9483,6 +9575,7 @@ function App() {
                 <ol className='space-y-2'>
                   {([
                     ['Add a patient', 'Fill in the form on the Patients tab (room, name, age, sex, main service) and tap Add patient.'],
+                    ['Duplicate a patient', 'On the Patients tab, tap Select (or long-press a card on mobile), tick one or more patients, and tap Duplicate. Each copy keeps the profile, medications, and problem lists, with DUPLICATE added to the surname — handy for similar cases or for keeping template profiles with your own pre-filled text. Daily notes, vitals, labs, orders, and photos are not copied.'],
                     ['Open a patient', 'Tap Open on any patient card to enter the patient view with all clinical tabs.'],
                     ['Navigate on mobile', 'The bottom bar shows your visible patient tabs in a scrollable row — swipe or tap to switch. Use ← Back to return to the patient list.'],
                     ['Customize your tabs', 'Go to Settings → Patient Tabs to hide tabs you don\'t use and drag the rest into your preferred order. Hiding a tab only hides it — the data underneath is never deleted.'],
