@@ -1054,13 +1054,13 @@ function App() {
   }
   const dateTimeFormatsById = useMemo(() => new Map((dateTimeFormats ?? []).map((format) => [String(format.id), format])), [dateTimeFormats])
   const manualCustomActions = useMemo(
-    () => (customActions ?? []).filter((action) => (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
+    () => (customActions ?? []).filter((action) => !action.disabled && (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
     [customActions],
   )
   // General-scope actions (issue #120) — always manual by construction, shown on the Master
   // Checklist's General section instead of any patient's Checklist tab.
   const generalCustomActions = useMemo(
-    () => (customActions ?? []).filter((action) => action.scope === 'general').sort((a, b) => a.sortOrder - b.sortOrder),
+    () => (customActions ?? []).filter((action) => !action.disabled && action.scope === 'general').sort((a, b) => a.sortOrder - b.sortOrder),
     [customActions],
   )
   const dischargedTag = useMemo(() => (tagDefinitions ?? []).find((tag) => tag.name === 'Discharged'), [tagDefinitions])
@@ -3532,7 +3532,7 @@ function App() {
     if (patientAfterAdd.id === undefined || addedTagIds.length === 0) return
     const addedTagIdSet = new Set(addedTagIds)
     const matchingActions = (customActions ?? []).filter(
-      (action) => action.triggerType === 'automatic' && action.triggerTagId !== undefined && addedTagIdSet.has(action.triggerTagId),
+      (action) => !action.disabled && action.triggerType === 'automatic' && action.triggerTagId !== undefined && addedTagIdSet.has(action.triggerTagId),
     )
     if (matchingActions.length === 0) return
 
