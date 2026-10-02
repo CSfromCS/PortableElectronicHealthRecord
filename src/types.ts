@@ -197,6 +197,8 @@ export interface CustomAction {
   templateRunFilterTagMode?: 'AND' | 'OR'
   /** References to TagDefinition rows in the "Ward" tag group — see CustomView.wardTagIds. */
   templateRunFilterWardTagIds?: number[]
+  /** True when the user has toggled this action off in Manage Custom Actions — it's then hidden from every run button and never auto-fires, but keeps its definition so it can be switched back on. Unset (the default) means enabled. */
+  disabled?: boolean
   sortOrder: number
   createdAt: string
 }

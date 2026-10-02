@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, Copy, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -814,7 +814,7 @@ export const ManageCustomActionsScreen = ({
       <CardContent className='px-4 pb-4 space-y-4'>
         <div className='flex items-center justify-between gap-2 flex-wrap'>
           <FieldTip className='max-w-[70%]'>
-            Custom Actions append checklist items and/or add or remove tags, either manually via a button or automatically when a tag is added.
+            Custom Actions append checklist items and/or add or remove tags, either manually via a button or automatically when a tag is added. Use the eye icon to turn an action off (hidden and not auto-fired) without deleting it.
           </FieldTip>
           <Button size='sm' variant='outline' onClick={openCreate}>
             <Plus className='h-3.5 w-3.5 mr-1' /> Add action
@@ -827,6 +827,7 @@ export const ManageCustomActionsScreen = ({
               key={action.id}
               className={cn(
                 'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-2 transition-shadow',
+                action.disabled && 'opacity-60',
                 actionDrag.isDragging(action.id as number) && 'opacity-50',
                 dropIndicatorClassName(actionDrag.dropIndicator(action.id as number)),
               )}
@@ -834,7 +835,10 @@ export const ManageCustomActionsScreen = ({
             >
               <DragHandle label={`Drag to reorder ${action.name}`} dragProps={actionDrag.getHandleProps(action.id as number)} />
               <div className='flex-1 min-w-0'>
-                <p className='text-sm font-semibold text-espresso truncate'>{action.name}</p>
+                <p className='text-sm font-semibold text-espresso truncate'>
+                  {action.name}
+                  {action.disabled ? <span className='ml-1.5 text-[10px] font-bold uppercase tracking-wide text-clay'>Off</span> : null}
+                </p>
                 <p className='text-[11px] text-clay/80'>
                   {action.scope === 'general' ? 'General · ' : ''}
                   {action.triggerType === 'manual' ? 'Manual button' : `Automatic on "${triggerTagName(action)}" added`}
@@ -846,6 +850,18 @@ export const ManageCustomActionsScreen = ({
                     : ''}
                 </p>
               </div>
+              <Button
+                variant='ghost'
+                size='sm'
+                className='h-7 w-7 p-0 text-clay'
+                role='switch'
+                aria-checked={!action.disabled}
+                aria-label={`${action.disabled ? 'Turn on' : 'Turn off'} ${action.name}`}
+                title={action.disabled ? 'Off — hidden from buttons and automatic triggers. Tap to turn on.' : 'On — tap to hide without deleting.'}
+                onClick={() => void db.customActions.update(action.id as number, { disabled: !action.disabled })}
+              >
+                {action.disabled ? <EyeOff className='h-3.5 w-3.5' /> : <Eye className='h-3.5 w-3.5' />}
+              </Button>
               <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${action.name}`} onClick={() => openEdit(action)}>
                 <Pencil className='h-3.5 w-3.5' />
               </Button>
