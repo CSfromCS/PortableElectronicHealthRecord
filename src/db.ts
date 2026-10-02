@@ -13,6 +13,7 @@ import {
   buildLockedLabsTemplate,
 } from './features/templates/templateDefaults'
 import {
+  DEFAULT_DIAGNOSIS_VARIABLE_CONFIG,
   buildDefaultBlockVariableConfig,
   buildGroupVariableInstanceForField,
   buildVariableToken,
@@ -1529,6 +1530,57 @@ db.version(29).stores({
     }
     delete legacyAction.templateRunFilterWards
     await customActionTable.put({ ...legacyAction, templateRunFilterWardTagIds })
+  }
+})
+
+db.version(30).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+  simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
+}).upgrade(async (tx) => {
+  // Issue #162: admissionDiagnosis/dischargeDiagnosis move from the configless Flat variable kind
+  // to their own `DiagnosisVariableConfig`-carrying kind (same idea as the v19 migration's
+  // medications Flat-to-Block move above) — an existing `{kind:'flat', variableId:'admissionDiagnosis'|'dischargeDiagnosis'}`
+  // upgrades in place to a `diagnosis`-kind instance under the SAME token id (so surrounding
+  // patternText needs no rewriting), with `DEFAULT_DIAGNOSIS_VARIABLE_CONFIG` reproducing that
+  // variable's only-ever-had rendering (service name, labeled, line-break separated) exactly, so
+  // this is a no-op for the rendered output of any existing template.
+  const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
+  const existingTemplates = await reportTemplateTable.toArray()
+
+  const migrateDiagnosisVariables = (variables: Record<string, TemplateVariableInstance>): { next: Record<string, TemplateVariableInstance>; changed: boolean } => {
+    let changed = false
+    const next: Record<string, TemplateVariableInstance> = { ...variables }
+    for (const [tokenId, instance] of Object.entries(next)) {
+      if (instance.kind !== 'flat') continue
+      const legacyVariableId = instance.variableId as string
+      if (legacyVariableId !== 'admissionDiagnosis' && legacyVariableId !== 'dischargeDiagnosis') continue
+      next[tokenId] = { kind: 'diagnosis', variableId: legacyVariableId, config: { ...DEFAULT_DIAGNOSIS_VARIABLE_CONFIG } }
+      changed = true
+    }
+    return { next, changed }
+  }
+
+  for (const template of existingTemplates) {
+    if (template.id === undefined) continue
+    const { next, changed } = migrateDiagnosisVariables(template.variables)
+    if (changed) await reportTemplateTable.update(template.id, { variables: next })
   }
 })
 

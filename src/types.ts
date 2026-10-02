@@ -370,10 +370,14 @@ export interface PhotoAttachment {
 }
 
 /** Single-value fields with no date dimension — inserted inline as plain text at a Format Pattern
- * placeholder. `admissionDiagnosis`/`dischargeDiagnosis` split what issue #82 originally specified
- * as one "Diagnosis" variable, matching the per-service Admission/Discharge Diagnosis model this
- * app actually has (see Patient.admissionDiagnosisByService et al.). `currentDate`/`currentTime`
- * don't come from patient data at all — they're captured once at the start of report generation. */
+ * placeholder. `admissionDiagnosis`/`dischargeDiagnosis` (split from what issue #82 originally
+ * specified as one "Diagnosis" variable, matching the per-service Admission/Discharge Diagnosis
+ * model this app actually has — see Patient.admissionDiagnosisByService et al.) moved out to their
+ * own `DiagnosisVariableId`/`DiagnosisVariableConfig` kind in issue #162 — unlike every other Flat
+ * variable, how a Diagnosis variable renders is itself configurable per-placement (whether each
+ * line shows its service, and how), the same idea as Tags' own `TagsVariableConfig`.
+ * `currentDate`/`currentTime` don't come from patient data at all — they're captured once at the
+ * start of report generation. */
 export type FlatVariableId =
   | 'roomNumber'
   | 'ward'
@@ -384,8 +388,6 @@ export type FlatVariableId =
   | 'sex'
   | 'mainService'
   | 'referralService'
-  | 'admissionDiagnosis'
-  | 'dischargeDiagnosis'
   | 'clinicalSummary'
   | 'admitDate'
   | 'admitTime'
@@ -522,6 +524,32 @@ export interface TagsVariableConfig {
   emojiRendering: 'emoji' | 'name'
 }
 
+/** Admission/Discharge Diagnosis's own variableId — split out from `FlatVariableId` (see that
+ * type's own doc comment) since, like Tags, how it renders is itself configurable per-placement. */
+export type DiagnosisVariableId = 'admissionDiagnosis' | 'dischargeDiagnosis'
+
+/** Per-placement settings for an Admission/Discharge Diagnosis variable (issue #162). Mirrors
+ * `TagsVariableConfig`'s own per-placeholder settings pattern. Defaults reproduce this field's
+ * only-ever-had behavior exactly: one labeled line per assigned service
+ * (`<Service Name>: <diagnosis text>`), joined by line breaks — see `DEFAULT_DIAGNOSIS_VARIABLE_CONFIG`. */
+export interface DiagnosisVariableConfig {
+  /** Whether each assigned service's diagnosis line is prefixed with that service's label at all.
+   * False renders just the diagnosis text, one line per assigned service, unlabeled. Has no
+   * effect while the patient has zero Main/Referral services — the `*Unassigned` fallback never
+   * carries a service label either way. */
+  showService: boolean
+  /** Only meaningful when `showService` is true. 'name' always uses the service tag's full name
+   * (this field's only-ever behavior). 'symbol' instead mirrors that tag's own card rendering —
+   * its emoji glyph for an Emoji-type tag, or its short Text-with-Color badge text
+   * (`TagDefinition.displayText`) for a Text-with-Color tag — same idea as Tags'
+   * `emojiRendering`, generalized to both tag display types via `renderTagDisplayText`. */
+  serviceRendering: 'name' | 'symbol'
+  /** How consecutive per-service diagnosis lines join. */
+  lineSeparator: BlockJoinMode
+  /** Only meaningful when lineSeparator === 'custom'. */
+  customLineSeparator: string
+}
+
 /** What a single `{{var:<id>}}` token in `ReportTemplate.patternText` resolves to — looked up by
  * the id embedded in the token, not by position, so editing the surrounding text never disturbs a
  * variable's own settings. */
@@ -529,6 +557,7 @@ export type TemplateVariableInstance =
   | { kind: 'flat'; variableId: FlatVariableId; /** Only meaningful for a date/time-typed FlatVariableId (admitDate/referralDate/dischargeDate/currentDate/currentTime). Unset uses that field's own built-in default formatting. */ dateTimeFormatId?: string }
   | { kind: 'block'; variableId: BlockVariableId; config: BlockVariableConfig }
   | { kind: 'tags'; config: TagsVariableConfig }
+  | { kind: 'diagnosis'; variableId: DiagnosisVariableId; config: DiagnosisVariableConfig }
 
 /** How multiple selected tags spanning more than one Tag Group combine into Tag Combo Grouping's
  * output groups (automatic mode only — see `ReportTemplate.groupSelectionMode`). Meaningless when
