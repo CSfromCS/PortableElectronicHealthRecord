@@ -27,6 +27,8 @@ import type {
   BlockVariableRangeMode,
   CensusGroupCombineMode,
   DateTimeFormatDefinition,
+  DiagnosisVariableConfig,
+  DiagnosisVariableId,
   FlatVariableId,
   GroupVariableInstance,
   LabsDateDisplayMode,
@@ -46,7 +48,9 @@ import {
   BLOCK_JOIN_MODE_LABELS,
   BLOCK_VARIABLE_LABELS,
   DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS,
+  DEFAULT_DIAGNOSIS_VARIABLE_CONFIG,
   DEFAULT_TAGS_VARIABLE_CONFIG,
+  DIAGNOSIS_VARIABLE_LABELS,
   ENTRY_FIELD_LABELS_BY_BLOCK,
   ENTRY_FIELD_ORDER_BY_BLOCK,
   FLAT_VARIABLE_LABELS,
@@ -71,18 +75,22 @@ import {
 import { buildSamplePreviewContext, buildSamplePreviewPatient } from './samplePreviewData'
 
 const BLOCK_VARIABLE_ORDER: BlockVariableId[] = ['vitals', 'labs', 'problems', 'checklist', 'orders', 'medications']
+const DIAGNOSIS_VARIABLE_ORDER: DiagnosisVariableId[] = ['admissionDiagnosis', 'dischargeDiagnosis']
 
 type PickerTab = {
   id: string
   label: string
   flatIds?: FlatVariableId[]
+  /** Admission/Discharge Diagnosis moved out of `flatIds` in issue #162 — like Tags, they open
+   * their own settings dialog on pick rather than inserting with no config. */
+  diagnosisIds?: DiagnosisVariableId[]
 }
 
 /** Grouped so it's obvious at a glance which category of information a variable pulls from,
  * rather than one long undifferentiated list. */
 const PICKER_TABS: PickerTab[] = [
   { id: 'identity', label: 'Identity', flatIds: ['roomNumber', 'ward', 'lastName', 'firstName', 'middleName', 'age', 'sex'] },
-  { id: 'clinical', label: 'Clinical', flatIds: ['mainService', 'referralService', 'admissionDiagnosis', 'dischargeDiagnosis', 'clinicalSummary', 'database'] },
+  { id: 'clinical', label: 'Clinical', flatIds: ['mainService', 'referralService', 'clinicalSummary', 'database'], diagnosisIds: DIAGNOSIS_VARIABLE_ORDER },
   { id: 'dates', label: 'Dates', flatIds: ['admitDate', 'admitTime', 'referralDate', 'referralTime', 'dischargeDate', 'dischargeTime', 'currentDate', 'currentTime'] },
   { id: 'tags', label: 'Tags' },
   { id: 'records', label: 'Records' },
@@ -1225,6 +1233,81 @@ const TagsVariableConfigDialog = ({
   )
 }
 
+/** Admission/Discharge Diagnosis's own per-placement settings (issue #162) — same idea as
+ * `TagsVariableConfigDialog` above: whether each assigned service's diagnosis line carries a
+ * service label at all, how that label renders when it does, and how consecutive lines join. */
+const DiagnosisVariableConfigDialog = ({
+  open,
+  variableId,
+  initialConfig,
+  onCancel,
+  onSave,
+}: {
+  open: boolean
+  variableId: DiagnosisVariableId | null
+  initialConfig: DiagnosisVariableConfig
+  onCancel: () => void
+  onSave: (config: DiagnosisVariableConfig) => void
+}) => {
+  const [config, setConfig] = useState<DiagnosisVariableConfig>(initialConfig)
+
+  useEffect(() => {
+    if (open) setConfig(initialConfig)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset the draft only when the dialog (re)opens
+  }, [open])
+
+  if (!open || variableId === null) return null
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
+      <DialogContent className='max-w-md' onCloseAutoFocus={(event) => event.preventDefault()}>
+        <DialogHeader>
+          <DialogTitle>{DIAGNOSIS_VARIABLE_LABELS[variableId]} settings</DialogTitle>
+        </DialogHeader>
+        <div className='space-y-3'>
+          <label className='flex items-center gap-2.5 cursor-pointer'>
+            <input
+              type='checkbox'
+              className='h-4 w-4 accent-action-primary'
+              checked={config.showService}
+              onChange={(event) => setConfig((previous) => ({ ...previous, showService: event.target.checked }))}
+            />
+            <span className='text-sm text-espresso'>Label each line with its service</span>
+          </label>
+          <FieldTip>
+            {config.showService
+              ? 'Each assigned service’s diagnosis renders on its own line, prefixed with that service.'
+              : 'Each assigned service’s diagnosis renders on its own line with no service prefix — just the text typed into that service’s field.'}
+          </FieldTip>
+
+          {config.showService ? (
+            <div className='space-y-1'>
+              <Label className='text-xs'>Service renders as</Label>
+              <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+                <Button type='button' size='sm' variant={config.serviceRendering === 'name' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setConfig((previous) => ({ ...previous, serviceRendering: 'name' }))}>Service name</Button>
+                <Button type='button' size='sm' variant={config.serviceRendering === 'symbol' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setConfig((previous) => ({ ...previous, serviceRendering: 'symbol' }))}>Symbol</Button>
+              </div>
+              <FieldTip>Symbol uses the service tag's own emoji glyph (Emoji-type) or short badge text (Text-with-Color type) — whatever that service tag's card already shows.</FieldTip>
+            </div>
+          ) : null}
+
+          <JoinModePicker
+            label='Between diagnosis lines'
+            mode={config.lineSeparator}
+            custom={config.customLineSeparator}
+            onModeChange={(lineSeparator) => setConfig((previous) => ({ ...previous, lineSeparator }))}
+            onCustomChange={(customLineSeparator) => setConfig((previous) => ({ ...previous, customLineSeparator }))}
+          />
+        </div>
+        <div className='flex justify-end gap-2 pt-2'>
+          <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
+          <Button type='button' onClick={() => onSave(config)}>Save</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 const CURRENT_DATE_TIME_FLAT_IDS: FlatVariableId[] = ['currentDate', 'currentTime']
 
 const VariablePickerDialog = ({
@@ -1233,6 +1316,7 @@ const VariablePickerDialog = ({
   onPickFlat,
   onPickTags,
   onPickBlock,
+  onPickDiagnosis,
   restrictToCurrentDateTime = false,
 }: {
   open: boolean
@@ -1240,6 +1324,7 @@ const VariablePickerDialog = ({
   onPickFlat: (variableId: FlatVariableId) => void
   onPickTags: () => void
   onPickBlock: (variableId: BlockVariableId) => void
+  onPickDiagnosis: (variableId: DiagnosisVariableId) => void
   /** Header/Footer content prints once per run, not per patient, so only Current Date/Current
    * Time (plus whatever literal text is typed) make sense there — every other variable reads from
    * a specific patient and is left out of the picker entirely in this mode. */
@@ -1296,16 +1381,28 @@ const VariablePickerDialog = ({
                       </button>
                     ))
                   ) : (
-                    (tab.flatIds ?? []).map((variableId) => (
-                      <button
-                        key={variableId}
-                        type='button'
-                        className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
-                        onClick={() => onPickFlat(variableId)}
-                      >
-                        {FLAT_VARIABLE_LABELS[variableId]}
-                      </button>
-                    ))
+                    <>
+                      {(tab.flatIds ?? []).map((variableId) => (
+                        <button
+                          key={variableId}
+                          type='button'
+                          className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                          onClick={() => onPickFlat(variableId)}
+                        >
+                          {FLAT_VARIABLE_LABELS[variableId]}
+                        </button>
+                      ))}
+                      {(tab.diagnosisIds ?? []).map((variableId) => (
+                        <button
+                          key={variableId}
+                          type='button'
+                          className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+                          onClick={() => onPickDiagnosis(variableId)}
+                        >
+                          {DIAGNOSIS_VARIABLE_LABELS[variableId]}
+                        </button>
+                      ))}
+                    </>
                   )}
                 </div>
               </ScrollArea>
@@ -1388,6 +1485,7 @@ const FormatPatternEditor = ({
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pendingBlockVariable, setPendingBlockVariable] = useState<BlockVariableId | null>(null)
   const [tagsDialogOpen, setTagsDialogOpen] = useState(false)
+  const [pendingDiagnosisVariable, setPendingDiagnosisVariable] = useState<DiagnosisVariableId | null>(null)
   const [pendingDateTimeFlatId, setPendingDateTimeFlatId] = useState<FlatVariableId | null>(null)
   /** Non-null while the config dialog is editing an EXISTING chip (clicked in the editor) rather
    * than about to insert a brand-new one from the picker. */
@@ -1683,6 +1781,9 @@ const FormatPatternEditor = ({
     } else if (instance.kind === 'tags') {
       setReconfiguringId(id)
       setTagsDialogOpen(true)
+    } else if (instance.kind === 'diagnosis') {
+      setReconfiguringId(id)
+      setPendingDiagnosisVariable(instance.variableId)
     } else if (instance.kind === 'flat' && DATE_TIME_CAPABLE_FLAT_VARIABLE_IDS.has(instance.variableId)) {
       setReconfiguringId(id)
       setPendingDateTimeFlatId(instance.variableId)
@@ -1750,6 +1851,14 @@ const FormatPatternEditor = ({
     return instance?.kind === 'tags' ? instance.config : DEFAULT_TAGS_VARIABLE_CONFIG
   })()
 
+  const currentDiagnosisConfig = (() => {
+    if (reconfiguringId !== null) {
+      const instance = variablesRef.current[reconfiguringId]
+      if (instance?.kind === 'diagnosis') return instance.config
+    }
+    return DEFAULT_DIAGNOSIS_VARIABLE_CONFIG
+  })()
+
   const currentDateTimeFormatId = (() => {
     if (reconfiguringId === null) return undefined
     const instance = variablesRef.current[reconfiguringId]
@@ -1787,7 +1896,7 @@ const FormatPatternEditor = ({
       <FieldTip>
         {variableScope === 'currentDateTimeOnly'
           ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time — this prints once per run, so no patient-specific variable is available here.'
-          : 'Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags block — or a date/time variable — to change its settings.'}
+          : 'Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags/Diagnosis block — or a date/time variable — to change its settings.'}
       </FieldTip>
 
       <VariablePickerDialog
@@ -1812,6 +1921,11 @@ const FormatPatternEditor = ({
           setPickerOpen(false)
           setReconfiguringId(null)
           setPendingBlockVariable(variableId)
+        }}
+        onPickDiagnosis={(variableId) => {
+          setPickerOpen(false)
+          setReconfiguringId(null)
+          setPendingDiagnosisVariable(variableId)
         }}
       />
 
@@ -1848,6 +1962,24 @@ const FormatPatternEditor = ({
             insertInstanceAtSavedRange(instance)
           }
           setTagsDialogOpen(false)
+          setReconfiguringId(null)
+        }}
+      />
+
+      <DiagnosisVariableConfigDialog
+        open={pendingDiagnosisVariable !== null}
+        variableId={pendingDiagnosisVariable}
+        initialConfig={currentDiagnosisConfig}
+        onCancel={() => { setPendingDiagnosisVariable(null); setReconfiguringId(null) }}
+        onSave={(config) => {
+          if (pendingDiagnosisVariable === null) return
+          const instance: TemplateVariableInstance = { kind: 'diagnosis', variableId: pendingDiagnosisVariable, config }
+          if (reconfiguringId !== null) {
+            updateExistingChip(reconfiguringId, instance)
+          } else {
+            insertInstanceAtSavedRange(instance)
+          }
+          setPendingDiagnosisVariable(null)
           setReconfiguringId(null)
         }}
       />

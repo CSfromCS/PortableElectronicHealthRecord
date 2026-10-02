@@ -1,4 +1,5 @@
 import {
+  DEFAULT_DIAGNOSIS_VARIABLE_CONFIG,
   DEFAULT_TAGS_VARIABLE_CONFIG,
   buildDefaultBlockVariableConfig,
   buildGroupVariableInstanceForField,
@@ -6,7 +7,7 @@ import {
   createVariableId,
   type GroupFieldId,
 } from './templateEngine'
-import type { DateTimeComponentId, DateTimeFormatDefinition, FlatVariableId, GroupVariableInstance, ReportTemplate, TemplateVariableInstance } from '@/types'
+import type { DateTimeComponentId, DateTimeFormatDefinition, DiagnosisVariableId, FlatVariableId, GroupVariableInstance, ReportTemplate, TemplateVariableInstance } from '@/types'
 
 /** Tag Combo Grouping (issue #145) off, with reasonable starting values for its fields should the
  * user turn it on — split out from `DEFAULT_TEMPLATE_EXTRAS` below so the v25 migration in db.ts
@@ -53,10 +54,15 @@ export const buildDefaultReportTemplates = (now: string): Omit<ReportTemplate, '
   }
   const tagsId = createVariableId()
   variables[tagsId] = { kind: 'tags', config: { ...DEFAULT_TAGS_VARIABLE_CONFIG } }
+  const diagnosisToken = (variableId: DiagnosisVariableId): string => {
+    const id = createVariableId()
+    variables[id] = { kind: 'diagnosis', variableId, config: { ...DEFAULT_DIAGNOSIS_VARIABLE_CONFIG } }
+    return buildVariableToken(id)
+  }
 
   const fullCensusPattern = [
     `${flatToken('roomNumber')} ${flatToken('ward')} — ${flatToken('lastName')}, ${flatToken('firstName')} — ${flatToken('mainService')}`,
-    flatToken('admissionDiagnosis'),
+    diagnosisToken('admissionDiagnosis'),
     buildVariableToken(tagsId),
   ].join('\n')
 
@@ -91,11 +97,16 @@ export const buildFirstInstallReportTemplates = (now: string, tagIdByName: Map<s
     variables[id] = { kind: 'flat', variableId }
     return buildVariableToken(id)
   }
+  const diagnosisToken = (variableId: DiagnosisVariableId): string => {
+    const id = createVariableId()
+    variables[id] = { kind: 'diagnosis', variableId, config: { ...DEFAULT_DIAGNOSIS_VARIABLE_CONFIG } }
+    return buildVariableToken(id)
+  }
   const fullCensusPattern = [
     `${flatToken('roomNumber')} ${flatToken('lastName')}, ${flatToken('firstName')}`,
     `${flatToken('age')}/${flatToken('sex')}`,
     `M: ${flatToken('mainService')}`,
-    flatToken('admissionDiagnosis'),
+    diagnosisToken('admissionDiagnosis'),
     '',
   ].join('\n')
 

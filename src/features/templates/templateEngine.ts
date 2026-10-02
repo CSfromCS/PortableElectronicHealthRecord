@@ -1,5 +1,5 @@
 import { type DateTimeWindow, type PatientPoolContext, matchesPatientPool } from '@/features/filters/patientFilterUtils'
-import { composeDiagnosisText } from '@/features/patients/serviceDiagnosis'
+import { composeDiagnosisTextConfigurable } from '@/features/patients/serviceDiagnosis'
 import { buildLabReportBlockPieces, formatOrderStatus } from '@/features/reporting/reportBuilders'
 import { resolveServiceTagNames } from '@/features/tags/serviceTagUtils'
 import { getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
@@ -24,6 +24,8 @@ import type {
   DailyUpdate,
   DateTimeComponentId,
   DateTimeFormatDefinition,
+  DiagnosisVariableConfig,
+  DiagnosisVariableId,
   FlatVariableId,
   GroupVariableInstance,
   LabEntry,
@@ -611,6 +613,16 @@ export const DEFAULT_TAGS_VARIABLE_CONFIG: TagsVariableConfig = {
   emojiRendering: 'emoji',
 }
 
+/** Reproduces Admission/Discharge Diagnosis's only-ever-had rendering exactly — see
+ * `DiagnosisVariableConfig`'s own doc comment — so a brand-new placement, and every pre-existing
+ * saved template migrated by the v30 db.ts upgrade, starts out looking identical to before #162. */
+export const DEFAULT_DIAGNOSIS_VARIABLE_CONFIG: DiagnosisVariableConfig = {
+  showService: true,
+  serviceRendering: 'name',
+  lineSeparator: 'lineBreak',
+  customLineSeparator: '',
+}
+
 export type TemplateRenderContext = {
   tagsById: Map<number, TagDefinition>
   tagGroups: TagGroupDefinition[]
@@ -666,8 +678,6 @@ const resolveFlatVariable = (
     case 'sex': return patient.sex
     case 'mainService': return resolveServiceTagNames(patient.mainServiceTagIds, ctx.tagsById).join(', ')
     case 'referralService': return resolveServiceTagNames(patient.referralServiceTagIds, ctx.tagsById).join(', ')
-    case 'admissionDiagnosis': return composeDiagnosisText(patient, patient.admissionDiagnosisUnassigned, patient.admissionDiagnosisByService, ctx.tagsById)
-    case 'dischargeDiagnosis': return composeDiagnosisText(patient, patient.dischargeDiagnosisUnassigned, patient.dischargeDiagnosisByService, ctx.tagsById)
     case 'clinicalSummary': return patient.clinicalSummary
     case 'admitDate': {
       const iso = getEffectiveAdmitDate(patient.admitDate, patient.createdAt)
@@ -728,6 +738,26 @@ const resolveTagsVariable = (config: TagsVariableConfig, patient: Patient, ctx: 
       return renderTagDisplayText(tag)
     })
     .join(' ')
+}
+
+/** Admission/Discharge Diagnosis (issue #162) — unlike every other Flat variable, this one's own
+ * per-placement `DiagnosisVariableConfig` governs how its per-service lines render, so it reads
+ * `ctx.tagsById` the same way `resolveTagsVariable` above does rather than delegating straight to
+ * `composeDiagnosisText`'s own fixed rendering (still used, unconfigurable, by the Patients list's
+ * own card preview — see that function's doc comment). */
+const resolveDiagnosisVariable = (variableId: DiagnosisVariableId, config: DiagnosisVariableConfig, patient: Patient, ctx: TemplateRenderContext): string => {
+  const [unassigned, byService] = variableId === 'admissionDiagnosis'
+    ? [patient.admissionDiagnosisUnassigned, patient.admissionDiagnosisByService]
+    : [patient.dischargeDiagnosisUnassigned, patient.dischargeDiagnosisByService]
+  return composeDiagnosisTextConfigurable(patient, unassigned, byService, {
+    showService: config.showService,
+    labelForService: (tagId) => {
+      const tag = ctx.tagsById.get(tagId)
+      if (!tag) return `#${tagId}`
+      return config.serviceRendering === 'symbol' ? renderTagDisplayText(tag) : tag.name
+    },
+    lineSeparator: resolveJoinString(config.lineSeparator, config.customLineSeparator),
+  })
 }
 
 const resolveDateRangeBounds = (config: BlockVariableConfig, admitDateEffective: string): { dateFrom: string; timeFrom: string; dateTo: string; timeTo: string } => {
@@ -865,12 +895,14 @@ const resolveProblemsBlock = (config: BlockVariableConfig, updates: DailyUpdate[
           entry.problem !== undefined && Boolean(entry.problem.currentTitle.trim() || entry.note.notes.trim()))
       // Subjective/Objective/Assessment/Plan are per-date DailyUpdate fields, not per-problem
       // entries, so they can't live in entryPatternText like problemTitle/problemNotes — instead
-      // each enabled one is appended, labeled, below that date's problem entries (SOAP order).
+      // each enabled one is appended, verbatim (no label — see issue #162; the user types whatever
+      // prefix they want directly into the field, or into the surrounding Format Pattern), below
+      // that date's problem entries (SOAP order).
       const soapLines = [
-        config.includeSubjective && update.subjective?.trim() ? `Subjective: ${update.subjective.trim()}` : '',
-        config.includeObjective && update.objective?.trim() ? `Objective: ${update.objective.trim()}` : '',
-        config.includeAssessment && update.assessment?.trim() ? `Assessment: ${update.assessment.trim()}` : '',
-        config.includePlans && update.plans?.trim() ? `Plan: ${update.plans.trim()}` : '',
+        config.includeSubjective && update.subjective?.trim() ? update.subjective.trim() : '',
+        config.includeObjective && update.objective?.trim() ? update.objective.trim() : '',
+        config.includeAssessment && update.assessment?.trim() ? update.assessment.trim() : '',
+        config.includePlans && update.plans?.trim() ? update.plans.trim() : '',
       ].filter(Boolean)
       if (problems.length === 0 && soapLines.length === 0) return ''
       const problemsBody = problems
@@ -947,6 +979,7 @@ const resolveBlockVariable = (
 const resolveVariableInstance = (instance: TemplateVariableInstance, patient: Patient, ctx: TemplateRenderContext): string => {
   if (instance.kind === 'flat') return resolveFlatVariable(instance.variableId, instance.dateTimeFormatId, patient, ctx)
   if (instance.kind === 'block') return resolveBlockVariable(instance.variableId, instance.config, patient, ctx)
+  if (instance.kind === 'diagnosis') return resolveDiagnosisVariable(instance.variableId, instance.config, patient, ctx)
   return resolveTagsVariable(instance.config, patient, ctx)
 }
 
@@ -981,7 +1014,7 @@ export const renderTemplateForPatient = (template: Pick<ReportTemplate, 'pattern
  * variables (Current Date/Time), which don't make a template Per-Patient on their own. */
 const PATIENT_DEPENDENT_FLAT_VARIABLES = new Set<FlatVariableId>([
   'roomNumber', 'ward', 'lastName', 'firstName', 'middleName', 'age', 'sex',
-  'mainService', 'referralService', 'admissionDiagnosis', 'dischargeDiagnosis', 'clinicalSummary',
+  'mainService', 'referralService', 'clinicalSummary',
   'admitDate', 'admitTime', 'referralDate', 'referralTime', 'dischargeDate', 'dischargeTime', 'database',
 ])
 
@@ -990,6 +1023,7 @@ export type TemplateRepeatMode = 'per-patient' | 'prints-once'
 const isPatientDependentInstance = (instance: TemplateVariableInstance): boolean => {
   if (instance.kind === 'block') return true
   if (instance.kind === 'tags') return true
+  if (instance.kind === 'diagnosis') return true
   return PATIENT_DEPENDENT_FLAT_VARIABLES.has(instance.variableId)
 }
 
@@ -1022,6 +1056,7 @@ export const describeVariableInstance = (instance: TemplateVariableInstance): st
     const detail = instance.variableId === 'medications' ? describeMedicationsConfig(instance.config) : describeBlockConfig(instance.config)
     return `${BLOCK_VARIABLE_LABELS[instance.variableId]} — ${detail}`
   }
+  if (instance.kind === 'diagnosis') return `${DIAGNOSIS_VARIABLE_LABELS[instance.variableId]} — ${describeDiagnosisConfig(instance.config)}`
   return describeTagsConfig(instance.config)
 }
 
@@ -1270,6 +1305,16 @@ export const describeBlockConfig = (config: BlockVariableConfig): string => {
 export const describeTagsConfig = (config: TagsVariableConfig): string =>
   config.includeAll ? 'Tags (all)' : `Tags (${config.tagIds.length + config.groupIds.length} selected)`
 
+export const describeDiagnosisConfig = (config: DiagnosisVariableConfig): string => {
+  if (!config.showService) return 'No service label'
+  return config.serviceRendering === 'symbol' ? 'Service symbol' : 'Service name'
+}
+
+export const DIAGNOSIS_VARIABLE_LABELS: Record<DiagnosisVariableId, string> = {
+  admissionDiagnosis: 'Admission Diagnosis',
+  dischargeDiagnosis: 'Discharge Diagnosis',
+}
+
 export const FLAT_VARIABLE_LABELS: Record<FlatVariableId, string> = {
   roomNumber: 'Room Number',
   ward: 'Ward/Location',
@@ -1280,8 +1325,6 @@ export const FLAT_VARIABLE_LABELS: Record<FlatVariableId, string> = {
   sex: 'Sex',
   mainService: 'Main Service',
   referralService: 'Referral Service',
-  admissionDiagnosis: 'Admission Diagnosis',
-  dischargeDiagnosis: 'Discharge Diagnosis',
   clinicalSummary: 'Clinical Summary',
   admitDate: 'Admission Date',
   admitTime: 'Admission Time',
