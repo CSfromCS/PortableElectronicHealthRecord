@@ -689,17 +689,23 @@ export interface ReportTemplate {
   groupVariables: Record<string, GroupVariableInstance>
   groupSeparator: BlockJoinMode
   customGroupSeparator: string
-  /** Which output groups the Main Template (`patternText`) renders patients for. Unset/'all' (the
-   * default) = every group, as before. 'selected' = only the groups in `mainTemplateGroupKeys`;
-   * every other group renders its patients through Main Template 2 (`altPatternText`) instead. */
-  mainTemplateAppliesTo?: 'all' | 'selected'
-  /** Keys of the output groups Main Template 1 applies to — a group's key is its `comboKey`
-   * (automatic mode) or its manual combo `id`. Only read when `mainTemplateAppliesTo === 'selected'`. */
+  /** Keys of the output groups the Main Template (`patternText`, "Main Template 1") renders — a
+   * group's key is its `comboKey` (automatic mode) or its manual combo `id`. Only one main template
+   * may claim a group. Unset (templates saved before this existed) = Main Template 1 renders every
+   * group. Once set, a group claimed by no main template is not rendered at all. */
   mainTemplateGroupKeys?: string[]
-  /** Main Template 2 — same shape as `patternText`/`variables`, used for the groups Main Template 1
-   * doesn't apply to. Only read when `mainTemplateAppliesTo === 'selected'`. */
-  altPatternText?: string
-  altVariables?: Record<string, TemplateVariableInstance>
+  /** Further main templates ("Main Template 2", "3", …), each with its own Format Pattern and the
+   * groups it renders. Only read when grouping is enabled. */
+  extraMainTemplates?: ExtraMainTemplate[]
+}
+
+/** One additional per-patient Format Pattern for Tag Combo Grouping — see
+ * `ReportTemplate.extraMainTemplates`. */
+export interface ExtraMainTemplate {
+  id: string
+  patternText: string
+  variables: Record<string, TemplateVariableInstance>
+  groupKeys: string[]
 }
 
 /** A named, savable date/time display format (e.g. "MMM D, YYYY") — selectable wherever a

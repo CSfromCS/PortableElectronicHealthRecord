@@ -1180,7 +1180,7 @@ export type GroupRenderTemplate = Pick<
   | 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupAutomaticLabels' | 'groupManualCombos'
   | 'groupLookbackHours' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'
   | 'groupPatternText' | 'groupVariables' | 'groupSeparator' | 'customGroupSeparator'
-  | 'mainTemplateAppliesTo' | 'mainTemplateGroupKeys' | 'altPatternText' | 'altVariables'
+  | 'mainTemplateGroupKeys' | 'extraMainTemplates'
 >
 
 type GroupRenderCtx = {
@@ -1250,7 +1250,17 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
   const groups = buildOutputGroups(template, ctx.tagsById)
   if (groups.length === 0) return ''
 
-  const lines = groups.map((group) => {
+  const lines = groups.flatMap((group) => {
+    // Each group lists its patients through whichever main template claims it. Unset
+    // `mainTemplateGroupKeys` is the pre-multi-template shape: Main Template 1 renders everything.
+    // Otherwise a group no main template claims is skipped entirely.
+    const extras = template.extraMainTemplates ?? []
+    let groupTemplate: GroupRenderTemplate = template
+    if (template.mainTemplateGroupKeys !== undefined && !template.mainTemplateGroupKeys.includes(group.key)) {
+      const claimedBy = extras.find((extra) => extra.groupKeys.includes(group.key))
+      if (!claimedBy) return []
+      groupTemplate = { ...template, patternText: claimedBy.patternText, variables: claimedBy.variables }
+    }
     const patientsInGroup = patientsForBody.filter((patient) =>
       group.tagIds.every((tagId) => (patient.tagIds ?? []).includes(tagId)),
     )
@@ -1277,13 +1287,7 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
       signedOut: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-signed-out')),
       expired: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-expired')),
     }
-    // Main Template 2 stands in for the per-patient Format Pattern in every group Main Template 1
-    // isn't selected for.
-    const usesAltTemplate = template.mainTemplateAppliesTo === 'selected' && !(template.mainTemplateGroupKeys ?? []).includes(group.key)
-    const groupTemplate: GroupRenderTemplate = usesAltTemplate
-      ? { ...template, patternText: template.altPatternText ?? '', variables: template.altVariables ?? {} }
-      : template
-    return renderGroupPattern(groupTemplate, groupCtx, ctx)
+    return [renderGroupPattern(groupTemplate, groupCtx, ctx)]
   })
   return lines.join(resolveJoinString(template.groupSeparator, template.customGroupSeparator))
 }
