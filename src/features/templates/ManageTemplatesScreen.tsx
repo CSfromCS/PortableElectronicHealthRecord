@@ -68,6 +68,7 @@ import {
   isDateTimeCapableEntryField,
   mergeAutomaticGroupLabels,
   renderGroupedBody,
+  buildOutputGroups,
   renderTemplateForPatient,
   tokenizePatternText,
   type GroupFieldId,
@@ -120,6 +121,10 @@ type TemplateFormState = {
   groupVariables: Record<string, GroupVariableInstance>
   groupSeparator: BlockJoinMode
   customGroupSeparator: string
+  mainTemplateAppliesTo: 'all' | 'selected'
+  mainTemplateGroupKeys: string[]
+  altPatternText: string
+  altVariables: Record<string, TemplateVariableInstance>
 }
 
 const templateToForm = (template: ReportTemplate): TemplateFormState => ({
@@ -148,6 +153,10 @@ const templateToForm = (template: ReportTemplate): TemplateFormState => ({
   groupVariables: { ...template.groupVariables },
   groupSeparator: template.groupSeparator,
   customGroupSeparator: template.customGroupSeparator,
+  mainTemplateAppliesTo: template.mainTemplateAppliesTo ?? 'all',
+  mainTemplateGroupKeys: [...(template.mainTemplateGroupKeys ?? [])],
+  altPatternText: template.altPatternText ?? '',
+  altVariables: { ...(template.altVariables ?? {}) },
 })
 
 const blankForm = (): TemplateFormState => ({
@@ -174,6 +183,10 @@ const blankForm = (): TemplateFormState => ({
   groupVariables: {},
   groupSeparator: 'blankLine',
   customGroupSeparator: '',
+  mainTemplateAppliesTo: 'all',
+  mainTemplateGroupKeys: [],
+  altPatternText: '',
+  altVariables: {},
 })
 
 const JOIN_MODE_ORDER: BlockJoinMode[] = ['lineBreak', 'blankLine', 'space', 'custom']
@@ -2034,6 +2047,14 @@ const TemplateEditor = ({
   const dateTimeFormatsById = useMemo(() => new Map(dateTimeFormats.map((format) => [String(format.id), format])), [dateTimeFormats])
   const tagsById = useMemo(() => new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag])), [tags])
 
+  // The output groups Main Template 1 can be scoped to — same list (and labels) the Group Template
+  // editor shows, derived from the form so it tracks unsaved group edits.
+  const outputGroups = useMemo(
+    () => buildOutputGroups(form, tagsById).map((group, index) => ({ key: group.key, label: group.label.trim() || `Group ${index + 1}` })),
+    [form, tagsById],
+  )
+  const scopedToGroups = form.groupingEnabled && form.mainTemplateAppliesTo === 'selected'
+
   const repeatMode = useMemo(
     () => classifyTemplateRepeatMode({ patternText: form.patternText, variables: form.variables, groupingEnabled: form.groupingEnabled }),
     [form.patternText, form.variables, form.groupingEnabled],
@@ -2105,8 +2126,68 @@ const TemplateEditor = ({
                 dateTimeFormats={dateTimeFormats}
                 onChange={(patternText, variables) => setForm((previous) => ({ ...previous, patternText, variables }))}
               />
+              {form.groupingEnabled ? (
+                <div className='space-y-1.5 border-t border-clay/15 pt-2.5'>
+                  <Label className='text-xs'>Apply to:</Label>
+                  <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
+                    <Button type='button' size='sm' variant={form.mainTemplateAppliesTo === 'all' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setForm((previous) => ({ ...previous, mainTemplateAppliesTo: 'all' }))}>All groups</Button>
+                    <Button type='button' size='sm' variant={form.mainTemplateAppliesTo === 'selected' ? 'default' : 'ghost'} className='flex-1 text-xs' onClick={() => setForm((previous) => ({ ...previous, mainTemplateAppliesTo: 'selected' }))}>Selected groups</Button>
+                  </div>
+                  {form.mainTemplateAppliesTo === 'selected' ? (
+                    outputGroups.length === 0 ? (
+                      <p className='text-xs text-clay'>Define groups under Group-level formatting first, then pick them here.</p>
+                    ) : (
+                      <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
+                        {outputGroups.map((group) => (
+                          <label key={group.key} className='flex items-center gap-2.5 py-1 cursor-pointer'>
+                            <input
+                              type='checkbox'
+                              className='h-4 w-4 accent-action-primary'
+                              checked={form.mainTemplateGroupKeys.includes(group.key)}
+                              onChange={() => setForm((previous) => ({
+                                ...previous,
+                                mainTemplateGroupKeys: previous.mainTemplateGroupKeys.includes(group.key)
+                                  ? previous.mainTemplateGroupKeys.filter((key) => key !== group.key)
+                                  : [...previous.mainTemplateGroupKeys, group.key],
+                              }))}
+                            />
+                            <span className='text-sm text-espresso'>{group.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )
+                  ) : null}
+                  <FieldTip>
+                    {form.mainTemplateAppliesTo === 'all'
+                      ? 'Every group lists its patients with this Main Template.'
+                      : 'Only the ticked groups use this Main Template — every other group uses Main Template 2 below.'}
+                  </FieldTip>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
+
+          {scopedToGroups ? (
+            <Card className='border-action-primary/25 shadow-sm'>
+              <CardHeader className='py-3 px-4 pb-2'>
+                <CardTitle className='text-base'>Main Template 2</CardTitle>
+                <p className='text-xs text-clay'>
+                  Used by{' '}
+                  {outputGroups.filter((group) => !form.mainTemplateGroupKeys.includes(group.key)).map((group) => group.label).join(', ') || 'no groups — every group is ticked above'}
+                </p>
+              </CardHeader>
+              <CardContent className='px-4 pb-4 space-y-1.5'>
+                <FormatPatternEditor
+                  initialPatternText={form.altPatternText}
+                  initialVariables={form.altVariables}
+                  tags={tags}
+                  groups={groups}
+                  dateTimeFormats={dateTimeFormats}
+                  onChange={(altPatternText, altVariables) => setForm((previous) => ({ ...previous, altPatternText, altVariables }))}
+                />
+              </CardContent>
+            </Card>
+          ) : null}
 
           {repeatMode === 'per-patient' ? (
             <JoinModePicker
@@ -2206,6 +2287,10 @@ export const ManageTemplatesScreen = ({
       groupVariables: form.groupVariables,
       groupSeparator: form.groupSeparator,
       customGroupSeparator: form.customGroupSeparator,
+      mainTemplateAppliesTo: form.mainTemplateAppliesTo,
+      mainTemplateGroupKeys: form.mainTemplateGroupKeys,
+      altPatternText: form.altPatternText,
+      altVariables: form.altVariables,
     }
     if (editingTemplateId !== 'new' && editingTemplateId !== null) {
       await db.reportTemplates.update(editingTemplateId, fields)
@@ -2260,10 +2345,17 @@ export const ManageTemplatesScreen = ({
       return { patternText: nextPatternText, variables: nextVariables }
     }
 
+    const manualComboIdMap = new Map<string, string>()
+    const duplicatedManualCombos = (template.groupManualCombos ?? []).map((combo) => {
+      const id = createTagComboGroupId()
+      manualComboIdMap.set(combo.id, id)
+      return { ...combo, id }
+    })
     const body = remap(template.patternText, template.variables)
     const header = remap(template.headerPatternText, template.headerVariables)
     const footer = remap(template.footerPatternText, template.footerVariables)
     const group = remapGroup(template.groupPatternText, template.groupVariables)
+    const alt = remap(template.altPatternText ?? '', template.altVariables ?? {})
 
     // Deliberately omits `locked` — a duplicate of the built-in Labs template is a normal,
     // fully-editable template like any other.
@@ -2282,7 +2374,7 @@ export const ManageTemplatesScreen = ({
       groupTagIds: [...template.groupTagIds],
       groupCombineMode: template.groupCombineMode,
       groupAutomaticLabels: (template.groupAutomaticLabels ?? []).map((override) => ({ ...override })),
-      groupManualCombos: (template.groupManualCombos ?? []).map((combo) => ({ ...combo, id: createTagComboGroupId() })),
+      groupManualCombos: duplicatedManualCombos,
       groupLookbackHours: Number.isFinite(template.groupLookbackHours) ? template.groupLookbackHours : 12,
       groupListOpenText: template.groupListOpenText,
       groupListCloseText: template.groupListCloseText,
@@ -2291,6 +2383,13 @@ export const ManageTemplatesScreen = ({
       groupVariables: group.variables,
       groupSeparator: template.groupSeparator,
       customGroupSeparator: template.customGroupSeparator,
+      mainTemplateAppliesTo: template.mainTemplateAppliesTo ?? 'all',
+      // Manual combos get fresh ids above, so remap their keys too; automatic comboKeys are tag-derived and carry over as-is.
+      mainTemplateGroupKeys: template.groupSelectionMode === 'manual'
+        ? (template.mainTemplateGroupKeys ?? []).map((key) => manualComboIdMap.get(key)).filter((key): key is string => key !== undefined)
+        : [...(template.mainTemplateGroupKeys ?? [])],
+      altPatternText: alt.patternText,
+      altVariables: alt.variables,
       sortOrder: nextSortOrder,
       createdAt: new Date().toISOString(),
     })
