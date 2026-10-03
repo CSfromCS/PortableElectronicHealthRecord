@@ -1137,20 +1137,20 @@ export const mergeAutomaticGroupLabels = (
  * `computeAutomaticGroupCombos`/`mergeAutomaticGroupLabels`. Manual mode just maps
  * `groupManualCombos` (sorted by `sortOrder`) straight across, using each combo's own hand-typed
  * label. */
-const buildOutputGroups = (
+export const buildOutputGroups = (
   template: Pick<ReportTemplate, 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupAutomaticLabels' | 'groupManualCombos'>,
   tagsById: Map<number, TagDefinition>,
-): { label: string; tagIds: number[] }[] => {
+): { key: string; label: string; tagIds: number[] }[] => {
   // Defensive fallback: a template persisted by a build from before these fields existed (stale
   // local dev IndexedDB, mid-deploy client) would otherwise crash report generation entirely.
   if (template.groupSelectionMode === 'manual') {
     return [...(template.groupManualCombos ?? [])]
       .sort((a, b) => a.sortOrder - b.sortOrder)
-      .map((combo) => ({ label: combo.label, tagIds: combo.tagIds }))
+      .map((combo) => ({ key: combo.id, label: combo.label, tagIds: combo.tagIds }))
   }
 
   const combos = computeAutomaticGroupCombos(template, tagsById)
-  return mergeAutomaticGroupLabels(combos, template.groupAutomaticLabels ?? []).map((group) => ({ label: group.label, tagIds: group.tagIds }))
+  return mergeAutomaticGroupLabels(combos, template.groupAutomaticLabels ?? []).map((group) => ({ key: group.comboKey, label: group.label, tagIds: group.tagIds }))
 }
 
 /** Renders a list of patients through the template's own per-patient Format Pattern (the same one
@@ -1180,6 +1180,7 @@ export type GroupRenderTemplate = Pick<
   | 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupAutomaticLabels' | 'groupManualCombos'
   | 'groupLookbackHours' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'
   | 'groupPatternText' | 'groupVariables' | 'groupSeparator' | 'customGroupSeparator'
+  | 'mainTemplateGroupKeys' | 'extraMainTemplates'
 >
 
 type GroupRenderCtx = {
@@ -1249,7 +1250,23 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
   const groups = buildOutputGroups(template, ctx.tagsById)
   if (groups.length === 0) return ''
 
-  const lines = groups.map((group) => {
+  const lines = groups.flatMap((group) => {
+    // Each group lists its patients through whichever main template claims it. Unset
+    // `mainTemplateGroupKeys` is the pre-multi-template shape: Main Template 1 renders everything.
+    // Otherwise a group no main template claims is skipped entirely.
+    const extras = template.extraMainTemplates ?? []
+    let groupTemplate: GroupRenderTemplate = template
+    if (template.mainTemplateGroupKeys !== undefined && !template.mainTemplateGroupKeys.includes(group.key)) {
+      const claimedBy = extras.find((extra) => extra.groupKeys.includes(group.key))
+      if (!claimedBy) return []
+      groupTemplate = {
+        ...template,
+        patternText: claimedBy.patternText,
+        variables: claimedBy.variables,
+        patientSeparator: claimedBy.patientSeparator ?? template.patientSeparator,
+        customPatientSeparator: claimedBy.customPatientSeparator ?? template.customPatientSeparator,
+      }
+    }
     const patientsInGroup = patientsForBody.filter((patient) =>
       group.tagIds.every((tagId) => (patient.tagIds ?? []).includes(tagId)),
     )
@@ -1276,7 +1293,7 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
       signedOut: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-signed-out')),
       expired: dischargedInWindow.filter((patient) => patientHasAutomationRole(patient, ctx.tagsById, 'status-expired')),
     }
-    return renderGroupPattern(template, groupCtx, ctx)
+    return [renderGroupPattern(groupTemplate, groupCtx, ctx)]
   })
   return lines.join(resolveJoinString(template.groupSeparator, template.customGroupSeparator))
 }

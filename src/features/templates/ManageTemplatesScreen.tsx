@@ -33,6 +33,7 @@ import type {
   GroupVariableInstance,
   LabsDateDisplayMode,
   RelativeDateRangeMode,
+  ExtraMainTemplate,
   ReportTemplate,
   TagComboGroupSeed,
   TagDefinition,
@@ -68,6 +69,8 @@ import {
   isDateTimeCapableEntryField,
   mergeAutomaticGroupLabels,
   renderGroupedBody,
+  resolveJoinString,
+  buildOutputGroups,
   renderTemplateForPatient,
   tokenizePatternText,
   type GroupFieldId,
@@ -120,6 +123,9 @@ type TemplateFormState = {
   groupVariables: Record<string, GroupVariableInstance>
   groupSeparator: BlockJoinMode
   customGroupSeparator: string
+  /** null = legacy "Main Template 1 renders every group" (never configured) — see `ReportTemplate.mainTemplateGroupKeys`. */
+  mainTemplateGroupKeys: string[] | null
+  extraMainTemplates: ExtraMainTemplate[]
 }
 
 const templateToForm = (template: ReportTemplate): TemplateFormState => ({
@@ -148,6 +154,8 @@ const templateToForm = (template: ReportTemplate): TemplateFormState => ({
   groupVariables: { ...template.groupVariables },
   groupSeparator: template.groupSeparator,
   customGroupSeparator: template.customGroupSeparator,
+  mainTemplateGroupKeys: template.mainTemplateGroupKeys ? [...template.mainTemplateGroupKeys] : null,
+  extraMainTemplates: (template.extraMainTemplates ?? []).map((extra) => ({ ...extra, variables: { ...extra.variables }, groupKeys: [...extra.groupKeys] })),
 })
 
 const blankForm = (): TemplateFormState => ({
@@ -174,7 +182,59 @@ const blankForm = (): TemplateFormState => ({
   groupVariables: {},
   groupSeparator: 'blankLine',
   customGroupSeparator: '',
+  mainTemplateGroupKeys: [],
+  extraMainTemplates: [],
 })
+
+/** "Apply to:" checklist shown on every main template — a group already claimed by a different
+ * main template is grayed out with a hint, so only one main template ever applies to a group. */
+const GroupAssignmentPicker = ({
+  groups,
+  templateIndex,
+  keyLists,
+  onToggle,
+}: {
+  groups: { key: string; label: string }[]
+  templateIndex: number
+  keyLists: string[][]
+  onToggle: (groupKey: string) => void
+}) => (
+  <div className='space-y-1.5 border-t border-clay/15 pt-2.5'>
+    <Label className='text-xs'>Apply to:</Label>
+    {groups.length === 0 ? (
+      <p className='text-xs text-clay'>No groups defined yet — set them up under Group-level formatting.</p>
+    ) : (
+      <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
+        {groups.map((group) => {
+          const ownerIndex = keyLists.findIndex((keys) => keys.includes(group.key))
+          const takenByOther = ownerIndex !== -1 && ownerIndex !== templateIndex
+          return (
+            <label key={group.key} className={cn('flex items-center gap-2.5 py-1', takenByOther ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer')}>
+              <input
+                type='checkbox'
+                className='h-4 w-4 accent-action-primary'
+                checked={ownerIndex === templateIndex}
+                disabled={takenByOther}
+                onChange={() => onToggle(group.key)}
+              />
+              <span className='text-sm text-espresso'>{group.label}</span>
+              {takenByOther ? <span className='text-[11px] text-clay'>Already assigned to Main Template {ownerIndex + 1}</span> : null}
+            </label>
+          )
+        })}
+      </div>
+    )}
+  </div>
+)
+
+const MainTemplatePreview = ({ text }: { text: string }) => (
+  <div className='space-y-1 border-t border-clay/15 pt-2.5'>
+    <Label className='text-xs'>Preview (sample patient)</Label>
+    <pre className='whitespace-pre-wrap break-words rounded-lg border border-clay/20 bg-white/70 px-3 py-2 text-sm text-espresso font-sans'>
+      {text || '(nothing to preview yet)'}
+    </pre>
+  </div>
+)
 
 const JOIN_MODE_ORDER: BlockJoinMode[] = ['lineBreak', 'blankLine', 'space', 'custom']
 
@@ -2034,17 +2094,58 @@ const TemplateEditor = ({
   const dateTimeFormatsById = useMemo(() => new Map(dateTimeFormats.map((format) => [String(format.id), format])), [dateTimeFormats])
   const tagsById = useMemo(() => new Map(tags.filter((tag) => tag.id !== undefined).map((tag) => [tag.id as number, tag])), [tags])
 
+  // The output groups main templates are assigned to — same list (and labels) the Group Template
+  // editor shows, derived from the form so it tracks unsaved group edits.
+  const outputGroups = useMemo(
+    () => buildOutputGroups(form, tagsById).map((group, index) => ({ key: group.key, label: group.label.trim() || `Group ${index + 1}` })),
+    [form, tagsById],
+  )
+  // Main Template 1 plus every extra, each with the group keys it claims (null legacy = all groups).
+  const mainTemplateKeyLists = useMemo(
+    () => [form.mainTemplateGroupKeys ?? outputGroups.map((group) => group.key), ...form.extraMainTemplates.map((extra) => extra.groupKeys)],
+    [form.mainTemplateGroupKeys, form.extraMainTemplates, outputGroups],
+  )
+  const unassignedGroups = useMemo(
+    () => (form.groupingEnabled ? outputGroups.filter((group) => !mainTemplateKeyLists.some((keys) => keys.includes(group.key))) : []),
+    [form.groupingEnabled, outputGroups, mainTemplateKeyLists],
+  )
+  const [unassignedWarningOpen, setUnassignedWarningOpen] = useState(false)
+
+  const setMainTemplateGroupKeys = (index: number, groupKey: string) => setForm((previous) => {
+    const toggle = (keys: string[]) => (keys.includes(groupKey) ? keys.filter((key) => key !== groupKey) : [...keys, groupKey])
+    if (index === 0) return { ...previous, mainTemplateGroupKeys: toggle(previous.mainTemplateGroupKeys ?? outputGroups.map((group) => group.key)) }
+    return {
+      ...previous,
+      // First edit of a never-configured template pins Main Template 1's implicit "all groups" so the toggle is visible.
+      mainTemplateGroupKeys: previous.mainTemplateGroupKeys ?? outputGroups.map((group) => group.key),
+      extraMainTemplates: previous.extraMainTemplates.map((extra, extraIndex) => (extraIndex === index - 1 ? { ...extra, groupKeys: toggle(extra.groupKeys) } : extra)),
+    }
+  })
+
   const repeatMode = useMemo(
     () => classifyTemplateRepeatMode({ patternText: form.patternText, variables: form.variables, groupingEnabled: form.groupingEnabled }),
     [form.patternText, form.variables, form.groupingEnabled],
   )
 
+  // One sample patient + context shared by the whole-report preview and every Main Template's own preview.
+  const previewEnv = useMemo(() => {
+    const previewPatient = buildSamplePreviewPatient(tagsById, groups)
+    return { previewPatient, ctx: buildSamplePreviewContext(dateTimeFormatsById, tagsById, groups, previewPatient) }
+  }, [dateTimeFormatsById, tagsById, groups])
+  // A single Main Template on its own: the sample patient rendered through its pattern, shown twice
+  // (joined by its separator) when it's per-patient so the separator choice is visible.
+  const renderMainTemplatePreview = (patternText: string, variables: Record<string, TemplateVariableInstance>, separator: BlockJoinMode, customSeparator: string): string => {
+    const text = renderTemplateForPatient({ patternText, variables }, previewEnv.previewPatient, previewEnv.ctx)
+    if (!text.trim()) return ''
+    const perPatient = classifyTemplateRepeatMode({ patternText, variables, groupingEnabled: form.groupingEnabled }) === 'per-patient'
+    return perPatient ? [text, text].join(resolveJoinString(separator, customSeparator)) : text
+  }
+
   const preview = useMemo(() => {
     // Real tag/group definitions (not real PATIENT data) so Tag Combo Grouping's selected tags,
     // and the preview patient's own Main/Referral service, actually resolve in the preview — see
     // buildSamplePreviewContext/buildSamplePreviewPatient's own comments.
-    const previewPatient = buildSamplePreviewPatient(tagsById, groups)
-    const ctx = buildSamplePreviewContext(dateTimeFormatsById, tagsById, groups, previewPatient)
+    const { previewPatient, ctx } = previewEnv
     const headerText = form.headerPatternText ? renderTemplateForPatient({ patternText: form.headerPatternText, variables: form.headerVariables }, previewPatient, ctx) : ''
     // Grouping only ever has the one sample patient to work with here — same limitation every
     // other multi-entry preview in this editor already has (Block variables only show a couple of
@@ -2054,11 +2155,11 @@ const TemplateEditor = ({
     // exactly what was already configured), Patient-level formatting always previews the plain
     // per-patient render regardless of whether grouping is on for the saved template.
     const bodyText = formattingView === 'group'
-      ? renderGroupedBody(form, [previewPatient], ctx)
+      ? renderGroupedBody({ ...form, mainTemplateGroupKeys: form.mainTemplateGroupKeys ?? undefined }, [previewPatient], ctx)
       : renderTemplateForPatient({ patternText: form.patternText, variables: form.variables }, previewPatient, ctx)
     const footerText = form.footerPatternText ? renderTemplateForPatient({ patternText: form.footerPatternText, variables: form.footerVariables }, previewPatient, ctx) : ''
     return [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
-  }, [form, dateTimeFormatsById, tagsById, groups, formattingView])
+  }, [form, previewEnv, formattingView])
 
   return (
     <div className='space-y-4'>
@@ -2105,18 +2206,86 @@ const TemplateEditor = ({
                 dateTimeFormats={dateTimeFormats}
                 onChange={(patternText, variables) => setForm((previous) => ({ ...previous, patternText, variables }))}
               />
+              {form.groupingEnabled ? (
+                <GroupAssignmentPicker groups={outputGroups} templateIndex={0} keyLists={mainTemplateKeyLists} onToggle={(groupKey) => setMainTemplateGroupKeys(0, groupKey)} />
+              ) : null}
+              {repeatMode === 'per-patient' ? (
+                <JoinModePicker
+                  label='Between patients'
+                  mode={form.patientSeparator}
+                  custom={form.customPatientSeparator}
+                  onModeChange={(patientSeparator) => setForm((previous) => ({ ...previous, patientSeparator }))}
+                  onCustomChange={(customPatientSeparator) => setForm((previous) => ({ ...previous, customPatientSeparator }))}
+                />
+              ) : null}
+              <MainTemplatePreview text={renderMainTemplatePreview(form.patternText, form.variables, form.patientSeparator, form.customPatientSeparator)} />
             </CardContent>
           </Card>
 
-          {repeatMode === 'per-patient' ? (
-            <JoinModePicker
-              label='Between patients'
-              mode={form.patientSeparator}
-              custom={form.customPatientSeparator}
-              onModeChange={(patientSeparator) => setForm((previous) => ({ ...previous, patientSeparator }))}
-              onCustomChange={(customPatientSeparator) => setForm((previous) => ({ ...previous, customPatientSeparator }))}
-            />
+          {form.groupingEnabled ? form.extraMainTemplates.map((extra, extraIndex) => (
+            <Card key={extra.id} className='border-action-primary/25 shadow-sm'>
+              <CardHeader className='py-3 px-4 pb-2'>
+                <div className='flex items-center justify-between'>
+                  <CardTitle className='text-base'>Main Template {extraIndex + 2}</CardTitle>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='sm'
+                    className='h-7 w-7 p-0 text-action-danger'
+                    aria-label={`Remove Main Template ${extraIndex + 2}`}
+                    onClick={() => setForm((previous) => ({ ...previous, extraMainTemplates: previous.extraMainTemplates.filter((item) => item.id !== extra.id) }))}
+                  >
+                    <Trash2 className='h-3.5 w-3.5' />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className='px-4 pb-4 space-y-1.5'>
+                <FormatPatternEditor
+                  initialPatternText={extra.patternText}
+                  initialVariables={extra.variables}
+                  tags={tags}
+                  groups={groups}
+                  dateTimeFormats={dateTimeFormats}
+                  onChange={(patternText, variables) => setForm((previous) => ({
+                    ...previous,
+                    extraMainTemplates: previous.extraMainTemplates.map((item) => (item.id === extra.id ? { ...item, patternText, variables } : item)),
+                  }))}
+                />
+                <GroupAssignmentPicker groups={outputGroups} templateIndex={extraIndex + 1} keyLists={mainTemplateKeyLists} onToggle={(groupKey) => setMainTemplateGroupKeys(extraIndex + 1, groupKey)} />
+                <JoinModePicker
+                  label='Between patients'
+                  mode={extra.patientSeparator}
+                  custom={extra.customPatientSeparator}
+                  onModeChange={(patientSeparator) => setForm((previous) => ({
+                    ...previous,
+                    extraMainTemplates: previous.extraMainTemplates.map((item) => (item.id === extra.id ? { ...item, patientSeparator } : item)),
+                  }))}
+                  onCustomChange={(customPatientSeparator) => setForm((previous) => ({
+                    ...previous,
+                    extraMainTemplates: previous.extraMainTemplates.map((item) => (item.id === extra.id ? { ...item, customPatientSeparator } : item)),
+                  }))}
+                />
+                <MainTemplatePreview text={renderMainTemplatePreview(extra.patternText, extra.variables, extra.patientSeparator, extra.customPatientSeparator)} />
+              </CardContent>
+            </Card>
+          )) : null}
+
+          {form.groupingEnabled ? (
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={() => setForm((previous) => ({
+                ...previous,
+                // Adding the first extra pins Main Template 1's implicit "all groups", else it would keep claiming every group.
+                mainTemplateGroupKeys: previous.mainTemplateGroupKeys ?? outputGroups.map((group) => group.key),
+                extraMainTemplates: [...previous.extraMainTemplates, { id: createTagComboGroupId(), patternText: '', variables: {}, patientSeparator: 'blankLine', customPatientSeparator: '', groupKeys: [] }],
+              }))}
+            >
+              <Plus className='h-3.5 w-3.5' aria-hidden='true' /> Add Main Template
+            </Button>
           ) : null}
+
         </>
       ) : (
         <GroupFormatCard
@@ -2150,8 +2319,24 @@ const TemplateEditor = ({
 
       <div className='flex justify-end gap-2 pt-2'>
         <Button type='button' variant='ghost' onClick={onCancel}>Cancel</Button>
-        <Button type='button' disabled={!form.name.trim()} onClick={() => onSave(form)}>Save</Button>
+        <Button type='button' disabled={!form.name.trim()} onClick={() => (unassignedGroups.length > 0 ? setUnassignedWarningOpen(true) : onSave(form))}>Save</Button>
       </div>
+
+      <Dialog open={unassignedWarningOpen} onOpenChange={setUnassignedWarningOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Some groups have no Main Template</DialogTitle>
+          </DialogHeader>
+          <p className='text-sm text-espresso'>The following groups will not render because no Main Template is assigned to them:</p>
+          <ul className='list-disc pl-5 text-sm text-espresso'>
+            {unassignedGroups.map((group) => <li key={group.key}>{group.label}</li>)}
+          </ul>
+          <div className='flex justify-end gap-2 pt-2'>
+            <Button type='button' variant='ghost' onClick={() => setUnassignedWarningOpen(false)}>Go back</Button>
+            <Button type='button' onClick={() => { setUnassignedWarningOpen(false); onSave(form) }}>Save anyway</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -2206,6 +2391,9 @@ export const ManageTemplatesScreen = ({
       groupVariables: form.groupVariables,
       groupSeparator: form.groupSeparator,
       customGroupSeparator: form.customGroupSeparator,
+      // null (never configured) is stored as unset so the template keeps rendering every group.
+      mainTemplateGroupKeys: form.mainTemplateGroupKeys ?? undefined,
+      extraMainTemplates: form.extraMainTemplates,
     }
     if (editingTemplateId !== 'new' && editingTemplateId !== null) {
       await db.reportTemplates.update(editingTemplateId, fields)
@@ -2264,6 +2452,27 @@ export const ManageTemplatesScreen = ({
     const header = remap(template.headerPatternText, template.headerVariables)
     const footer = remap(template.footerPatternText, template.footerVariables)
     const group = remapGroup(template.groupPatternText, template.groupVariables)
+    const manualComboIdMap = new Map<string, string>()
+    const duplicatedManualCombos = (template.groupManualCombos ?? []).map((combo) => {
+      const id = createTagComboGroupId()
+      manualComboIdMap.set(combo.id, id)
+      return { ...combo, id }
+    })
+    // Manual combos get fresh ids, so group assignments follow them; automatic comboKeys are tag-derived and carry over as-is.
+    const remapGroupKeys = (keys: string[]) => (template.groupSelectionMode === 'manual'
+      ? keys.map((key) => manualComboIdMap.get(key)).filter((key): key is string => key !== undefined)
+      : [...keys])
+    const duplicatedExtras = (template.extraMainTemplates ?? []).map((extra) => {
+      const remapped = remap(extra.patternText, extra.variables)
+      return {
+        id: createTagComboGroupId(),
+        patternText: remapped.patternText,
+        variables: remapped.variables,
+        patientSeparator: extra.patientSeparator,
+        customPatientSeparator: extra.customPatientSeparator,
+        groupKeys: remapGroupKeys(extra.groupKeys),
+      }
+    })
 
     // Deliberately omits `locked` — a duplicate of the built-in Labs template is a normal,
     // fully-editable template like any other.
@@ -2282,7 +2491,7 @@ export const ManageTemplatesScreen = ({
       groupTagIds: [...template.groupTagIds],
       groupCombineMode: template.groupCombineMode,
       groupAutomaticLabels: (template.groupAutomaticLabels ?? []).map((override) => ({ ...override })),
-      groupManualCombos: (template.groupManualCombos ?? []).map((combo) => ({ ...combo, id: createTagComboGroupId() })),
+      groupManualCombos: duplicatedManualCombos,
       groupLookbackHours: Number.isFinite(template.groupLookbackHours) ? template.groupLookbackHours : 12,
       groupListOpenText: template.groupListOpenText,
       groupListCloseText: template.groupListCloseText,
@@ -2291,6 +2500,8 @@ export const ManageTemplatesScreen = ({
       groupVariables: group.variables,
       groupSeparator: template.groupSeparator,
       customGroupSeparator: template.customGroupSeparator,
+      mainTemplateGroupKeys: template.mainTemplateGroupKeys ? remapGroupKeys(template.mainTemplateGroupKeys) : undefined,
+      extraMainTemplates: duplicatedExtras,
       sortOrder: nextSortOrder,
       createdAt: new Date().toISOString(),
     })
