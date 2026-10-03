@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Bookmark, ChevronLeft, Copy, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Bookmark, ChevronLeft, Copy, Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -183,6 +183,7 @@ export const ManageCustomViewsScreen = ({
                 key={view.id}
                 className={cn(
                   'rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-2 transition-shadow',
+                  view.disabled && 'opacity-60',
                   viewDrag.isDragging(view.id as number) && 'opacity-50',
                   dropIndicatorClassName(viewDrag.dropIndicator(view.id as number)),
                 )}
@@ -191,7 +192,22 @@ export const ManageCustomViewsScreen = ({
                 <div className='flex items-center gap-2'>
                   <DragHandle label={`Drag to reorder ${view.name}`} dragProps={viewDrag.getHandleProps(view.id as number)} />
                   <Bookmark className='h-3.5 w-3.5 text-action-primary shrink-0' aria-hidden='true' />
-                  <span className='flex-1 text-sm font-medium text-espresso truncate'>{view.name}</span>
+                  <span className='flex-1 text-sm font-medium text-espresso truncate'>
+                    {view.name}
+                    {view.disabled ? <span className='ml-1.5 text-[10px] font-bold uppercase tracking-wide text-clay'>Off</span> : null}
+                  </span>
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    className='h-7 w-7 p-0 text-clay'
+                    role='switch'
+                    aria-checked={!view.disabled}
+                    aria-label={`${view.disabled ? 'Turn on' : 'Turn off'} ${view.name}`}
+                    title={view.disabled ? 'Off — hidden from Saved Views in filter dialogs. Tap to turn on.' : 'On — tap to hide from Saved Views without deleting.'}
+                    onClick={() => void db.customViews.update(view.id as number, { disabled: !view.disabled })}
+                  >
+                    {view.disabled ? <EyeOff className='h-3.5 w-3.5' /> : <Eye className='h-3.5 w-3.5' />}
+                  </Button>
                   <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${view.name}`} onClick={() => openEdit(view)}>
                     <Pencil className='h-3.5 w-3.5' />
                   </Button>

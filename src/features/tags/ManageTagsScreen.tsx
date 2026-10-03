@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ChevronLeft, Lock, Pencil, Trash2, Plus } from 'lucide-react'
+import { ChevronLeft, Eye, EyeOff, Lock, Pencil, Trash2, Plus } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -344,6 +344,7 @@ export const ManageTagsScreen = ({
                 key={group.id}
                 className={cn(
                   'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-2.5 py-1.5 transition-shadow',
+                  group.disabled && 'opacity-60',
                   groupDrag.isDragging(group.id as number) && 'opacity-50',
                   dropIndicatorClassName(groupDrag.dropIndicator(group.id as number)),
                 )}
@@ -356,8 +357,23 @@ export const ManageTagsScreen = ({
                     <Button size='sm' className='h-7' onClick={() => void saveRenameGroup()}>Save</Button>
                   </div>
                 ) : (
-                  <span className='flex-1 text-sm text-espresso font-medium'>{group.name}</span>
+                  <span className='flex-1 text-sm text-espresso font-medium'>
+                    {group.name}
+                    {group.disabled ? <span className='ml-1.5 text-[10px] font-bold uppercase tracking-wide text-clay'>Off</span> : null}
+                  </span>
                 )}
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='h-7 w-7 p-0 text-clay'
+                  role='switch'
+                  aria-checked={!group.disabled}
+                  aria-label={`${group.disabled ? 'Turn on' : 'Turn off'} ${group.name}`}
+                  title={group.disabled ? 'Off — its tags are hidden from tag and filter pickers. Tap to turn on.' : 'On — tap to hide its tags from pickers without deleting.'}
+                  onClick={() => void db.tagGroups.update(group.id as number, { disabled: !group.disabled })}
+                >
+                  {group.disabled ? <EyeOff className='h-3.5 w-3.5' /> : <Eye className='h-3.5 w-3.5' />}
+                </Button>
                 <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Rename ${group.name}`} onClick={() => startRenameGroup(group)}>
                   <Pencil className='h-3.5 w-3.5' />
                 </Button>

@@ -1048,7 +1048,7 @@ export const ManageCustomActionsScreen = ({
                       <SelectTrigger><SelectValue placeholder='None' /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value='__none__'>None</SelectItem>
-                        {reportTemplates.map((template) => (
+                        {reportTemplates.filter((template) => !template.disabled || String(template.id) === form.templateRunTemplateId).map((template) => (
                           <SelectItem key={template.id} value={String(template.id)}>{template.name}</SelectItem>
                         ))}
                       </SelectContent>

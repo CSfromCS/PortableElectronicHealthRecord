@@ -1,5 +1,5 @@
 import type { Patient, TagDefinition, TagGroupDefinition } from '@/types'
-import { bucketTagsByGroup } from './tagUtils'
+import { bucketTagsByGroup, excludeDisabledGroupTags } from './tagUtils'
 import { TagChip } from './TagChip'
 
 export const TagPicker = ({
@@ -13,8 +13,8 @@ export const TagPicker = ({
   groups: TagGroupDefinition[]
   onToggle: (tag: TagDefinition) => void
 }) => {
-  const buckets = bucketTagsByGroup(tags, groups)
   const appliedTagIds = new Set(patient.tagIds ?? [])
+  const buckets = bucketTagsByGroup(excludeDisabledGroupTags(tags, groups, appliedTagIds), groups)
 
   if (tags.length === 0) {
     return <p className='text-xs text-clay'>No tags defined yet. Create tags in Settings → Manage Tags.</p>

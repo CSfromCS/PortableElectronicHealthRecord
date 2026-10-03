@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { TagDefinition, TagGroupDefinition } from '@/types'
-import { bucketTagsByGroup, type TagGroupBucket } from './tagUtils'
+import { bucketTagsByGroup, excludeDisabledGroupTags, type TagGroupBucket } from './tagUtils'
 import { TagChip, TagChipRow } from './TagChip'
 
 const BulkTagPickerGroups = ({
@@ -60,7 +60,7 @@ export const BulkTagPicker = ({
    * always-expanded behavior. */
   collapsible?: boolean
 }) => {
-  const buckets = bucketTagsByGroup(tags, groups)
+  const buckets = bucketTagsByGroup(excludeDisabledGroupTags(tags, groups, selectedTagIds), groups)
   const [expanded, setExpanded] = useState(() => selectedTagIds.size === 0)
 
   if (tags.length === 0) {
