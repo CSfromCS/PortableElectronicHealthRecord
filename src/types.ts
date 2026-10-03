@@ -705,6 +705,9 @@ export interface ExtraMainTemplate {
   id: string
   patternText: string
   variables: Record<string, TemplateVariableInstance>
+  /** How this template's patients join within a group — Main Template 1's own is `patientSeparator`. */
+  patientSeparator: BlockJoinMode
+  customPatientSeparator: string
   groupKeys: string[]
 }
 

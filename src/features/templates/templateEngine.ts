@@ -1259,7 +1259,13 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
     if (template.mainTemplateGroupKeys !== undefined && !template.mainTemplateGroupKeys.includes(group.key)) {
       const claimedBy = extras.find((extra) => extra.groupKeys.includes(group.key))
       if (!claimedBy) return []
-      groupTemplate = { ...template, patternText: claimedBy.patternText, variables: claimedBy.variables }
+      groupTemplate = {
+        ...template,
+        patternText: claimedBy.patternText,
+        variables: claimedBy.variables,
+        patientSeparator: claimedBy.patientSeparator ?? template.patientSeparator,
+        customPatientSeparator: claimedBy.customPatientSeparator ?? template.customPatientSeparator,
+      }
     }
     const patientsInGroup = patientsForBody.filter((patient) =>
       group.tagIds.every((tagId) => (patient.tagIds ?? []).includes(tagId)),
