@@ -66,6 +66,8 @@ export interface TagGroupDefinition {
   id?: number
   name: string
   sortOrder: number
+  /** True when the user has toggled this group off in Manage Tags — its tags are then hidden from the tag and filter pickers (tags already selected/applied stay visible), but nothing is deleted or unapplied. Unset (the default) means on. */
+  disabled?: boolean
 }
 
 /** A patient list's own sort configuration — declared here (rather than in the Patients feature
@@ -106,6 +108,8 @@ export interface CustomView {
   /** Optional saved sort — applying this view also applies this sort when set, and leaves
    * whatever sort was already active untouched when unset ("leave it alone"). */
   sortConfig?: PatientSortConfig
+  /** True when the user has toggled this view off in Manage Custom Views — it's then hidden from the Saved Views list in the filter dialogs but keeps its definition. Unset (the default) means on. */
+  disabled?: boolean
 }
 
 export interface TagDefinition {
@@ -643,6 +647,8 @@ export interface ReportTemplate {
    * field-composable — hides Edit/Delete in Manage Templates. The user can still choose whether to
    * include it in a generated report, exactly like any other template. */
   locked?: boolean
+  /** True when the user has toggled this template off in Manage Templates — it's then hidden from the Reports template picker and the Custom Action template chooser, but keeps its definition. Unset (the default) means on. */
+  disabled?: boolean
   /** How separate patients' generated blocks join together for a Per-Patient template — meaningless
    * for Prints Once, which only ever produces one block regardless of how many patients are selected. */
   patientSeparator: BlockJoinMode

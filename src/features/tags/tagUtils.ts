@@ -8,6 +8,17 @@ export const sortTagGroups = (groups: TagGroupDefinition[]): TagGroupDefinition[
 export const sortTagsInGroup = (tags: TagDefinition[]): TagDefinition[] =>
   [...tags].sort((a, b) => a.sortOrder - b.sortOrder)
 
+/** Drops tags belonging to a toggled-off Tag Group, except those in `keepTagIds` (already selected/applied, so they stay visible and can still be unselected). Ungrouped tags are never dropped. */
+export const excludeDisabledGroupTags = (
+  tags: TagDefinition[],
+  groups: TagGroupDefinition[],
+  keepTagIds: ReadonlySet<number>,
+): TagDefinition[] => {
+  const disabledGroupIds = new Set(groups.filter((group) => group.disabled && group.id !== undefined).map((group) => group.id as number))
+  if (disabledGroupIds.size === 0) return tags
+  return tags.filter((tag) => tag.groupId === undefined || !disabledGroupIds.has(tag.groupId) || (tag.id !== undefined && keepTagIds.has(tag.id)))
+}
+
 export type TagGroupBucket = {
   groupId: number | null
   groupName: string

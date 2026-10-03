@@ -1024,6 +1024,7 @@ function App() {
   const allMasterProblems = useLiveQuery(() => db.masterProblems.toArray(), [])
   const allSimpleProblemItems = useLiveQuery(() => db.simpleProblemItems.toArray(), [])
   const orderedCustomViews = useMemo(() => [...(customViews ?? [])].sort((a, b) => a.sortOrder - b.sortOrder), [customViews])
+  const enabledCustomViews = useMemo(() => orderedCustomViews.filter((view) => !view.disabled), [orderedCustomViews])
   // Custom Views: named, saved Tag+Ward combos shared across the Patients list, Master Checklist,
   // and Reports picker filters — save/rename/delete here since they're just Dexie CRUD, same as
   // Custom Actions and Report Templates elsewhere in this file; applying one is handled per-caller
@@ -7232,7 +7233,7 @@ function App() {
                     >
                       <SelectTrigger id='report-template-picker'><SelectValue placeholder='Choose a template' /></SelectTrigger>
                       <SelectContent>
-                        {(reportTemplates ?? []).map((template) => (
+                        {(reportTemplates ?? []).filter((template) => !template.disabled || template.id === selectedReportTemplateId).map((template) => (
                           <SelectItem key={template.id} value={String(template.id)}>{template.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -10270,7 +10271,7 @@ function App() {
           filter={patientListFilter}
           onChangeFilter={setPatientListFilter}
           onClear={() => setPatientListFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: patientListFilter.tagMode })}
-          views={orderedCustomViews}
+          views={enabledCustomViews}
           onApplyView={(view) => setPatientListFilter(applyCustomView(view))}
           onSaveView={(name) => void saveCustomView(name, patientListFilter)}
           onRenameView={(id, name) => void renameCustomView(id, name)}
@@ -10287,7 +10288,7 @@ function App() {
           filter={checklistFilter}
           onChangeFilter={setChecklistFilter}
           onClear={() => setChecklistFilter({ ...EMPTY_TAG_WARD_FILTER, tagMode: checklistFilter.tagMode })}
-          views={orderedCustomViews}
+          views={enabledCustomViews}
           onApplyView={(view) => setChecklistFilter(applyCustomView(view))}
           onSaveView={(name) => void saveCustomView(name, checklistFilter)}
           onRenameView={(id, name) => void renameCustomView(id, name)}
@@ -10318,7 +10319,7 @@ function App() {
             setCensusPoolUseWindow(true)
             setCensusPoolWindow(EMPTY_DATE_TIME_WINDOW)
           }}
-          views={orderedCustomViews}
+          views={enabledCustomViews}
           onApplyView={(view) => setCensusFilter(applyCustomView(view))}
           onSaveView={(name) => void saveCustomView(name, censusFilter)}
           onRenameView={(id, name) => void renameCustomView(id, name)}

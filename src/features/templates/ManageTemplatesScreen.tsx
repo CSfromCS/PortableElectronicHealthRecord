@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { ChevronDown, ChevronLeft, Copy, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronLeft, Copy, Eye, EyeOff, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 import { db } from '@/db'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -2354,6 +2354,7 @@ export const ManageTemplatesScreen = ({
                     key={template.id}
                     className={cn(
                       'flex items-center gap-2 rounded-lg border border-clay/20 bg-warm-ivory px-3 py-2 transition-shadow',
+                      template.disabled && 'opacity-60',
                       templateDrag.isDragging(template.id as number) && 'opacity-50',
                       dropIndicatorClassName(templateDrag.dropIndicator(template.id as number)),
                     )}
@@ -2364,9 +2365,22 @@ export const ManageTemplatesScreen = ({
                       <p className='text-sm font-semibold text-espresso truncate flex items-center gap-1.5'>
                         {template.name}
                         {template.locked ? <Lock className='h-3 w-3 text-clay/60' aria-label='Built-in, cannot be edited or deleted' /> : null}
+                        {template.disabled ? <span className='text-[10px] font-bold uppercase tracking-wide text-clay'>Off</span> : null}
                       </p>
                       <p className='text-xs text-clay'>{classifyTemplateRepeatMode(template) === 'per-patient' ? 'Per-Patient' : 'Prints Once'}</p>
                     </div>
+                    <Button
+                      variant='ghost'
+                      size='sm'
+                      className='h-7 w-7 p-0 text-clay'
+                      role='switch'
+                      aria-checked={!template.disabled}
+                      aria-label={`${template.disabled ? 'Turn on' : 'Turn off'} ${template.name}`}
+                      title={template.disabled ? 'Off — hidden from template pickers. Tap to turn on.' : 'On — tap to hide from template pickers without deleting.'}
+                      onClick={() => void db.reportTemplates.update(template.id as number, { disabled: !template.disabled })}
+                    >
+                      {template.disabled ? <EyeOff className='h-3.5 w-3.5' /> : <Eye className='h-3.5 w-3.5' />}
+                    </Button>
                     {!template.locked ? (
                       <Button variant='ghost' size='sm' className='h-7 w-7 p-0 text-clay' aria-label={`Edit ${template.name}`} onClick={() => setEditingTemplateId(template.id as number)}>
                         <Pencil className='h-3.5 w-3.5' />
