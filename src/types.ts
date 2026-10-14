@@ -20,6 +20,36 @@ export interface SyncTombstone {
   recordId?: number
 }
 
+/** One thing a record-level change did to the database: what a record looked like before and
+ * after, so the change can be shown and, if wanted, undone. */
+export interface ChangeLogOp {
+  table: string
+  recordId: number
+  kind: 'add' | 'update' | 'delete'
+  /** The record as it was; absent for an add. */
+  before?: Record<string, unknown>
+  /** The record as the change left it; absent for a delete. */
+  after?: Record<string, unknown>
+}
+
+/** A group of record changes made together by one action (one Medmin tool call). Synced, so every
+ * device can see what Medmin did and undo it; a delete keeps the deleted records here, which is
+ * what makes it recoverable for 30 days. */
+export interface ChangeLogEntry extends SyncMeta {
+  id?: number
+  at: string
+  /** Who made the change, e.g. 'medmin'. */
+  source: string
+  tool: string
+  /** One plain sentence: what was done and to whom. */
+  summary: string
+  patientId?: number
+  patientIdentifier?: string
+  ops: ChangeLogOp[]
+  /** Set when the change was undone. */
+  undoneAt?: string
+}
+
 export interface Patient extends SyncMeta {
   id?: number
   lastModified: string

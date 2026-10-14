@@ -1,5 +1,6 @@
 import { db } from '@/db'
 import { buildActiveDailyProblemNotes } from '@/features/problems/problemUtils'
+import type { DropPosition } from '@/lib/dnd/useDragReorder'
 import type { DailyUpdate } from '@/types'
 
 export type ChecklistItem = { text: string; completed: boolean; notes?: string }
@@ -229,4 +230,37 @@ export const appendChecklistItemsForPatientDate = async (
     checklist,
     lastUpdated: now,
   })
+}
+
+/** Moves one item next to another, in place of dragging it there. */
+export const reorderChecklistItems = (items: ChecklistItem[], sourceIndex: number, targetIndex: number, position: DropPosition): ChecklistItem[] => {
+  const sourceItem = items[sourceIndex]
+  const targetItem = items[targetIndex]
+  if (!sourceItem || !targetItem || sourceItem === targetItem) return items
+  const nextItems = [...items]
+  const [movedItem] = nextItems.splice(sourceIndex, 1)
+  const targetIndexAfterRemoval = nextItems.indexOf(targetItem)
+  if (targetIndexAfterRemoval === -1) return items
+  const insertIndex = position === 'before' ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
+  nextItems.splice(insertIndex, 0, movedItem)
+  return nextItems
+}
+
+/** Checks an item off (it moves to the bottom) or reopens it (it moves up to just before the first
+ * completed item). */
+export const setChecklistItemCompletion = (items: ChecklistItem[], index: number, completed: boolean): ChecklistItem[] => {
+  const currentItem = items[index]
+  if (!currentItem || currentItem.completed === completed) return items
+
+  const nextItems = [...items]
+  nextItems.splice(index, 1)
+  const updatedItem = { ...currentItem, completed }
+  if (completed) {
+    nextItems.push(updatedItem)
+    return nextItems
+  }
+
+  const firstCompletedIndex = nextItems.findIndex((item) => item.completed)
+  nextItems.splice(firstCompletedIndex < 0 ? nextItems.length : firstCompletedIndex, 0, updatedItem)
+  return nextItems
 }

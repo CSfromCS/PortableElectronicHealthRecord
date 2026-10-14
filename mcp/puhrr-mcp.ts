@@ -1,5 +1,5 @@
-// The PUHRR bridge for Medmin: an MCP server (stdio) that gives an AI agent read-only access to the
-// user's PUHRR data and report templates. Run it with `npm run mcp`; see mcp/README.md.
+// The PUHRR bridge for Medmin: an MCP server (stdio) that gives an AI agent access to the user's
+// PUHRR data and report templates: read-only by default, read-write when PUHRR_ALLOW_WRITES is set. Run it with `npm run mcp`; see mcp/README.md.
 import './shims'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { RoomFollower, readRoomSettings } from './room'
@@ -14,7 +14,7 @@ const main = async () => {
   const server = createPuhrrServer(room)
   await server.connect(new StdioServerTransport())
   // stdout carries the protocol; anything meant for a human goes to stderr.
-  console.error(`puhrr-mcp ready (read-only), room ${room.status().roomTag}`)
+  console.error(`puhrr-mcp ready (${room.allowWrites ? 'READ-WRITE' : 'read-only'}), room ${room.status().roomTag}`)
 }
 
 main().catch((error: unknown) => {

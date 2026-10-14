@@ -16,8 +16,9 @@ import {
   summarizePatient,
 } from './queries'
 import type { RoomFollower } from './room'
+import { registerWriteTools } from './writeTools'
 
-const INSTRUCTIONS = `You are connected to PUHRR, the user's personal patient notebook, through the room it syncs to. This connection is READ-ONLY: nothing you call here can change PUHRR.
+const READ_ONLY_INSTRUCTIONS = `You are connected to PUHRR, the user's personal patient notebook, through the room it syncs to. This connection is READ-ONLY: nothing you call here can change PUHRR.
 
 REPORTS: never write a report, census, endorsement or progress note yourself, and never reformat one from memory. Call render_report and send its text to the user exactly as returned — every character, line break and symbol. If the user wants a different format, they change the template in PUHRR; list_templates shows what exists. If they ask for something no template covers, say so and offer the closest template instead of improvising.
 
@@ -26,6 +27,18 @@ PATIENTS: identify a patient by room AND last name, or by patientId. If a tool r
 FRESHNESS: data is current as of the last sync from the user's devices (see sync_status); changes the user made in the last few seconds may not be here yet.
 
 PRIVACY: this is real patient data. Share it only with the user, in their private chat.`
+
+const WRITE_INSTRUCTIONS = READ_ONLY_INSTRUCTIONS
+  .replace('This connection is READ-ONLY: nothing you call here can change PUHRR.', 'You can read AND change PUHRR. Changes appear on the user\'s devices within seconds.')
+  + `
+
+CHANGING THINGS — these rules protect real patients:
+- Name the patient by room AND last name, every time. If the answer reports no match or several, ask the user; never pick one. Each result repeats who was changed: read it back to the user in one line, so a slip is caught at once.
+- Do exactly what was asked, no more. Never fill in clinical content the user did not give you, and never "tidy" existing text.
+- Tags, wards and services must already exist. If a name does not match exactly, the tool lists the closest ones: ask the user which they mean. The user may spell wards differently from one day to the next ("MICU" vs "Medical ICU"); assume it is the same place and offer the existing one before ever suggesting a new tag. Only call create_tag when the user says they want a new one.
+- Deleting and discharging are two steps. request_delete / request_discharge change nothing and return a code and a plain description. Tell the user that description, and call confirm_action only after they clearly say yes to it. Never confirm on your own initiative, never reuse a code for something else, and never describe the action differently from the tool.
+- Every change can be undone (recent_changes, undo_change), including deletions for 30 days. If the user says "undo that" or "that was wrong", undo it and say so.
+- If a result says the change could not be stored in the sync room, tell the user plainly: it is not yet on their devices.`
 
 const selectionShape = {
   patientIds: z.array(z.number().int()).optional().describe('Exact patients, in the order to report them. Overrides every filter below.'),
@@ -64,7 +77,7 @@ const run = async (task: () => Promise<TextResult> | TextResult): Promise<TextRe
 }
 
 export const createPuhrrServer = (room: RoomFollower): McpServer => {
-  const server = new McpServer({ name: 'puhrr', version: '0.1.0' }, { instructions: INSTRUCTIONS })
+  const server = new McpServer({ name: 'puhrr', version: '0.2.0' }, { instructions: room.allowWrites ? WRITE_INSTRUCTIONS : READ_ONLY_INSTRUCTIONS })
 
   server.registerTool('sync_status', {
     description: 'When this connection last downloaded the room, and when the room itself last changed. Use refresh=true right after the user says they just edited something.',
@@ -76,7 +89,7 @@ export const createPuhrrServer = (room: RoomFollower): McpServer => {
       patients: world.patients.length,
       activePatients: selectPatients(world).patients.length,
       templates: world.templates.length,
-      access: 'read-only',
+      access: room.allowWrites ? 'read-write' : 'read-only',
     })
   }))
 
@@ -166,5 +179,6 @@ export const createPuhrrServer = (room: RoomFollower): McpServer => {
     }
   }))
 
+  if (room.allowWrites) registerWriteTools(server, room)
   return server
 }
