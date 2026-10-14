@@ -279,7 +279,10 @@ Then do a quick manual smoke test:
 - Every synced record carries a permanent cross-device `uid` and an `updatedAt` time, and deletions are kept as tombstones, so edits to existing records and deletions count as unsynced changes (not just newly created records).
 - If a room still contains a legacy snapshot from an older build, pull may include only `patients` + `dailyUpdates` until an updated device pushes a fresh snapshot.
 - First sync against an existing room now requires explicit user choice (upload local data or download room data first) to avoid silent overwrite.
-- Conflict protection triggers whenever remote data is newer and local data also changed since last sync (including same-tag/device-name edge cases).
+- When the room has newer data and this device also changed, sync merges the two record by record (matched by each record's `uid`; the later `updatedAt` wins; a deletion wins unless the record was edited after it). New entries from both sides are kept. This replaces the old pick-a-side conflict dialog, which now appears only for the first sync with an existing room.
+- Merging is per record, not per field: if the same record (for example one day's checklist) is edited on both devices before syncing, the later edit wins for that whole record. Two devices that each created the same patient's note for the same day are folded into one.
+- A push is checked against the room just before uploading and sends `expectedUpdatedAt`; if the room changed in between, PUHRR re-reads and merges again (up to 3 times). The Worker can additionally reject a stale push using `expectedUpdatedAt`.
+- New records get time-ordered ids with random low bits instead of 1, 2, 3, so two devices adding records between syncs don't collide. If two different records ever do share an id, sync stops without changing anything.
 - Failed room lookups or remote checks stop sync without uploading; only an explicit room-not-found response permits creation.
 - Choosing an older conflict revision restores it locally and uploads it as the room's new latest snapshot.
 - Offline support depends on the PWA service worker being registered on first load while online.

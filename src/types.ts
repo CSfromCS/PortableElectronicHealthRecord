@@ -15,6 +15,9 @@ export interface SyncTombstone {
   uid: string
   table: string
   deletedAt: string
+  /** The deleted record's `id` on the device that deleted it. Lets a merge recognise the same
+   * record on a device that gave it a different `uid` when v31 backfilled each device on its own. */
+  recordId?: number
 }
 
 export interface Patient extends SyncMeta {
