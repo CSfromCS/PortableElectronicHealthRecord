@@ -229,7 +229,8 @@ export const mergeSyncSnapshots = (local: MergeSide, remote: MergeSide, now = ne
   const patientIds = new Set(tables.patients.map((patient) => patient.id))
   for (const tableName of PATIENT_OWNED_TABLES) {
     tables[tableName] = tables[tableName].filter((row) => {
-      if (patientIds.has(row.patientId as number)) return true
+      // A negative patientId is the General (no patient) checklist, which belongs to no patient.
+      if (patientIds.has(row.patientId as number) || (row.patientId as number) < 0) return true
       if (row.uid !== undefined) tombstones.set(row.uid, { uid: row.uid, table: tableName, deletedAt: now.toISOString(), ...(row.id !== undefined ? { recordId: row.id } : {}) })
       return false
     })

@@ -40,6 +40,24 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { MasterChecklistQuickAdd } from '@/features/checklist/MasterChecklistQuickAdd'
 import {
+  GENERAL_CHECKLIST_LABEL,
+  GENERAL_CHECKLIST_PATIENT_ID,
+  type MasterChecklistItem,
+  buildMasterChecklistItems,
+  groupDailyUpdatesByPatientSorted,
+} from '@/features/checklist/masterChecklist'
+import {
+  buildTemplateRenderContext,
+  generateTemplateOutput as generateSharedTemplateOutput,
+  groupAllDailyUpdatesByPatient,
+  groupLabsByPatient,
+  groupMedicationsByPatient,
+  groupOrdersByPatient,
+  groupVitalsByPatient,
+  indexDateTimeFormatsById,
+  indexMasterProblemsById,
+} from '@/features/reporting/templateReport'
+import {
   appendChecklistItemsForPatientDate,
   insertBlankChecklistItemAfter,
   insertMissingChecklistItems,
@@ -89,14 +107,7 @@ const ManageTemplatesScreen = lazy(() =>
 const ManageDateTimeFormatsScreen = lazy(() =>
   import('./features/templates/ManageDateTimeFormatsScreen').then((module) => ({ default: module.ManageDateTimeFormatsScreen })),
 )
-import {
-  PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE,
-  buildCurrentDateTimeText,
-  classifyTemplateRepeatMode,
-  renderGroupedBody,
-  renderTemplateForPatient,
-  resolveJoinString,
-} from './features/templates/templateEngine'
+import { classifyTemplateRepeatMode } from './features/templates/templateEngine'
 import {
   ABG_ACTUAL_FIO2_KEY,
   ABG_DESIRED_FIO2_KEY,
@@ -320,90 +331,6 @@ const initialProfileForm: ProfileFormState = {
 
 type DailyUpdateFormState = Omit<DailyUpdate, 'id' | 'patientId' | 'date' | 'lastUpdated'>
 type DailyChecklistItem = DailyUpdateFormState['checklist'][number]
-type MasterChecklistItem = {
-  patientId: number
-  patientIdentifier: string
-  viewDate: string
-  index: number
-  text: string
-  completed: boolean
-  notes: string
-  createdDate: string | null
-  completedDate: string | null
-  lastFoundDate: string | null
-}
-
-// A checklist not tied to any patient (issue #79) — stored as an ordinary DailyUpdate row like
-// any patient's, just addressed by this reserved patientId instead of a real one. Real patient
-// ids are Dexie auto-increment ('++id'), which only ever assigns positive integers, so a
-// negative sentinel can never collide with one.
-const GENERAL_CHECKLIST_PATIENT_ID = -1
-const GENERAL_CHECKLIST_LABEL = 'General (no patient)'
-
-/**
- * Builds the MasterChecklistItem rows for one checklist source — a real patient's DailyUpdate
- * history, or the General checklist's — sharing the same "show today's entry if it exists,
- * otherwise carry forward incomplete items from the latest prior date" logic either way.
- */
-const buildMasterChecklistItemsForSource = (
-  patientId: number,
-  patientIdentifier: string,
-  updates: DailyUpdate[],
-  viewDate: string,
-): MasterChecklistItem[] => {
-  const priorOrCurrent = updates.filter((entry) => entry.date <= viewDate)
-  if (priorOrCurrent.length === 0) return []
-
-  const dateMatchedUpdate = priorOrCurrent.find((entry) => entry.date === viewDate)
-  const sourceUpdate = dateMatchedUpdate ?? selectLatestDailyUpdate(priorOrCurrent)
-  if (!sourceUpdate) return []
-
-  // dateMatchedUpdate means this is the entry actively being viewed/edited "live" — keep blank
-  // items so a split's blank "after" item can actually render (see updateMasterChecklist). A
-  // checklist merely carried forward from a prior date is never live-edited directly, so it
-  // still drops blanks as stale abandoned edits.
-  const scopedChecklist = dateMatchedUpdate
-    ? normalizeChecklistItemsKeepingBlanks(sourceUpdate.checklist)
-    : toPendingChecklistItems(sourceUpdate.checklist)
-  if (scopedChecklist.length === 0) return []
-
-  const normalizedHistory = priorOrCurrent.map((entry) => ({
-    date: entry.date,
-    checklist: normalizeChecklistItems(entry.checklist),
-  }))
-
-  return scopedChecklist.map((item, index) => {
-    let createdDate: string | null = null
-    let completedDate: string | null = null
-    let lastFoundDate: string | null = null
-
-    normalizedHistory.forEach((historyEntry) => {
-      const matchedHistoryItem = historyEntry.checklist.find((historyItem) => historyItem.text === item.text)
-      if (!matchedHistoryItem) return
-      lastFoundDate = historyEntry.date
-      if (createdDate === null) {
-        createdDate = historyEntry.date
-      }
-      if (completedDate === null && matchedHistoryItem.completed) {
-        completedDate = historyEntry.date
-      }
-    })
-
-    return {
-      patientId,
-      patientIdentifier,
-      viewDate,
-      index,
-      text: item.text,
-      completed: item.completed,
-      notes: item.notes ?? '',
-      createdDate,
-      completedDate,
-      lastFoundDate,
-    }
-  })
-}
-
 type VitalFormState = {
   date: string
   time: string
@@ -1056,7 +983,7 @@ function App() {
     if (view.sortConfig) setPatientSortConfig(view.sortConfig)
     return { tagIds: view.tagIds, tagMode: view.tagMode, wardTagIds: view.wardTagIds }
   }
-  const dateTimeFormatsById = useMemo(() => new Map((dateTimeFormats ?? []).map((format) => [String(format.id), format])), [dateTimeFormats])
+  const dateTimeFormatsById = useMemo(() => indexDateTimeFormatsById(dateTimeFormats ?? []), [dateTimeFormats])
   const manualCustomActions = useMemo(
     () => (customActions ?? []).filter((action) => !action.disabled && (action.scope ?? 'patient') === 'patient' && action.triggerType === 'manual').sort((a, b) => a.sortOrder - b.sortOrder),
     [customActions],
@@ -1692,30 +1619,7 @@ function App() {
   }
   const censusPatientDrag = useDragReorder(selectedCensusPatientIds, reorderCensusPatientSelection)
 
-  const structuredMedsByPatient = useMemo(() => {
-    const grouped = new Map<number, MedicationEntry[]>()
-    ;(medications ?? []).forEach((entry) => {
-      const list = grouped.get(entry.patientId) ?? []
-      list.push(entry)
-      grouped.set(entry.patientId, list)
-    })
-
-    grouped.forEach((list) => {
-      list.sort((a, b) => {
-        const aOrder = a.sortOrder ?? Number.MAX_SAFE_INTEGER
-        const bOrder = b.sortOrder ?? Number.MAX_SAFE_INTEGER
-        if (aOrder !== bOrder) {
-          return aOrder - bOrder
-        }
-        if (a.createdAt !== b.createdAt) {
-          return b.createdAt.localeCompare(a.createdAt)
-        }
-        return (a.id ?? 0) - (b.id ?? 0)
-      })
-    })
-
-    return grouped
-  }, [medications])
+  const structuredMedsByPatient = useMemo(() => groupMedicationsByPatient(medications ?? []), [medications])
 
   const selectedPatientStructuredMeds = useMemo(() => {
     if (selectedPatientId === null) return []
@@ -1737,30 +1641,7 @@ function App() {
     return sorted
   }, [selectedPatientStructuredMeds, medicationSortMode, medicationSortDirection])
 
-  const structuredLabsByPatient = useMemo(() => {
-    const grouped = new Map<number, LabEntry[]>()
-    ;(labs ?? []).forEach((entry) => {
-      const list = grouped.get(entry.patientId) ?? []
-      list.push(entry)
-      grouped.set(entry.patientId, list)
-    })
-
-    grouped.forEach((list) => {
-      list.sort((a, b) => {
-        if (a.date !== b.date) {
-          return b.date.localeCompare(a.date)
-        }
-        const aTime = a.time ?? ''
-        const bTime = b.time ?? ''
-        if (aTime !== bTime) {
-          return bTime.localeCompare(aTime)
-        }
-        return b.createdAt.localeCompare(a.createdAt)
-      })
-    })
-
-    return grouped
-  }, [labs])
+  const structuredLabsByPatient = useMemo(() => groupLabsByPatient(labs ?? []), [labs])
 
   const selectedPatientStructuredLabs = useMemo(() => {
     if (selectedPatientId === null) return []
@@ -1835,67 +1716,18 @@ function App() {
     })
   }, [isAbgLabTemplate, labTemplateValues])
 
-  const structuredOrdersByPatient = useMemo(() => {
-    const grouped = new Map<number, OrderEntry[]>()
-    ;(orders ?? []).forEach((entry) => {
-      const list = grouped.get(entry.patientId) ?? []
-      list.push(entry)
-      grouped.set(entry.patientId, list)
-    })
+  const structuredOrdersByPatient = useMemo(() => groupOrdersByPatient(orders ?? []), [orders])
 
-    grouped.forEach((list) => {
-      list.sort((a, b) => {
-        if (a.status !== b.status) {
-          if (a.status === 'active') return -1
-          if (b.status === 'active') return 1
-          if (a.status === 'carriedOut') return -1
-          if (b.status === 'carriedOut') return 1
-        }
-        return b.createdAt.localeCompare(a.createdAt)
-      })
-    })
-
-    return grouped
-  }, [orders])
-
-  const structuredVitalsByPatient = useMemo(() => {
-    const grouped = new Map<number, VitalEntry[]>()
-    ;(allVitals ?? []).forEach((entry) => {
-      const list = grouped.get(entry.patientId) ?? []
-      list.push(entry)
-      grouped.set(entry.patientId, list)
-    })
-
-    grouped.forEach((list) => {
-      list.sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date)
-        if (a.time !== b.time) return a.time.localeCompare(b.time)
-        return a.createdAt.localeCompare(b.createdAt)
-      })
-    })
-
-    return grouped
-  }, [allVitals])
+  const structuredVitalsByPatient = useMemo(() => groupVitalsByPatient(allVitals ?? []), [allVitals])
 
   // Every DailyUpdate row (all dates), grouped by patient — feeds the Problems/Checklist Block
   // variables in report templates, which read across dates rather than just the one currently
   // open in the Problems/Checklist tabs.
-  const dailyUpdatesByPatientAllDates = useMemo(() => {
-    const grouped = new Map<number, DailyUpdate[]>()
-    ;(allDailyUpdates ?? []).forEach((entry) => {
-      const list = grouped.get(entry.patientId) ?? []
-      list.push(entry)
-      grouped.set(entry.patientId, list)
-    })
-    return grouped
-  }, [allDailyUpdates])
+  const dailyUpdatesByPatientAllDates = useMemo(() => groupAllDailyUpdatesByPatient(allDailyUpdates ?? []), [allDailyUpdates])
 
   // Global lookup (Dexie ids are unique across patients) — resolves a DailyProblemNote's
   // masterProblemId to its canonical title/status for the Problems tab and report templates.
-  const masterProblemsById = useMemo(
-    () => new Map((allMasterProblems ?? []).flatMap((problem) => (problem.id === undefined ? [] : [[problem.id, problem] as const]))),
-    [allMasterProblems],
-  )
+  const masterProblemsById = useMemo(() => indexMasterProblemsById(allMasterProblems ?? []), [allMasterProblems])
 
   const masterProblemsForSelectedPatient = useMemo(() => {
     if (selectedPatientId === null) return []
@@ -1932,55 +1764,12 @@ function App() {
     return map
   }, [patients])
 
-  const dailyUpdatesByPatient = useMemo(() => {
-    const grouped = new Map<number, DailyUpdate[]>()
-    ;(allDailyUpdates ?? []).forEach((entry) => {
-      const list = grouped.get(entry.patientId) ?? []
-      list.push(entry)
-      grouped.set(entry.patientId, list)
-    })
+  const dailyUpdatesByPatient = useMemo(() => groupDailyUpdatesByPatientSorted(allDailyUpdates ?? []), [allDailyUpdates])
 
-    grouped.forEach((list) => {
-      list.sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date)
-        return a.lastUpdated.localeCompare(b.lastUpdated)
-      })
-    })
-
-    return grouped
-  }, [allDailyUpdates])
-
-  const masterChecklistItems = useMemo<MasterChecklistItem[]>(() => {
-    const sortedPatients = sortPatientsByConfig(
-      (patients ?? []).filter((patient) => isPatientActive(patient, tagsById)),
-      patientSortConfig,
-      tagsById,
-    )
-
-    const items: MasterChecklistItem[] = [
-      ...buildMasterChecklistItemsForSource(
-        GENERAL_CHECKLIST_PATIENT_ID,
-        GENERAL_CHECKLIST_LABEL,
-        dailyUpdatesByPatient.get(GENERAL_CHECKLIST_PATIENT_ID) ?? [],
-        masterChecklistDate,
-      ),
-    ]
-
-    sortedPatients.forEach((patient) => {
-      if (patient.id === undefined) return
-      const patientId = patient.id
-      const patientIdentifier = joinNonBlank([patient.roomNumber, patient.lastName.toUpperCase()], ' — ')
-
-      items.push(...buildMasterChecklistItemsForSource(
-        patientId,
-        patientIdentifier,
-        dailyUpdatesByPatient.get(patientId) ?? [],
-        masterChecklistDate,
-      ))
-    })
-
-    return items
-  }, [dailyUpdatesByPatient, masterChecklistDate, patients, tagsById, patientSortConfig])
+  const masterChecklistItems = useMemo<MasterChecklistItem[]>(
+    () => buildMasterChecklistItems(patients ?? [], tagsById, patientSortConfig, dailyUpdatesByPatient, masterChecklistDate),
+    [dailyUpdatesByPatient, masterChecklistDate, patients, tagsById, patientSortConfig],
+  )
 
   // The cross-patient Review dialog is the only place that needs every patient's photos (blobs
   // included) at once — everywhere else only ever needs the currently selected patient's own
@@ -4974,8 +4763,10 @@ function App() {
   // Shared by the Reports tab and the "run a template" custom action (issue #129) — renders
   // `template` across `patientsForBody` (ignored for a Prints-Once template, which only ever
   // produces one block) and stitches on the header/footer.
-  const generateTemplateOutput = (template: ReportTemplate, patientsForBody: Patient[]): string => {
-    const ctx = {
+  const generateTemplateOutput = (template: ReportTemplate, patientsForBody: Patient[]): string => generateSharedTemplateOutput(
+    template,
+    patientsForBody,
+    buildTemplateRenderContext({
       tagsById,
       tagGroups: tagGroups ?? [],
       vitalsByPatient: structuredVitalsByPatient,
@@ -4987,23 +4778,8 @@ function App() {
       dateTimeFormatsById,
       allPatients: patients ?? [],
       poolContext: patientPoolContext,
-      ...buildCurrentDateTimeText(),
-    }
-    const bodyText = template.groupingEnabled
-      ? renderGroupedBody(template, patientsForBody, ctx)
-      : classifyTemplateRepeatMode(template) === 'prints-once'
-        ? renderTemplateForPatient(template, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
-        : patientsForBody
-          .map((patient) => renderTemplateForPatient(template, patient, ctx))
-          .join(resolveJoinString(template.patientSeparator, template.customPatientSeparator))
-    const headerText = template.headerPatternText
-      ? renderTemplateForPatient({ patternText: template.headerPatternText, variables: template.headerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
-      : ''
-    const footerText = template.footerPatternText
-      ? renderTemplateForPatient({ patternText: template.footerPatternText, variables: template.footerVariables }, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
-      : ''
-    return [headerText, bodyText, footerText].filter((part) => part.trim() !== '').join('\n')
-  }
+    }),
+  )
 
   const handleGenerateReport = () => {
     if (!selectedReportTemplate) return

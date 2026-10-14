@@ -94,6 +94,7 @@ Each open patient has eight focused tabs:
 
 - **Backup / restore** — export all text data as JSON; import replaces text data while keeping current on-device photos.
 - **Encrypted sync (optional)** — link devices with a shared room key, your user name, and distinct device names, then sync encrypted patient, problems, vitals, medication, lab, and order data through the Cloudflare Worker proxy.
+- **Medmin bridge (`mcp/`)** — an optional read-only MCP server that lets an AI agent read your synced data and generate reports from your own templates, using the same template engine as the app. See [`mcp/README.md`](mcp/README.md). Report assembly and the Master Checklist logic live in shared modules (`features/reporting/templateReport.ts`, `features/checklist/masterChecklist.ts`) so the app and the bridge can't drift apart.
 - **Automatic sync** — after the first sync, edits are pushed about 5 seconds after you make them, and the room is checked on open, when the app returns to the foreground or comes back online, and every minute while it's visible. Room changes wait while a patient is open and apply when it's closed. Manual Sync still works.
 - **Sync status panel** — view latest room upload time/device and whether this device has local unsynced changes (new, edited, or deleted records).
 - **Review all photos** — open a global photo manager that marks each photo as linked/orphan and supports reassign, delete, and export.
