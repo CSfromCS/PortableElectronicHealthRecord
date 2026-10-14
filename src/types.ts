@@ -1,4 +1,23 @@
-export interface Patient {
+/** Sync bookkeeping carried by every record in a synced table. Optional in the type because the
+ * app's own create/update code never sets them — the Dexie hooks in `features/sync/syncMeta.ts`
+ * stamp both on every write, so they're always present once a record is stored. */
+export interface SyncMeta {
+  /** Permanent random id, the same on every device. Unlike the auto-increment `id`, which each
+   * device numbers on its own, this is what sync matches records by. */
+  uid?: string
+  /** ISO time of the last real change to this record (set on create, bumped on any edit). */
+  updatedAt?: string
+}
+
+/** A record deleted on this device — kept so the deletion can travel to other devices instead of
+ * the record being brought back by a device that still has it. */
+export interface SyncTombstone {
+  uid: string
+  table: string
+  deletedAt: string
+}
+
+export interface Patient extends SyncMeta {
   id?: number
   lastModified: string
   /** Set once at creation; used as the computed default for Admission Date and Referral Date until the user types an override. */
@@ -62,7 +81,7 @@ export type TagAutomationRole =
   | 'status-signed-out'
   | 'status-expired'
 
-export interface TagGroupDefinition {
+export interface TagGroupDefinition extends SyncMeta {
   id?: number
   name: string
   sortOrder: number
@@ -94,7 +113,7 @@ export type PatientSortConfig = {
  * equally well from another, since they all filter the same underlying tags/wards. Kept as its
  * own flat fields (not a nested filter object) so this file, which nothing else imports into,
  * doesn't need to import the filter feature's own type. */
-export interface CustomView {
+export interface CustomView extends SyncMeta {
   id?: number
   name: string
   tagIds: number[]
@@ -112,7 +131,7 @@ export interface CustomView {
   disabled?: boolean
 }
 
-export interface TagDefinition {
+export interface TagDefinition extends SyncMeta {
   id?: number
   name: string
   displayType: TagDisplayType
@@ -128,7 +147,7 @@ export interface TagDefinition {
   createdAt: string
 }
 
-export interface TagEvent {
+export interface TagEvent extends SyncMeta {
   id?: number
   patientId: number
   tagId: number
@@ -176,7 +195,7 @@ export interface CustomActionCondition {
   tagEffects: CustomActionTagEffect[]
 }
 
-export interface CustomAction {
+export interface CustomAction extends SyncMeta {
   id?: number
   name: string
   scope: CustomActionScope
@@ -233,7 +252,7 @@ export interface MasterProblemNameEvent {
  * turned out to be the same as another (structured, rather than a free-text reference, so it can't
  * go stale if the target is later renamed).
  */
-export interface MasterProblem {
+export interface MasterProblem extends SyncMeta {
   id?: number
   patientId: number
   /** Sub-problem (e.g. "4a" under "4") when set; null = top-level problem. */
@@ -267,7 +286,7 @@ export interface MasterProblem {
  * meant to be used side by side with the Master Problem List, which shows the actual problem
  * names) — no problem title/chip is rendered here.
  */
-export interface SimpleProblemItem {
+export interface SimpleProblemItem extends SyncMeta {
   id?: number
   patientId: number
   text: string
@@ -284,7 +303,7 @@ export interface DailyProblemNote {
   notes: string
 }
 
-export interface DailyUpdate {
+export interface DailyUpdate extends SyncMeta {
   id?: number
   patientId: number
   date: string
@@ -297,7 +316,7 @@ export interface DailyUpdate {
   lastUpdated: string
 }
 
-export interface VitalEntry {
+export interface VitalEntry extends SyncMeta {
   id?: number
   patientId: number
   date: string
@@ -311,7 +330,7 @@ export interface VitalEntry {
   createdAt: string
 }
 
-export interface MedicationEntry {
+export interface MedicationEntry extends SyncMeta {
   id?: number
   patientId: number
   sortOrder?: number
@@ -324,7 +343,7 @@ export interface MedicationEntry {
   createdAt: string
 }
 
-export interface LabEntry {
+export interface LabEntry extends SyncMeta {
   id?: number
   patientId: number
   date: string
@@ -335,7 +354,7 @@ export interface LabEntry {
   createdAt: string
 }
 
-export interface OrderEntry {
+export interface OrderEntry extends SyncMeta {
   id?: number
   patientId: number
   orderDate: string
@@ -636,7 +655,7 @@ export type GroupVariableInstance =
  * placeholder's actual settings, keyed by the same id — there is no separate field-list-plus-
  * separator setting; the pattern text itself controls both content and spacing.
  */
-export interface ReportTemplate {
+export interface ReportTemplate extends SyncMeta {
   id?: number
   name: string
   patternText: string
@@ -725,7 +744,7 @@ export type DateTimeComponentId =
   | 'minute2'
   | 'meridiemUpper' | 'meridiemLower'
 
-export interface DateTimeFormatDefinition {
+export interface DateTimeFormatDefinition extends SyncMeta {
   id?: number
   name: string
   patternText: string

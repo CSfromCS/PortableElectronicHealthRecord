@@ -3,6 +3,7 @@ import type {
   CustomAction,
   CustomView,
   DailyUpdate,
+  DateTimeFormatDefinition,
   LabEntry,
   MasterProblem,
   MedicationEntry,
@@ -10,6 +11,8 @@ import type {
   Patient,
   ReportTemplate,
   SimpleProblemItem,
+  SyncMeta,
+  SyncTombstone,
   TagDefinition,
   TagEvent,
   TagGroupDefinition,
@@ -17,13 +20,18 @@ import type {
 } from '@/types'
 import { normalizeDailyUpdate } from '@/features/problems/problemUtils'
 import { decryptBlobToPayload, encryptPayloadToBlob, sha256Hex } from './crypto'
+import { SYNCED_TABLE_NAMES, markSyncImportTransaction } from './syncMeta'
 
 const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
-// Bumped for the Master Problem List: DailyUpdate.problems changed shape from embedded
+// v3 was bumped for the Master Problem List: DailyUpdate.problems changed shape from embedded
 // title/notes/completed blocks to {masterProblemId, notes} references against the new
 // masterProblems table — a payload from an older app version would otherwise silently
 // misinterpret that field, so cross-version sync is refused instead (see pullSnapshotWithMeta).
-const SYNC_DATA_VERSION = 3
+// v4 adds per-record uid/updatedAt, date/time formats and deletion tombstones. A v3 snapshot (one
+// pushed before every device updated) is still readable — its records get their sync fields as
+// they're imported — while an app still on v3 refuses a v4 snapshot and asks to update.
+const SYNC_DATA_VERSION = 4
+const OLDEST_READABLE_SYNC_DATA_VERSION = 3
 const DEFAULT_SYNC_ENDPOINT = 'https://puhr-sync.csfromcs.workers.dev'
 const LEGACY_SYNC_HOSTS = new Set([
   'purh-sync-dfeeeqh8hhdhhfb0.southeastasia-01.azurewebsites.net',
@@ -46,10 +54,12 @@ type SyncPayload = {
   tagDefinitions?: TagDefinition[]
   tagEvents?: TagEvent[]
   reportTemplates?: ReportTemplate[]
+  dateTimeFormats?: DateTimeFormatDefinition[]
   customViews?: CustomView[]
   customActions?: CustomAction[]
   masterProblems?: MasterProblem[]
   simpleProblemItems?: SimpleProblemItem[]
+  syncTombstones?: SyncTombstone[]
 }
 
 type RemoteDescription = {
@@ -207,103 +217,30 @@ const parseDescription = (descriptionRaw: string): RemoteDescription | null => {
 
 const toIsoNow = (): string => new Date().toISOString()
 
+// Every synced record's updatedAt is bumped by the hooks in syncMeta.ts on any real edit, and
+// every deletion leaves a tombstone, so creates, edits and deletes all count as local changes.
 const getLatestLocalChangeAt = async (): Promise<string | null> => {
-  const [patients, dailyUpdates, vitals, medications, labs, orders, reportTemplates, customViews, customActions, masterProblems, simpleProblemItems] = await Promise.all([
-    db.patients.toArray(),
-    db.dailyUpdates.toArray(),
-    db.vitals.toArray(),
-    db.medications.toArray(),
-    db.labs.toArray(),
-    db.orders.toArray(),
-    db.reportTemplates.toArray(),
-    db.customViews.toArray(),
-    db.customActions.toArray(),
-    db.masterProblems.toArray(),
-    db.simpleProblemItems.toArray(),
+  const [recordsByTable, tombstones] = await Promise.all([
+    Promise.all(SYNCED_TABLE_NAMES.map((tableName) => db.table<SyncMeta>(tableName).toArray())),
+    db.syncTombstones.toArray(),
   ])
 
   let latestTimestamp = 0
-
-  for (const patient of patients) {
-    const parsed = Date.parse(patient.lastModified ?? '')
+  const considerTimestamp = (value: string | undefined) => {
+    const parsed = Date.parse(value ?? '')
     if (Number.isFinite(parsed) && parsed > latestTimestamp) {
       latestTimestamp = parsed
     }
   }
 
-  for (const update of dailyUpdates) {
-    const parsed = Date.parse(update.lastUpdated)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
+  for (const records of recordsByTable) {
+    for (const record of records) {
+      considerTimestamp(record.updatedAt)
     }
   }
 
-  for (const vital of vitals) {
-    const parsed = Date.parse(vital.createdAt ?? vital.date)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  for (const medication of medications) {
-    const parsed = Date.parse(medication.createdAt)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  for (const lab of labs) {
-    const parsed = Date.parse(lab.createdAt ?? lab.date)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  for (const order of orders) {
-    const parsed = Date.parse(order.createdAt ?? order.orderDate)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  // Only catches a template/view/action being created or deleted, not an edit to an existing one
-  // (none of these three carry their own "last edited" timestamp — createdAt never changes after
-  // insert) — same limitation the existing tagGroups/tagDefinitions/tagEvents sync already has.
-  for (const template of reportTemplates) {
-    const parsed = Date.parse(template.createdAt)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  for (const view of customViews) {
-    const parsed = Date.parse(view.createdAt)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  for (const action of customActions) {
-    const parsed = Date.parse(action.createdAt)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  // Same "only catches creation, not a later edit" limitation as templates/views/actions above —
-  // MasterProblem carries no separate "last edited" timestamp of its own.
-  for (const problem of masterProblems) {
-    const parsed = Date.parse(problem.createdAt)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
-  }
-
-  for (const item of simpleProblemItems) {
-    const parsed = Date.parse(item.createdAt)
-    if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-      latestTimestamp = parsed
-    }
+  for (const tombstone of tombstones) {
+    considerTimestamp(tombstone.deletedAt)
   }
 
   return latestTimestamp > 0 ? new Date(latestTimestamp).toISOString() : null
@@ -321,10 +258,12 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     tagDefinitions,
     tagEvents,
     reportTemplates,
+    dateTimeFormats,
     customViews,
     customActions,
     masterProblems,
     simpleProblemItems,
+    syncTombstones,
   ] = await Promise.all([
     db.patients.toArray(),
     db.dailyUpdates.toArray(),
@@ -336,10 +275,12 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     db.tagDefinitions.toArray(),
     db.tagEvents.toArray(),
     db.reportTemplates.toArray(),
+    db.dateTimeFormats.toArray(),
     db.customViews.toArray(),
     db.customActions.toArray(),
     db.masterProblems.toArray(),
     db.simpleProblemItems.toArray(),
+    db.syncTombstones.toArray(),
   ])
 
   return {
@@ -356,10 +297,12 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     tagDefinitions,
     tagEvents,
     reportTemplates,
+    dateTimeFormats,
     customViews,
     customActions,
     masterProblems,
     simpleProblemItems,
+    syncTombstones,
   }
 }
 
@@ -390,10 +333,12 @@ const isSyncPayload = (value: unknown): value is SyncPayload => {
     && (candidate.tagDefinitions === undefined || Array.isArray(candidate.tagDefinitions))
     && (candidate.tagEvents === undefined || Array.isArray(candidate.tagEvents))
     && (candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates))
+    && (candidate.dateTimeFormats === undefined || Array.isArray(candidate.dateTimeFormats))
     && (candidate.customViews === undefined || Array.isArray(candidate.customViews))
     && (candidate.customActions === undefined || Array.isArray(candidate.customActions))
     && (candidate.masterProblems === undefined || Array.isArray(candidate.masterProblems))
     && (candidate.simpleProblemItems === undefined || Array.isArray(candidate.simpleProblemItems))
+    && (candidate.syncTombstones === undefined || Array.isArray(candidate.syncTombstones))
   )
 }
 
@@ -417,6 +362,9 @@ const getMissingSecondaryTables = (payload: SyncPayload): string[] => {
   }
   if (payload.reportTemplates === undefined) {
     missingTables.push('report templates')
+  }
+  if (payload.dateTimeFormats === undefined) {
+    missingTables.push('date/time formats')
   }
   if (payload.customViews === undefined) {
     missingTables.push('custom views')
@@ -456,12 +404,15 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       db.tagDefinitions,
       db.tagEvents,
       db.reportTemplates,
+      db.dateTimeFormats,
       db.customViews,
       db.customActions,
       db.masterProblems,
       db.simpleProblemItems,
+      db.syncTombstones,
     ],
     async () => {
+    markSyncImportTransaction()
     await db.patients.clear()
     await db.dailyUpdates.clear()
 
@@ -529,6 +480,13 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       }
     }
 
+    if (payload.dateTimeFormats !== undefined) {
+      await db.dateTimeFormats.clear()
+      if (payload.dateTimeFormats.length > 0) {
+        await db.dateTimeFormats.bulkPut(payload.dateTimeFormats)
+      }
+    }
+
     if (payload.customViews !== undefined) {
       await db.customViews.clear()
       if (payload.customViews.length > 0) {
@@ -554,6 +512,13 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
       await db.simpleProblemItems.clear()
       if (payload.simpleProblemItems.length > 0) {
         await db.simpleProblemItems.bulkPut(payload.simpleProblemItems)
+      }
+    }
+
+    if (payload.syncTombstones !== undefined) {
+      await db.syncTombstones.clear()
+      if (payload.syncTombstones.length > 0) {
+        await db.syncTombstones.bulkPut(payload.syncTombstones)
       }
     }
   })
@@ -703,7 +668,7 @@ const pullSnapshotWithMeta = async (
     throw new Error('Remote payload format is invalid.')
   }
 
-  if (payload.version !== SYNC_DATA_VERSION) {
+  if (payload.version < OLDEST_READABLE_SYNC_DATA_VERSION || payload.version > SYNC_DATA_VERSION) {
     throw new Error('Remote payload version is unsupported. Please update PUHRR on both devices.')
   }
 
