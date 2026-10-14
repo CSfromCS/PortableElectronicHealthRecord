@@ -29,6 +29,21 @@ const SYNC_IMPORT_FLAG = '__puhrrSyncImport'
 type FlaggedTransaction = Transaction & { [SYNC_IMPORT_FLAG]?: boolean }
 type SyncedRecord = SyncMeta & Record<string, unknown>
 
+let lastGeneratedRecordId = 0
+
+/**
+ * A record id that no other device will pick. Auto-increment ids restart from 1 on every device,
+ * so two devices adding records between syncs would both create "vitals #51" — and records point
+ * at each other by id (patientId, tag ids inside templates and views, ...), so a merge can't just
+ * renumber one. Time-ordered ids with random low bits keep new records collision-free and in
+ * creation order; `lastGeneratedRecordId` keeps a burst of adds in one millisecond distinct.
+ */
+export const createSyncRecordId = (): number => {
+  const candidate = Date.now() * 4096 + Math.floor(Math.random() * 4096)
+  lastGeneratedRecordId = Math.max(candidate, lastGeneratedRecordId + 1)
+  return lastGeneratedRecordId
+}
+
 export const createSyncUid = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   return `uid-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
@@ -100,7 +115,7 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
   for (const tableName of SYNCED_TABLE_NAMES) {
     const table = db.table<SyncedRecord>(tableName)
 
-    table.hook('creating', (_primaryKey, record, transaction) => {
+    table.hook('creating', (primaryKey, record, transaction) => {
       if (isUntrackedWrite(transaction)) {
         // Keep what the import brought; only fill in what an older payload or backup lacks.
         if (typeof record.uid !== 'string' || !record.uid) record.uid = createSyncUid()
@@ -110,6 +125,8 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
       // Always fresh: copies such as Duplicate patient spread the source record, uid included.
       record.uid = createSyncUid()
       record.updatedAt = new Date().toISOString()
+      // Dexie uses the id this returns for an add() that left the id to auto-increment.
+      return primaryKey == null ? createSyncRecordId() : undefined
     })
 
     table.hook('updating', (modifications, _primaryKey, existing, transaction) => {
@@ -129,10 +146,15 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
       }
     })
 
-    table.hook('deleting', (_primaryKey, existing, transaction) => {
+    table.hook('deleting', (primaryKey, existing, transaction) => {
       if (isUntrackedWrite(transaction)) return
       if (typeof existing?.uid !== 'string' || !existing.uid) return
-      queueTombstone(transaction, { uid: existing.uid, table: tableName, deletedAt: new Date().toISOString() })
+      queueTombstone(transaction, {
+        uid: existing.uid,
+        table: tableName,
+        deletedAt: new Date().toISOString(),
+        ...(typeof primaryKey === 'number' ? { recordId: primaryKey } : {}),
+      })
     })
   }
 }

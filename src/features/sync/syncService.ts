@@ -20,7 +20,8 @@ import type {
 } from '@/types'
 import { normalizeDailyUpdate } from '@/features/problems/problemUtils'
 import { decryptBlobToPayload, encryptPayloadToBlob, sha256Hex } from './crypto'
-import { SYNCED_TABLE_NAMES, markSyncImportTransaction } from './syncMeta'
+import { type MergeRow, type MergeSide, mergeSyncSnapshots } from './syncMerge'
+import { SYNCED_TABLE_NAMES, type SyncedTableName, deriveSyncUpdatedAt, markSyncImportTransaction } from './syncMeta'
 
 const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
 // v3 was bumped for the Master Problem List: DailyUpdate.problems changed shape from embedded
@@ -131,7 +132,7 @@ export type SyncConfig = {
 
 type SyncResult = {
   config: SyncConfig
-  operation: 'push' | 'pull' | 'noop'
+  operation: 'push' | 'pull' | 'merge' | 'noop'
   message: string
 }
 
@@ -604,7 +605,23 @@ const findRoomGist = async (config: SyncConfig): Promise<string | null> => {
   }
 }
 
-const pushSnapshot = async (config: SyncConfig): Promise<SyncResult> => {
+/** The room changed after this device last looked at it — someone else pushed in between. */
+class RoomChangedError extends Error {
+  constructor() {
+    super('The sync room changed while syncing.')
+    this.name = 'RoomChangedError'
+  }
+}
+
+const pushSnapshot = async (config: SyncConfig, expectedRemoteUpdatedAt?: string): Promise<SyncResult> => {
+  if (expectedRemoteUpdatedAt && config.gistId) {
+    // Checked right before uploading so a push never silently replaces one that landed after this
+    // device's last look. `expectedUpdatedAt` also goes to the Worker, which can refuse the upload
+    // itself and close the remaining gap between this check and the write.
+    const latest = await checkRemote(config)
+    if (latest && latest.updatedAt !== expectedRemoteUpdatedAt) throw new RoomChangedError()
+  }
+
   const payload = await exportSyncPayload(config.deviceTag)
   const encryptedBlob = await encryptPayloadToBlob(payload, config.roomCode)
   const description = buildDescription(config, encryptedBlob.length)
@@ -618,6 +635,7 @@ const pushSnapshot = async (config: SyncConfig): Promise<SyncResult> => {
       gistId: config.gistId,
       description,
       blob: encryptedBlob,
+      ...(expectedRemoteUpdatedAt ? { expectedUpdatedAt: expectedRemoteUpdatedAt } : {}),
     }),
   })
 
@@ -770,6 +788,87 @@ const pushOrJoinExistingRoom = async (config: SyncConfig): Promise<SyncNowResult
     saveSyncConfig(linkedConfig)
     return buildFirstSyncResult(linkedConfig)
   }
+}
+
+const toMergeSide = (payload: SyncPayload): MergeSide => {
+  const tables: MergeSide['tables'] = {}
+  for (const tableName of SYNCED_TABLE_NAMES) {
+    const rows = payload[tableName] as MergeRow[] | undefined
+    if (rows === undefined) continue
+    // A v3 snapshot predates updatedAt: its records count as last edited when they say they were.
+    tables[tableName] = rows.map((row) => (row.updatedAt ? row : { ...row, updatedAt: deriveSyncUpdatedAt(row) }))
+  }
+  return { tables, tombstones: payload.syncTombstones ?? [] }
+}
+
+/**
+ * Merges the room's snapshot into this device's data inside one local transaction — reading what's
+ * here, combining, and writing back with nothing in between — so an edit made while the download
+ * was in flight can't be overwritten.
+ */
+const mergeRemoteIntoLocal = async (
+  remotePayload: SyncPayload,
+): Promise<{ changedLocal: boolean; changedRemote: boolean }> => {
+  const syncedTables = [...SYNCED_TABLE_NAMES.map((tableName) => db.table(tableName)), db.syncTombstones]
+
+  return db.transaction('rw', syncedTables, async () => {
+    const localTables: MergeSide['tables'] = {}
+    for (const tableName of SYNCED_TABLE_NAMES) {
+      localTables[tableName] = await db.table<MergeRow>(tableName).toArray()
+    }
+    const local: MergeSide = { tables: localTables, tombstones: await db.syncTombstones.toArray() }
+
+    const merged = mergeSyncSnapshots(local, toMergeSide(remotePayload))
+    if (merged.changedLocal) {
+      await replaceSyncedTables({
+        ...remotePayload,
+        ...(Object.fromEntries(SYNCED_TABLE_NAMES.map((tableName) => [tableName, merged.tables[tableName]])) as Record<SyncedTableName, never>),
+        syncTombstones: merged.tombstones,
+      })
+    }
+
+    return { changedLocal: merged.changedLocal, changedRemote: merged.changedRemote }
+  })
+}
+
+const MAX_MERGE_ATTEMPTS = 3
+
+/** Pulls the room, merges it with this device's data, and uploads the result if the room is
+ * missing anything. If someone else pushes while this runs, the room is read and merged again. */
+const mergeWithRoom = async (config: SyncConfig): Promise<SyncResult> => {
+  for (let attempt = 0; attempt < MAX_MERGE_ATTEMPTS; attempt += 1) {
+    const remoteCheck = await checkRemote(config)
+    if (!remoteCheck) throw new Error('Linked sync room could not be checked.')
+
+    const remotePayload = await pullSnapshot(config)
+    const { changedLocal, changedRemote } = await mergeRemoteIntoLocal(remotePayload)
+    const legacySnapshotWarning = buildLegacySnapshotWarning(getMissingSecondaryTables(remotePayload))
+
+    if (!changedRemote) {
+      const syncedConfig = { ...config, lastSyncedAt: remoteCheck.updatedAt }
+      saveSyncConfig(syncedConfig)
+      return {
+        config: syncedConfig,
+        operation: changedLocal ? 'pull' : 'noop',
+        message: changedLocal ? `Pulled latest room data.${legacySnapshotWarning}` : 'Already synced.',
+      }
+    }
+
+    try {
+      const pushed = await pushSnapshot(config, remoteCheck.updatedAt)
+      return {
+        ...pushed,
+        operation: changedLocal ? 'merge' : 'push',
+        message: changedLocal
+          ? `Merged room changes with this device and uploaded the result.${legacySnapshotWarning}`
+          : pushed.message,
+      }
+    } catch (error) {
+      if (!(error instanceof RoomChangedError)) throw error
+    }
+  }
+
+  throw new Error('The sync room kept changing while syncing. Wait a moment and sync again.')
 }
 
 export const getSyncInsight = async (currentConfig: SyncConfig): Promise<SyncInsight> => {
@@ -950,9 +1049,6 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
     return buildFirstSyncResult(linkedConfig)
   }
 
-  const remotePushedAt = remoteDescription?.lastPushedAt ?? remoteCheck.updatedAt
-  const remoteDeviceTag = remoteDescription?.lastPushedBy ?? ''
-
   const lastSyncedMs = linkedConfig.lastSyncedAt ? Date.parse(linkedConfig.lastSyncedAt) : Number.NaN
   const remoteUpdatedMs = Date.parse(remoteCheck.updatedAt)
   const localLatestChange = await getLatestLocalChangeAt()
@@ -967,41 +1063,7 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
     : Number.isFinite(remoteUpdatedMs)
 
   if (remoteIsNewSinceLastSync) {
-    if (hasLocalChangesSinceLastSync) {
-      const versionsFromServer = await getRemoteVersions(linkedConfig, 5)
-      const versions = versionsFromServer.length > 0
-        ? versionsFromServer
-        : [{
-          sha: 'latest',
-          pushedAt: remotePushedAt,
-          deviceTag: remoteDeviceTag || 'remote room version',
-          sizeBytes: remoteDescription?.blobSizeBytes ?? 0,
-        }]
-      return {
-        kind: 'conflict',
-        config: linkedConfig,
-        versions,
-        remoteDeviceTag: remoteDeviceTag || 'remote room version',
-        remotePushedAt,
-      }
-    }
-
-    const remotePayload = await pullSnapshot(linkedConfig)
-    await replaceSyncedTables(remotePayload)
-    const legacySnapshotWarning = buildLegacySnapshotWarning(getMissingSecondaryTables(remotePayload))
-
-    const syncedConfig = {
-      ...linkedConfig,
-      lastSyncedAt: remoteCheck.updatedAt,
-    }
-
-    saveSyncConfig(syncedConfig)
-
-    return {
-      config: syncedConfig,
-      operation: 'pull',
-      message: `Pulled latest room data.${legacySnapshotWarning}`,
-    }
+    return mergeWithRoom(linkedConfig)
   }
 
   if (!hasLocalChangesSinceLastSync) {
@@ -1012,7 +1074,12 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
     }
   }
 
-  return pushSnapshot(linkedConfig)
+  try {
+    return await pushSnapshot(linkedConfig, remoteCheck.updatedAt)
+  } catch (error) {
+    if (!(error instanceof RoomChangedError)) throw error
+    return mergeWithRoom(linkedConfig)
+  }
 }
 
 export const resolveConflictKeepLocal = async (config: SyncConfig): Promise<SyncResult> => {
