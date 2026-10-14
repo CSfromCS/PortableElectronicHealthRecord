@@ -1,5 +1,6 @@
 import { db } from '@/db'
 import type {
+  ChangeLogEntry,
   CustomAction,
   CustomView,
   DailyUpdate,
@@ -31,7 +32,10 @@ const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
 // v4 adds per-record uid/updatedAt, date/time formats and deletion tombstones. A v3 snapshot (one
 // pushed before every device updated) is still readable — its records get their sync fields as
 // they're imported — while an app still on v3 refuses a v4 snapshot and asks to update.
-const SYNC_DATA_VERSION = 4
+// v5 adds the change log (what Medmin changed, with what is needed to undo it). Older snapshots are
+// still readable; an app on v4 refuses a v5 snapshot and asks to update, so a device that cannot
+// show or undo Medmin's changes never takes part once Medmin is writing.
+const SYNC_DATA_VERSION = 5
 const OLDEST_READABLE_SYNC_DATA_VERSION = 3
 const DEFAULT_SYNC_ENDPOINT = 'https://puhr-sync.csfromcs.workers.dev'
 const LEGACY_SYNC_HOSTS = new Set([
@@ -60,6 +64,7 @@ type SyncPayload = {
   customActions?: CustomAction[]
   masterProblems?: MasterProblem[]
   simpleProblemItems?: SimpleProblemItem[]
+  changeLog?: ChangeLogEntry[]
   syncTombstones?: SyncTombstone[]
 }
 
@@ -249,39 +254,8 @@ export const getLatestLocalChangeAt = async (): Promise<string | null> => {
 }
 
 const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
-  const [
-    patients,
-    dailyUpdates,
-    vitals,
-    medications,
-    labs,
-    orders,
-    tagGroups,
-    tagDefinitions,
-    tagEvents,
-    reportTemplates,
-    dateTimeFormats,
-    customViews,
-    customActions,
-    masterProblems,
-    simpleProblemItems,
-    syncTombstones,
-  ] = await Promise.all([
-    db.patients.toArray(),
-    db.dailyUpdates.toArray(),
-    db.vitals.toArray(),
-    db.medications.toArray(),
-    db.labs.toArray(),
-    db.orders.toArray(),
-    db.tagGroups.toArray(),
-    db.tagDefinitions.toArray(),
-    db.tagEvents.toArray(),
-    db.reportTemplates.toArray(),
-    db.dateTimeFormats.toArray(),
-    db.customViews.toArray(),
-    db.customActions.toArray(),
-    db.masterProblems.toArray(),
-    db.simpleProblemItems.toArray(),
+  const [recordsByTable, syncTombstones] = await Promise.all([
+    Promise.all(SYNCED_TABLE_NAMES.map((tableName) => db.table(tableName).toArray())),
     db.syncTombstones.toArray(),
   ])
 
@@ -289,21 +263,7 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     version: SYNC_DATA_VERSION,
     exportedAt: toIsoNow(),
     deviceTag,
-    patients,
-    dailyUpdates,
-    vitals,
-    medications,
-    labs,
-    orders,
-    tagGroups,
-    tagDefinitions,
-    tagEvents,
-    reportTemplates,
-    dateTimeFormats,
-    customViews,
-    customActions,
-    masterProblems,
-    simpleProblemItems,
+    ...(Object.fromEntries(SYNCED_TABLE_NAMES.map((tableName, index) => [tableName, recordsByTable[index]])) as Pick<SyncPayload, SyncedTableName>),
     syncTombstones,
   }
 }
@@ -327,19 +287,7 @@ const isSyncPayload = (value: unknown): value is SyncPayload => {
     && typeof candidate.deviceTag === 'string'
     && Array.isArray(candidate.patients)
     && Array.isArray(candidate.dailyUpdates)
-    && (candidate.vitals === undefined || Array.isArray(candidate.vitals))
-    && (candidate.medications === undefined || Array.isArray(candidate.medications))
-    && (candidate.labs === undefined || Array.isArray(candidate.labs))
-    && (candidate.orders === undefined || Array.isArray(candidate.orders))
-    && (candidate.tagGroups === undefined || Array.isArray(candidate.tagGroups))
-    && (candidate.tagDefinitions === undefined || Array.isArray(candidate.tagDefinitions))
-    && (candidate.tagEvents === undefined || Array.isArray(candidate.tagEvents))
-    && (candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates))
-    && (candidate.dateTimeFormats === undefined || Array.isArray(candidate.dateTimeFormats))
-    && (candidate.customViews === undefined || Array.isArray(candidate.customViews))
-    && (candidate.customActions === undefined || Array.isArray(candidate.customActions))
-    && (candidate.masterProblems === undefined || Array.isArray(candidate.masterProblems))
-    && (candidate.simpleProblemItems === undefined || Array.isArray(candidate.simpleProblemItems))
+    && SYNCED_TABLE_NAMES.every((tableName) => candidate[tableName] === undefined || Array.isArray(candidate[tableName]))
     && (candidate.syncTombstones === undefined || Array.isArray(candidate.syncTombstones))
   )
 }
@@ -390,140 +338,37 @@ const buildLegacySnapshotWarning = (missingTables: string[]): string => {
 }
 
 const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
-  const patientsToStore = payload.patients.map((patient) => sanitizeImportedPatient(patient))
-  const dailyUpdatesToStore = payload.dailyUpdates.map((update) => normalizeDailyUpdate(update))
+  const normalizers: Partial<Record<SyncedTableName, (record: never) => unknown>> = {
+    patients: sanitizeImportedPatient,
+    dailyUpdates: normalizeDailyUpdate,
+  }
 
   await db.transaction(
     'rw',
-    [
-      db.patients,
-      db.dailyUpdates,
-      db.vitals,
-      db.medications,
-      db.labs,
-      db.orders,
-      db.tagGroups,
-      db.tagDefinitions,
-      db.tagEvents,
-      db.reportTemplates,
-      db.dateTimeFormats,
-      db.customViews,
-      db.customActions,
-      db.masterProblems,
-      db.simpleProblemItems,
-      db.syncTombstones,
-    ],
+    [...SYNCED_TABLE_NAMES.map((tableName) => db.table(tableName)), db.syncTombstones],
     async () => {
-    markSyncImportTransaction()
-    await db.patients.clear()
-    await db.dailyUpdates.clear()
+      markSyncImportTransaction()
 
-    if (patientsToStore.length > 0) {
-      await db.patients.bulkPut(patientsToStore)
-    }
+      for (const tableName of SYNCED_TABLE_NAMES) {
+        const incoming = payload[tableName] as unknown[] | undefined
+        // Patients and daily updates have always been required; every other table is only
+        // replaced when the snapshot carries it, so a legacy room does not wipe what it never had.
+        if (incoming === undefined && tableName !== 'patients' && tableName !== 'dailyUpdates') continue
 
-    if (dailyUpdatesToStore.length > 0) {
-      await db.dailyUpdates.bulkPut(dailyUpdatesToStore)
-    }
-
-    if (payload.vitals !== undefined) {
-      await db.vitals.clear()
-      if (payload.vitals.length > 0) {
-        await db.vitals.bulkPut(payload.vitals)
+        const normalize = normalizers[tableName] as ((record: unknown) => unknown) | undefined
+        const rows = (incoming ?? []).map((record) => (normalize ? normalize(record) : record))
+        await db.table(tableName).clear()
+        if (rows.length > 0) await db.table(tableName).bulkPut(rows)
       }
-    }
 
-    if (payload.medications !== undefined) {
-      await db.medications.clear()
-      if (payload.medications.length > 0) {
-        await db.medications.bulkPut(payload.medications)
+      if (payload.syncTombstones !== undefined) {
+        await db.syncTombstones.clear()
+        if (payload.syncTombstones.length > 0) {
+          await db.syncTombstones.bulkPut(payload.syncTombstones)
+        }
       }
-    }
-
-    if (payload.labs !== undefined) {
-      await db.labs.clear()
-      if (payload.labs.length > 0) {
-        await db.labs.bulkPut(payload.labs)
-      }
-    }
-
-    if (payload.orders !== undefined) {
-      await db.orders.clear()
-      if (payload.orders.length > 0) {
-        await db.orders.bulkPut(payload.orders)
-      }
-    }
-
-    if (payload.tagGroups !== undefined) {
-      await db.tagGroups.clear()
-      if (payload.tagGroups.length > 0) {
-        await db.tagGroups.bulkPut(payload.tagGroups)
-      }
-    }
-
-    if (payload.tagDefinitions !== undefined) {
-      await db.tagDefinitions.clear()
-      if (payload.tagDefinitions.length > 0) {
-        await db.tagDefinitions.bulkPut(payload.tagDefinitions)
-      }
-    }
-
-    if (payload.tagEvents !== undefined) {
-      await db.tagEvents.clear()
-      if (payload.tagEvents.length > 0) {
-        await db.tagEvents.bulkPut(payload.tagEvents)
-      }
-    }
-
-    if (payload.reportTemplates !== undefined) {
-      await db.reportTemplates.clear()
-      if (payload.reportTemplates.length > 0) {
-        await db.reportTemplates.bulkPut(payload.reportTemplates)
-      }
-    }
-
-    if (payload.dateTimeFormats !== undefined) {
-      await db.dateTimeFormats.clear()
-      if (payload.dateTimeFormats.length > 0) {
-        await db.dateTimeFormats.bulkPut(payload.dateTimeFormats)
-      }
-    }
-
-    if (payload.customViews !== undefined) {
-      await db.customViews.clear()
-      if (payload.customViews.length > 0) {
-        await db.customViews.bulkPut(payload.customViews)
-      }
-    }
-
-    if (payload.customActions !== undefined) {
-      await db.customActions.clear()
-      if (payload.customActions.length > 0) {
-        await db.customActions.bulkPut(payload.customActions)
-      }
-    }
-
-    if (payload.masterProblems !== undefined) {
-      await db.masterProblems.clear()
-      if (payload.masterProblems.length > 0) {
-        await db.masterProblems.bulkPut(payload.masterProblems)
-      }
-    }
-
-    if (payload.simpleProblemItems !== undefined) {
-      await db.simpleProblemItems.clear()
-      if (payload.simpleProblemItems.length > 0) {
-        await db.simpleProblemItems.bulkPut(payload.simpleProblemItems)
-      }
-    }
-
-    if (payload.syncTombstones !== undefined) {
-      await db.syncTombstones.clear()
-      if (payload.syncTombstones.length > 0) {
-        await db.syncTombstones.bulkPut(payload.syncTombstones)
-      }
-    }
-  })
+    },
+  )
 }
 
 const buildDescription = (config: SyncConfig, blobSizeBytes: number): string => {
@@ -1171,5 +1016,13 @@ export const refreshRoomReadOnly = (config: SyncConfig): Promise<{ config: SyncC
   const result = await resolveConflictWithVersionUnlocked(config, 'latest')
   return { config: result.config, changed: true }
 })
+
+/**
+ * Reconciles this process's data with the room right now: downloads the room, merges it with what's
+ * here, and uploads the result if the room is missing anything. Unlike `syncNow` it doesn't decide
+ * from timestamps whether there's anything to send, so a change made on a device with a slightly
+ * wrong clock is still uploaded. The Medmin bridge calls it after each change it makes.
+ */
+export const syncWithRoom = (config: SyncConfig): Promise<SyncResult> => runExclusive(() => mergeWithRoom(config))
 
 export const getDefaultSyncEndpoint = (): string => DEFAULT_SYNC_ENDPOINT

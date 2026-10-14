@@ -196,7 +196,7 @@ export type PatientSelection = {
   sort?: Array<{ field: 'ward' | 'room' | 'name' | 'admitDate' | 'tagOrder'; direction?: 'asc' | 'desc'; tags?: string[] }>
 }
 
-const resolveView = (name: string, world: World): CustomView => {
+export const resolveView = (name: string, world: World): CustomView => {
   const exact = world.views.filter((view) => lower(view.name) === lower(name))
   if (exact.length >= 1) return exact[0]
   const close = world.views.filter((view) => lower(view.name).includes(lower(name)) || lower(name).includes(lower(view.name)))
@@ -205,7 +205,7 @@ const resolveView = (name: string, world: World): CustomView => {
     : `No saved view named "${name}". Saved views: ${world.views.map((view) => view.name).join(', ') || '(none)'}.`)
 }
 
-const resolveSort = (selection: PatientSelection, view: CustomView | null, world: World): PatientSortConfig => {
+export const resolveSort = (selection: PatientSelection, view: CustomView | null, world: World): PatientSortConfig => {
   if (selection.sort && selection.sort.length > 0) {
     return {
       levels: selection.sort.map((level, index) => {

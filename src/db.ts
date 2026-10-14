@@ -25,6 +25,7 @@ import { buildDefaultCustomViews } from './features/filters/customViewDefaults'
 import { backfillSyncMeta, registerSyncMetaHooks } from './features/sync/syncMeta'
 import type {
   BlockJoinMode,
+  ChangeLogEntry,
   BlockVariableConfig,
   BlockVariableId,
   CensusGroupCombineMode,
@@ -74,6 +75,7 @@ const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
   masterProblems: EntityTable<MasterProblem, 'id'>
   simpleProblemItems: EntityTable<SimpleProblemItem, 'id'>
   syncTombstones: EntityTable<SyncTombstone, 'uid'>
+  changeLog: EntityTable<ChangeLogEntry, 'id'>
 }
 
 db.version(1).stores({
@@ -1613,6 +1615,30 @@ db.version(31).stores({
   // `updatedAt` (from its own lastModified/lastUpdated/createdAt where it has one), so sync can
   // tell edits apart from untouched records. From here on the hooks below keep both current.
   await backfillSyncMeta(tx)
+})
+
+db.version(32).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+  simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
+  syncTombstones: 'uid, table, deletedAt',
+  changeLog: '++id, at, patientId',
 })
 
 registerSyncMetaHooks(db)

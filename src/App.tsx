@@ -65,7 +65,9 @@ import {
   mergeChecklistItemIntoPrevious,
   normalizeChecklistItems,
   normalizeChecklistItemsKeepingBlanks,
+  reorderChecklistItems,
   selectLatestDailyUpdate,
+  setChecklistItemCompletion,
   splitChecklistItemAtCursor,
   toPendingChecklistItems,
   withTrailingBlankChecklistItem,
@@ -81,9 +83,7 @@ import { FlexibleDateInput } from '@/lib/date/FlexibleDateInput'
 import { FlexibleTimeInput } from '@/lib/date/FlexibleTimeInput'
 import {
   formatDateShortMonthDay,
-  formatCalculatedNumber,
   getEffectiveAdmitDate,
-  parseNumericInput,
   toLocalISODate,
   toLocalTime,
 } from '@/lib/dateTime'
@@ -112,8 +112,6 @@ import {
   ABG_ACTUAL_FIO2_KEY,
   ABG_DESIRED_FIO2_KEY,
   ABG_PF_RATIO_KEY,
-  ABG_PO2_KEY,
-  DEFAULT_ABG_DESIRED_PAO2,
   DEFAULT_LAB_TEMPLATE_ID,
   LAB_TEMPLATES,
   OTHERS_LABEL_KEY,
@@ -181,6 +179,10 @@ import {
   type SyncVersion,
 } from './features/sync/syncService'
 import { markSyncImportTransaction } from './features/sync/syncMeta'
+import { runAutomaticCustomActionsForTagAddition as runSharedAutomaticCustomActionsForTagAddition } from './features/customActions/automaticActions'
+import { pruneChangeLog } from './features/changes/changeLog'
+import { RecentChangesCard } from './features/changes/RecentChangesCard'
+import { computeAbgDerivedValues } from './features/labs/labDerived'
 import { useAutoSync } from './features/sync/useAutoSync'
 import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, Images, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
@@ -388,36 +390,6 @@ const initialDailyUpdateForm: DailyUpdateFormState = {
 
 // Once a field has a value, its label recedes so the value itself carries the visual weight.
 const fieldLabelClassName = (hasValue: boolean) => (hasValue ? 'text-xs font-normal text-clay/70 transition-colors' : undefined)
-
-const reorderChecklistItems = (items: DailyChecklistItem[], sourceIndex: number, targetIndex: number, position: DropPosition) => {
-  const sourceItem = items[sourceIndex]
-  const targetItem = items[targetIndex]
-  if (!sourceItem || !targetItem || sourceItem === targetItem) return items
-  const nextItems = [...items]
-  const [movedItem] = nextItems.splice(sourceIndex, 1)
-  const targetIndexAfterRemoval = nextItems.indexOf(targetItem)
-  if (targetIndexAfterRemoval === -1) return items
-  const insertIndex = position === 'before' ? targetIndexAfterRemoval : targetIndexAfterRemoval + 1
-  nextItems.splice(insertIndex, 0, movedItem)
-  return nextItems
-}
-
-const setChecklistItemCompletion = (items: DailyChecklistItem[], index: number, completed: boolean) => {
-  const currentItem = items[index]
-  if (!currentItem || currentItem.completed === completed) return items
-
-  const nextItems = [...items]
-  nextItems.splice(index, 1)
-  const updatedItem = { ...currentItem, completed }
-  if (completed) {
-    nextItems.push(updatedItem)
-    return nextItems
-  }
-
-  const firstCompletedIndex = nextItems.findIndex((item) => item.completed)
-  nextItems.splice(firstCompletedIndex < 0 ? nextItems.length : firstCompletedIndex, 0, updatedItem)
-  return nextItems
-}
 
 const getNormalAaDo2 = (age: number): number => {
   const decadesAboveThirty = age > 30 ? Math.floor((age - 30) / 10) : 0
@@ -1304,6 +1276,12 @@ function App() {
     void refreshSyncInsight(syncConfig)
   }, [refreshSyncInsight, syncConfig])
 
+  // Changes older than the retention window (30 days) are dropped, which is also when a deleted
+  // record stops being recoverable.
+  useEffect(() => {
+    void pruneChangeLog()
+  }, [])
+
   const savedDailyEntryDates = useLiveQuery(async () => {
     if (selectedPatientId === null) return [] as string[]
 
@@ -1685,21 +1663,7 @@ function App() {
     if (!isAbgLabTemplate) return
 
     setLabTemplateValues((previous) => {
-      const actualPaO2 = parseNumericInput(previous[ABG_PO2_KEY])
-      const actualFiO2Percent = parseNumericInput(previous[ABG_ACTUAL_FIO2_KEY])
-
-      const pfRatio =
-        actualPaO2 !== null && actualFiO2Percent !== null && actualFiO2Percent > 0
-          ? formatCalculatedNumber(actualPaO2 / (actualFiO2Percent / 100), 2)
-          : ''
-
-      const desiredFiO2 =
-        actualPaO2 !== null &&
-        actualPaO2 > 0 &&
-        actualFiO2Percent !== null &&
-        (actualFiO2Percent > 21 || actualPaO2 < 60)
-          ? formatCalculatedNumber((actualFiO2Percent * DEFAULT_ABG_DESIRED_PAO2) / actualPaO2, 2)
-          : ''
+      const { pfRatio, desiredFiO2 } = computeAbgDerivedValues(previous)
 
       const currentPfRatio = previous[ABG_PF_RATIO_KEY] ?? ''
       const currentDesiredFiO2 = previous[ABG_DESIRED_FIO2_KEY] ?? ''
@@ -3296,29 +3260,14 @@ function App() {
   // silently in the background with no per-patient prompt — a patient matching none of an
   // action's conditions is simply left unaffected and named in a notice afterward.
   const runAutomaticCustomActionsForTagAddition = useCallback(async (patientAfterAdd: Patient, addedTagIds: number[]) => {
-    if (patientAfterAdd.id === undefined || addedTagIds.length === 0) return
-    const addedTagIdSet = new Set(addedTagIds)
-    const matchingActions = (customActions ?? []).filter(
-      (action) => !action.disabled && action.triggerType === 'automatic' && action.triggerTagId !== undefined && addedTagIdSet.has(action.triggerTagId),
-    )
-    if (matchingActions.length === 0) return
-
-    const today = toLocalISODate()
-    const unaffectedMessages: string[] = []
-    for (const action of matchingActions) {
-      const matched = resolveMatchingConditions(patientAfterAdd, action)
-      if (!actionHasApplicableEffect(action, matched)) {
-        unaffectedMessages.push(`"${action.name}" did not affect ${formatPatientLabelForNotice(patientAfterAdd)} — no condition was met.`)
-        continue
-      }
-      await applyCustomActionEffects(
-        patientAfterAdd,
-        action,
-        matched,
-        tagsById,
-        (items) => appendCustomActionChecklistItems(patientAfterAdd.id as number, today, items),
-      )
-    }
+    const unaffectedMessages = await runSharedAutomaticCustomActionsForTagAddition({
+      patientAfterAdd,
+      addedTagIds,
+      customActions: customActions ?? [],
+      tagsById,
+      today: toLocalISODate(),
+      appendChecklistItems: appendCustomActionChecklistItems,
+    })
     if (unaffectedMessages.length > 0) setNotice(unaffectedMessages.join(' '))
   }, [appendCustomActionChecklistItems, customActions, tagsById])
 
@@ -9103,6 +9052,7 @@ function App() {
               </CardTitle>
             </CardHeader>
             <CardContent className='px-4 pb-4 space-y-5'>
+              <RecentChangesCard />
               <div className='space-y-2'>
                 <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Sync Status</p>
                 <div className='rounded-xl border border-clay/25 bg-warm-ivory px-3.5 py-3 space-y-2'>
@@ -9423,6 +9373,7 @@ function App() {
                     ['Restore an older version', 'Only the first sync with an existing room opens the version picker (upload this device or download room data). Choosing an older version restores it and uploads it as the room’s latest snapshot.'],
                     ['If sync cannot connect', 'PUHRR stops without uploading when room lookup or conflict checks fail. Check the connection and retry; a failed check is never treated as an empty room.'],
                     ['Keep backup safety', 'Sync includes profile, Problems, vitals, medications, labs, orders, tags, report templates, date/time formats, custom views, and custom actions. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
+                    ['See what Medmin changed', 'If you use the Medmin assistant, Settings → Recent Medmin changes lists everything it changed, newest first. Tap Undo on any of them to put it back, including a deleted patient or entry (kept for 30 days). If something was edited again after the change, you\u2019re warned before it\u2019s overwritten.'],
                     ['Keep app versions aligned', 'Every linked device needs the same PUHRR version. If sync reports an unsupported room version, reload PUHRR on each device to update it, then try again.'],
                   ] as [string, string][]).map(([title, detail], i) => (
                     <li key={i} className='flex gap-2.5 items-start'>

@@ -19,6 +19,7 @@ export const SYNCED_TABLE_NAMES = [
   'customActions',
   'masterProblems',
   'simpleProblemItems',
+  'changeLog',
 ] as const
 
 export type SyncedTableName = typeof SYNCED_TABLE_NAMES[number]
@@ -38,8 +39,31 @@ export const subscribeToLocalSyncedChanges = (listener: () => void): (() => void
   return () => { localChangeListeners.delete(listener) }
 }
 
-const notifyLocalSyncedChange = () => {
+export const notifyLocalSyncedChange = () => {
   for (const listener of localChangeListeners) listener()
+}
+
+// What each record looked like before a change began, gathered while a change is being recorded
+// (see features/changes/changeLog.ts). Keyed by the transaction the change runs in.
+export type RecordedEvent = { table: string; key: number; before?: Record<string, unknown> }
+const recordings = new WeakMap<Transaction, Map<string, RecordedEvent>>()
+
+/** Starts recording every tracked write made in the current transaction. */
+export const beginChangeRecording = (): Map<string, RecordedEvent> => {
+  const transaction = Dexie.currentTransaction
+  if (!transaction) throw new Error('beginChangeRecording must run inside db.transaction().')
+  const events = new Map<string, RecordedEvent>()
+  recordings.set(rootTransaction(transaction), events)
+  return events
+}
+
+const recordEvent = (transaction: Transaction, tableName: string, key: unknown, before?: Record<string, unknown>) => {
+  // The log of changes is not itself part of any change.
+  if (tableName === 'changeLog' || typeof key !== 'number') return
+  const events = recordings.get(rootTransaction(transaction))
+  if (!events) return
+  const id = `${tableName}:${key}`
+  if (!events.has(id)) events.set(id, { table: tableName, key, ...(before ? { before: structuredClone(before) } : {}) })
 }
 
 let lastGeneratedRecordId = 0
@@ -129,6 +153,14 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
     const table = db.table<SyncedRecord>(tableName)
 
     table.hook('creating', (primaryKey, record, transaction) => {
+      // Undoing a delete puts the record back exactly as it was, uid included.
+      if (record.__keepSyncMeta === true) {
+        delete record.__keepSyncMeta
+        record.updatedAt = new Date().toISOString()
+        recordEvent(transaction, tableName, primaryKey)
+        notifyLocalSyncedChange()
+        return undefined
+      }
       if (isUntrackedWrite(transaction)) {
         // Keep what the import brought; only fill in what an older payload or backup lacks.
         if (typeof record.uid !== 'string' || !record.uid) record.uid = createSyncUid()
@@ -140,7 +172,9 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
       record.updatedAt = new Date().toISOString()
       notifyLocalSyncedChange()
       // Dexie uses the id this returns for an add() that left the id to auto-increment.
-      return primaryKey == null ? createSyncRecordId() : undefined
+      const generatedId = primaryKey == null ? createSyncRecordId() : undefined
+      recordEvent(transaction, tableName, primaryKey ?? generatedId)
+      return generatedId
     })
 
     table.hook('updating', (modifications, _primaryKey, existing, transaction) => {
@@ -154,7 +188,10 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
         && keyPath !== 'updatedAt'
         && JSON.stringify(Dexie.getByKeyPath(existing, keyPath)) !== JSON.stringify(value)
       ))
-      if (isEdited) notifyLocalSyncedChange()
+      if (isEdited) {
+        notifyLocalSyncedChange()
+        recordEvent(transaction, tableName, _primaryKey, existing)
+      }
       return {
         uid: typeof existing.uid === 'string' && existing.uid ? existing.uid : createSyncUid(),
         updatedAt: isEdited || !existing.updatedAt ? new Date().toISOString() : existing.updatedAt,
@@ -165,6 +202,7 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
       if (isUntrackedWrite(transaction)) return
       if (typeof existing?.uid !== 'string' || !existing.uid) return
       notifyLocalSyncedChange()
+      recordEvent(transaction, tableName, primaryKey, existing)
       queueTombstone(transaction, {
         uid: existing.uid,
         table: tableName,
@@ -178,6 +216,9 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
 /** v31 upgrade step: gives every existing synced record its `uid` and a best-guess `updatedAt`. */
 export const backfillSyncMeta = async (transaction: Transaction): Promise<void> => {
   for (const tableName of SYNCED_TABLE_NAMES) {
+    // A table added by a later schema version (the change log) doesn't exist yet when this runs
+    // for a device upgrading from before v31, and has nothing to backfill anyway.
+    if (!transaction.idbtrans.objectStoreNames.contains(tableName)) continue
     await transaction.table<SyncedRecord>(tableName).toCollection().modify((record) => {
       if (typeof record.uid !== 'string' || !record.uid) record.uid = createSyncUid()
       if (typeof record.updatedAt !== 'string' || !record.updatedAt) record.updatedAt = deriveSyncUpdatedAt(record)
