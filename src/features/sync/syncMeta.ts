@@ -29,6 +29,19 @@ const SYNC_IMPORT_FLAG = '__puhrrSyncImport'
 type FlaggedTransaction = Transaction & { [SYNC_IMPORT_FLAG]?: boolean }
 type SyncedRecord = SyncMeta & Record<string, unknown>
 
+const localChangeListeners = new Set<() => void>()
+
+/** Calls `listener` after every edit made on this device to a synced table (not for pulls,
+ * merges or backup restores). Returns the unsubscribe function. */
+export const subscribeToLocalSyncedChanges = (listener: () => void): (() => void) => {
+  localChangeListeners.add(listener)
+  return () => { localChangeListeners.delete(listener) }
+}
+
+const notifyLocalSyncedChange = () => {
+  for (const listener of localChangeListeners) listener()
+}
+
 let lastGeneratedRecordId = 0
 
 /**
@@ -125,6 +138,7 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
       // Always fresh: copies such as Duplicate patient spread the source record, uid included.
       record.uid = createSyncUid()
       record.updatedAt = new Date().toISOString()
+      notifyLocalSyncedChange()
       // Dexie uses the id this returns for an add() that left the id to auto-increment.
       return primaryKey == null ? createSyncRecordId() : undefined
     })
@@ -140,6 +154,7 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
         && keyPath !== 'updatedAt'
         && JSON.stringify(Dexie.getByKeyPath(existing, keyPath)) !== JSON.stringify(value)
       ))
+      if (isEdited) notifyLocalSyncedChange()
       return {
         uid: typeof existing.uid === 'string' && existing.uid ? existing.uid : createSyncUid(),
         updatedAt: isEdited || !existing.updatedAt ? new Date().toISOString() : existing.updatedAt,
@@ -149,6 +164,7 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
     table.hook('deleting', (primaryKey, existing, transaction) => {
       if (isUntrackedWrite(transaction)) return
       if (typeof existing?.uid !== 'string' || !existing.uid) return
+      notifyLocalSyncedChange()
       queueTombstone(transaction, {
         uid: existing.uid,
         table: tableName,
