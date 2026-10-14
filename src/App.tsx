@@ -161,6 +161,7 @@ import {
   resolveConflictWithVersion,
   saveSyncConfig,
   syncNow,
+  getLatestLocalChangeAt,
   type ConflictResult,
   type LocalSyncVersionMeta,
   type SyncConfig,
@@ -169,6 +170,7 @@ import {
   type SyncVersion,
 } from './features/sync/syncService'
 import { markSyncImportTransaction } from './features/sync/syncMeta'
+import { useAutoSync } from './features/sync/useAutoSync'
 import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, Images, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 const ManageTagsScreen = lazy(() =>
@@ -1325,35 +1327,9 @@ function App() {
     }
   }, [])
 
-  const latestLocalChangeAt = useMemo(() => {
-    let latestTimestamp = 0
-
-    for (const patient of patients ?? []) {
-      const parsed = Date.parse(patient.lastModified ?? '')
-      if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-        latestTimestamp = parsed
-      }
-    }
-
-    for (const dailyUpdate of allDailyUpdates ?? []) {
-      const parsed = Date.parse(dailyUpdate.lastUpdated)
-      if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-        latestTimestamp = parsed
-      }
-    }
-
-    // Only catches a master problem being created, not a later edit (rename/resolve/merge) — it
-    // carries no separate "last edited" timestamp of its own, same limitation this already accepts
-    // for report templates/custom views/custom actions.
-    for (const problem of allMasterProblems ?? []) {
-      const parsed = Date.parse(problem.createdAt)
-      if (Number.isFinite(parsed) && parsed > latestTimestamp) {
-        latestTimestamp = parsed
-      }
-    }
-
-    return latestTimestamp > 0 ? new Date(latestTimestamp).toISOString() : null
-  }, [allDailyUpdates, allMasterProblems, patients])
+  // Re-reads whenever any synced table changes, so this tracks edits and deletions too — not just
+  // newly created records — and stays current without waiting for a sync.
+  const latestLocalChangeAt = useLiveQuery(() => getLatestLocalChangeAt(), []) ?? null
 
   const hasLocalChangesSinceLastSync = useMemo(() => {
     const lastSyncedMs = syncConfig?.lastSyncedAt ? Date.parse(syncConfig.lastSyncedAt) : Number.NaN
@@ -1391,9 +1367,9 @@ function App() {
     }
 
     if (!syncConfig) return 'not-configured'
-    if (hasLocalChangesSinceLastSync && syncInsight?.remoteHasNewerData) return 'conflict'
-    if (hasLocalChangesSinceLastSync) return 'push-ready'
+    // Both sides changed is no longer a conflict: sync merges them, so it reads as "updates".
     if (syncInsight?.remoteHasNewerData) return 'updates-available'
+    if (hasLocalChangesSinceLastSync) return 'push-ready'
     return 'synced'
   }, [hasLocalChangesSinceLastSync, syncConfig, syncInsight?.remoteHasNewerData, syncStatus])
 
@@ -5868,6 +5844,20 @@ function App() {
     }
   }, [applySyncResult, isSyncBusy, refreshSyncInsight, syncConfig])
 
+  useAutoSync({
+    config: syncConfig,
+    // A patient being open means a form may hold unsaved text, so room changes wait until it's closed.
+    canApplyRemoteChanges: selectedPatientId === null,
+    onSynced: (result) => {
+      setSyncConfig(result.config)
+      if (result.operation === 'pull' || result.operation === 'merge') setNotice('Updated with changes from your other devices.')
+      void refreshSyncInsight(result.config)
+    },
+    onDeferred: (config) => {
+      void refreshSyncInsight(config)
+    },
+  })
+
   const handleSyncSetupSubmit = useCallback(async ({ roomCode, deviceName, username }: { roomCode: string; deviceName: SetupDeviceName; username: SetupUsername }) => {
     const nextConfig = await buildSyncConfig(roomCode, deviceName, username, getDefaultSyncEndpoint())
     saveSyncConfig(nextConfig)
@@ -9651,7 +9641,8 @@ function App() {
                     ['Run first sync', 'After setup, PUHRR runs an initial sync. Wait for the success state before closing the dialog.'],
                     ['Understand first sync choices', 'If a room already has data and this device has never synced, PUHRR asks you to pick Upload this device or Download room data first. It will not auto-overwrite.'],
                     ['Check sync status', 'Open Settings → Sync Status to confirm latest room upload time, which device uploaded it, and whether this device has local unsynced changes. Adding, editing, and deleting anything that syncs all count as unsynced changes.'],
-                    ['Sync during rounds', 'Tap Sync from the footer (phone) or header (desktop) whenever you finish key edits or before switching devices. Button states: Synced, ↑ Push ready, ↓ Updates available, ⚠ Conflict, or Syncing.'],
+                    ['Sync happens automatically', 'Once a device has finished its first sync, PUHRR pushes your edits about 5 seconds after you make them, and checks the room when you open the app, come back to it, or reconnect, and every minute while it’s on screen. A phone that’s locked or in the background pauses until you open PUHRR again. You can still tap Sync (footer on phone, header on desktop) any time. Button states: Synced, ↑ Push ready, ↓ Updates available, Syncing, or Error.'],
+                    ['Changes made elsewhere', 'Changes from your other devices are applied automatically. While you have a patient open, they wait so nothing changes under the form you’re typing in, and they’re applied as soon as you close the patient.'],
                     ['When both devices changed', 'PUHRR merges the two record by record instead of asking you to pick a side: new entries from both devices are kept, and when the same record was edited on both, the later edit wins. A deletion wins unless the record was edited after it was deleted. If the same day’s note (checklist, subjective, objective, plans) was edited on both devices, the later one wins for that day.'],
                     ['Restore an older version', 'Only the first sync with an existing room opens the version picker (upload this device or download room data). Choosing an older version restores it and uploads it as the room’s latest snapshot.'],
                     ['If sync cannot connect', 'PUHRR stops without uploading when room lookup or conflict checks fail. Check the connection and retry; a failed check is never treated as an empty room.'],

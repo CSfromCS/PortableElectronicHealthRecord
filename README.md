@@ -94,6 +94,7 @@ Each open patient has eight focused tabs:
 
 - **Backup / restore** — export all text data as JSON; import replaces text data while keeping current on-device photos.
 - **Encrypted sync (optional)** — link devices with a shared room key, your user name, and distinct device names, then sync encrypted patient, problems, vitals, medication, lab, and order data through the Cloudflare Worker proxy.
+- **Automatic sync** — after the first sync, edits are pushed about 5 seconds after you make them, and the room is checked on open, when the app returns to the foreground or comes back online, and every minute while it's visible. Room changes wait while a patient is open and apply when it's closed. Manual Sync still works.
 - **Sync status panel** — view latest room upload time/device and whether this device has local unsynced changes (new, edited, or deleted records).
 - **Review all photos** — open a global photo manager that marks each photo as linked/orphan and supports reassign, delete, and export.
 - **Clear discharged patients** — bulk-remove patients marked as discharged.
@@ -279,6 +280,7 @@ Then do a quick manual smoke test:
 - Every synced record carries a permanent cross-device `uid` and an `updatedAt` time, and deletions are kept as tombstones, so edits to existing records and deletions count as unsynced changes (not just newly created records).
 - If a room still contains a legacy snapshot from an older build, pull may include only `patients` + `dailyUpdates` until an updated device pushes a fresh snapshot.
 - First sync against an existing room now requires explicit user choice (upload local data or download room data first) to avoid silent overwrite.
+- Auto-sync needs the app open and visible: a phone that backgrounds or locks PUHRR pauses it until the app is opened again. Network failures are retried silently on the next trigger.
 - When the room has newer data and this device also changed, sync merges the two record by record (matched by each record's `uid`; the later `updatedAt` wins; a deletion wins unless the record was edited after it). New entries from both sides are kept. This replaces the old pick-a-side conflict dialog, which now appears only for the first sync with an existing room.
 - Merging is per record, not per field: if the same record (for example one day's checklist) is edited on both devices before syncing, the later edit wins for that whole record. Two devices that each created the same patient's note for the same day are folded into one.
 - A push is checked against the room just before uploading and sends `expectedUpdatedAt`; if the room changed in between, PUHRR re-reads and merges again (up to 3 times). The Worker can additionally reject a stale push using `expectedUpdatedAt`.

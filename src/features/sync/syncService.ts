@@ -132,7 +132,8 @@ export type SyncConfig = {
 
 type SyncResult = {
   config: SyncConfig
-  operation: 'push' | 'pull' | 'merge' | 'noop'
+  /** 'deferred': the room has changes this device wasn't allowed to apply right now. */
+  operation: 'push' | 'pull' | 'merge' | 'noop' | 'deferred'
   message: string
 }
 
@@ -220,7 +221,7 @@ const toIsoNow = (): string => new Date().toISOString()
 
 // Every synced record's updatedAt is bumped by the hooks in syncMeta.ts on any real edit, and
 // every deletion leaves a tombstone, so creates, edits and deletes all count as local changes.
-const getLatestLocalChangeAt = async (): Promise<string | null> => {
+export const getLatestLocalChangeAt = async (): Promise<string | null> => {
   const [recordsByTable, tombstones] = await Promise.all([
     Promise.all(SYNCED_TABLE_NAMES.map((tableName) => db.table<SyncMeta>(tableName).toArray())),
     db.syncTombstones.toArray(),
@@ -1016,7 +1017,29 @@ export const buildSyncConfig = async (
   }
 }
 
-export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult> => {
+export type SyncNowOptions = {
+  /** When false, a sync that would have to change this device's data (pulling or merging the
+   * room's changes) is skipped with a 'deferred' result instead. Background sync uses this while a
+   * patient is open, so data doesn't change under the form being edited. Defaults to true. */
+  allowLocalChanges?: boolean
+}
+
+// Syncs never overlap: the button, the background timer and a retry could otherwise start two at
+// once, each reading the room and writing local data at the same time.
+let syncQueue: Promise<unknown> = Promise.resolve()
+const runExclusive = <T>(task: () => Promise<T>): Promise<T> => {
+  const result = syncQueue.then(task, task)
+  syncQueue = result.catch(() => undefined)
+  return result
+}
+
+const syncNowUnlocked = async (currentConfig: SyncConfig, options: SyncNowOptions): Promise<SyncNowResult> => {
+  const allowLocalChanges = options.allowLocalChanges ?? true
+  const deferred = (config: SyncConfig): SyncResult => ({
+    config,
+    operation: 'deferred',
+    message: 'The room has updates that will be applied once you leave the open patient.',
+  })
   const config = {
     ...currentConfig,
     syncEndpoint: normalizeSyncEndpoint(currentConfig.syncEndpoint),
@@ -1063,7 +1086,7 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
     : Number.isFinite(remoteUpdatedMs)
 
   if (remoteIsNewSinceLastSync) {
-    return mergeWithRoom(linkedConfig)
+    return allowLocalChanges ? mergeWithRoom(linkedConfig) : deferred(linkedConfig)
   }
 
   if (!hasLocalChangesSinceLastSync) {
@@ -1078,15 +1101,20 @@ export const syncNow = async (currentConfig: SyncConfig): Promise<SyncNowResult>
     return await pushSnapshot(linkedConfig, remoteCheck.updatedAt)
   } catch (error) {
     if (!(error instanceof RoomChangedError)) throw error
-    return mergeWithRoom(linkedConfig)
+    return allowLocalChanges ? mergeWithRoom(linkedConfig) : deferred(linkedConfig)
   }
 }
 
-export const resolveConflictKeepLocal = async (config: SyncConfig): Promise<SyncResult> => {
-  return pushSnapshot(config)
-}
+export const syncNow = (currentConfig: SyncConfig, options: SyncNowOptions = {}): Promise<SyncNowResult> =>
+  runExclusive(() => syncNowUnlocked(currentConfig, options))
 
-export const resolveConflictWithVersion = async (
+export const resolveConflictKeepLocal = (config: SyncConfig): Promise<SyncResult> =>
+  runExclusive(() => pushSnapshot(config))
+
+export const resolveConflictWithVersion = (config: SyncConfig, versionSha: string): Promise<SyncResult> =>
+  runExclusive(() => resolveConflictWithVersionUnlocked(config, versionSha))
+
+const resolveConflictWithVersionUnlocked = async (
   config: SyncConfig,
   versionSha: string,
 ): Promise<SyncResult> => {
