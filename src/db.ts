@@ -22,6 +22,7 @@ import {
   type GroupFieldId,
 } from './features/templates/templateEngine'
 import { buildDefaultCustomViews } from './features/filters/customViewDefaults'
+import { backfillSyncMeta, registerSyncMetaHooks } from './features/sync/syncMeta'
 import type {
   BlockJoinMode,
   BlockVariableConfig,
@@ -42,6 +43,7 @@ import type {
   PhotoAttachment,
   ReportTemplate,
   SimpleProblemItem,
+  SyncTombstone,
   TagAutomationRole,
   TagDefinition,
   TagEvent,
@@ -71,6 +73,7 @@ const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
   customViews: EntityTable<CustomView, 'id'>
   masterProblems: EntityTable<MasterProblem, 'id'>
   simpleProblemItems: EntityTable<SimpleProblemItem, 'id'>
+  syncTombstones: EntityTable<SyncTombstone, 'uid'>
 }
 
 db.version(1).stores({
@@ -1583,5 +1586,35 @@ db.version(30).stores({
     if (changed) await reportTemplateTable.update(template.id, { variables: next })
   }
 })
+
+db.version(31).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+  simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
+  syncTombstones: 'uid, table, deletedAt',
+}).upgrade(async (tx) => {
+  // Medmin integration, phase 1: every synced record gets a permanent cross-device `uid` and an
+  // `updatedAt` (from its own lastModified/lastUpdated/createdAt where it has one), so sync can
+  // tell edits apart from untouched records. From here on the hooks below keep both current.
+  await backfillSyncMeta(tx)
+})
+
+registerSyncMetaHooks(db)
 
 export { db }

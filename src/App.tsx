@@ -168,6 +168,7 @@ import {
   type SyncNowResult,
   type SyncVersion,
 } from './features/sync/syncService'
+import { markSyncImportTransaction } from './features/sync/syncMeta'
 import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, Images, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 const ManageTagsScreen = lazy(() =>
@@ -5981,6 +5982,9 @@ function App() {
         'rw',
         [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates, db.dateTimeFormats, db.customViews],
         async () => {
+        // A restore, not a batch of edits: keep the backup's record uids and don't log every
+        // cleared record as a deletion to sync.
+        markSyncImportTransaction()
         await db.labs.clear()
         await db.medications.clear()
         await db.orders.clear()
@@ -9646,12 +9650,12 @@ function App() {
                     ['Edit sync identity', 'Open Settings → Edit sync settings any time to change this device\'s room code, your name, or device name.'],
                     ['Run first sync', 'After setup, PUHRR runs an initial sync. Wait for the success state before closing the dialog.'],
                     ['Understand first sync choices', 'If a room already has data and this device has never synced, PUHRR asks you to pick Upload this device or Download room data first. It will not auto-overwrite.'],
-                    ['Check sync status', 'Open Settings → Sync Status to confirm latest room upload time, which device uploaded it, and whether this device has local unsynced changes.'],
+                    ['Check sync status', 'Open Settings → Sync Status to confirm latest room upload time, which device uploaded it, and whether this device has local unsynced changes. Adding, editing, and deleting anything that syncs all count as unsynced changes.'],
                     ['Sync during rounds', 'Tap Sync from the footer (phone) or header (desktop) whenever you finish key edits or before switching devices. Button states: Synced, ↑ Push ready, ↓ Updates available, ⚠ Conflict, or Syncing.'],
                     ['If conflict appears', 'A version picker opens whenever remote data is newer and this device also changed since the last sync. Choose a room version or keep local. Choosing an older version restores it and uploads it as the room’s latest snapshot.'],
                     ['If sync cannot connect', 'PUHRR stops without uploading when room lookup or conflict checks fail. Check the connection and retry; a failed check is never treated as an empty room.'],
-                    ['Keep backup safety', 'Sync includes profile, Problems, vitals, medications, labs, orders, tags, report templates, custom views, and custom actions. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
-                    ['Keep app versions aligned', 'The Problems data format requires the updated app on every linked device. If sync reports an unsupported room version, update PUHRR on both devices before trying again.'],
+                    ['Keep backup safety', 'Sync includes profile, Problems, vitals, medications, labs, orders, tags, report templates, date/time formats, custom views, and custom actions. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
+                    ['Keep app versions aligned', 'Every linked device needs the same PUHRR version. If sync reports an unsupported room version, reload PUHRR on each device to update it, then try again.'],
                   ] as [string, string][]).map(([title, detail], i) => (
                     <li key={i} className='flex gap-2.5 items-start'>
                       <span className='shrink-0 w-5 h-5 rounded-full bg-action-primary/15 text-action-primary text-[10px] font-bold flex items-center justify-center mt-0.5'>{i + 1}</span>

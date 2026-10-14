@@ -79,6 +79,8 @@ export const normalizeDailyUpdate = (value: unknown): DailyUpdate => {
 
   return {
     ...(typeof candidate.id === 'number' ? { id: candidate.id } : {}),
+    ...(typeof candidate.uid === 'string' ? { uid: candidate.uid } : {}),
+    ...(typeof candidate.updatedAt === 'string' ? { updatedAt: candidate.updatedAt } : {}),
     patientId,
     date,
     problems: normalizeDailyProblemNotes(candidate.problems),

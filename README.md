@@ -94,7 +94,7 @@ Each open patient has eight focused tabs:
 
 - **Backup / restore** — export all text data as JSON; import replaces text data while keeping current on-device photos.
 - **Encrypted sync (optional)** — link devices with a shared room key, your user name, and distinct device names, then sync encrypted patient, problems, vitals, medication, lab, and order data through the Cloudflare Worker proxy.
-- **Sync status panel** — view latest room upload time/device and whether this device has local unsynced changes.
+- **Sync status panel** — view latest room upload time/device and whether this device has local unsynced changes (new, edited, or deleted records).
 - **Review all photos** — open a global photo manager that marks each photo as linked/orphan and supports reassign, delete, and export.
 - **Clear discharged patients** — bulk-remove patients marked as discharged.
 - **Show onboarding** — reopen the Welcome modal and retry the install prompt at any time.
@@ -275,7 +275,8 @@ Then do a quick manual smoke test:
 
 - JSON backup/restore covers **text data only** — photo attachments are not included.
 - Import keeps currently stored photos; it does not recreate photos from the backup file.
-- Sync covers `patients`, `dailyUpdates`, `vitals`, `medications`, `labs`, and `orders`.
+- Sync covers patients, Problems, vitals, medications, labs, orders, tags, report templates, date/time formats, custom views, and custom actions — not photos.
+- Every synced record carries a permanent cross-device `uid` and an `updatedAt` time, and deletions are kept as tombstones, so edits to existing records and deletions count as unsynced changes (not just newly created records).
 - If a room still contains a legacy snapshot from an older build, pull may include only `patients` + `dailyUpdates` until an updated device pushes a fresh snapshot.
 - First sync against an existing room now requires explicit user choice (upload local data or download room data first) to avoid silent overwrite.
 - Conflict protection triggers whenever remote data is newer and local data also changed since last sync (including same-tag/device-name edge cases).
