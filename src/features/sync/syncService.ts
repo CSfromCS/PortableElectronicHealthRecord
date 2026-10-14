@@ -1149,4 +1149,27 @@ const resolveConflictWithVersionUnlocked = async (
   }
 }
 
+/**
+ * Read-only access to a room, for a process that only ever follows it (the Medmin bridge). It never
+ * pushes: joining downloads the room over whatever this process holds, and refreshing re-downloads
+ * only when the room has changed. Unlike `syncNow` it can't create a room, so a wrong room code
+ * fails instead of uploading a new empty one.
+ */
+export const joinRoomReadOnly = (currentConfig: SyncConfig): Promise<SyncResult> => runExclusive(async () => {
+  const config = { ...currentConfig, syncEndpoint: normalizeSyncEndpoint(currentConfig.syncEndpoint) }
+  const gistId = await findRoomGist(config)
+  if (!gistId) throw new Error('No sync room exists for this room code.')
+  const linkedConfig = { ...config, gistId }
+  saveSyncConfig(linkedConfig)
+  return resolveConflictWithVersionUnlocked(linkedConfig, 'latest')
+})
+
+export const refreshRoomReadOnly = (config: SyncConfig): Promise<{ config: SyncConfig; changed: boolean }> => runExclusive(async () => {
+  const remoteCheck = await checkRemote(config)
+  if (!remoteCheck) throw new Error('Linked sync room could not be checked.')
+  if (config.lastSyncedAt === remoteCheck.updatedAt) return { config, changed: false }
+  const result = await resolveConflictWithVersionUnlocked(config, 'latest')
+  return { config: result.config, changed: true }
+})
+
 export const getDefaultSyncEndpoint = (): string => DEFAULT_SYNC_ENDPOINT
