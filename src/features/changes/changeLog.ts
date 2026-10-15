@@ -22,6 +22,23 @@ export type ChangeContext = {
 
 type AnyRecord = Record<string, unknown> & { uid?: string; updatedAt?: string }
 
+const stableJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, nested) =>
+    nested && typeof nested === 'object' && !Array.isArray(nested)
+      ? Object.fromEntries(Object.entries(nested as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : nested)
+
+/**
+ * Whether a record still looks the way a change left it. The stamp (`updatedAt`) is left out: putting a
+ * record back stamps it afresh so the revert syncs, which would otherwise make undoing two changes in a row
+ * (newest first) look like a conflict on the second.
+ */
+const sameContent = (current: AnyRecord, expected: AnyRecord | undefined): boolean => {
+  if (!expected) return false
+  const withoutStamp = (record: AnyRecord) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'updatedAt'))
+  return stableJson(withoutStamp(current)) === stableJson(withoutStamp(expected))
+}
+
 const syncedScope = () => [...SYNCED_TABLE_NAMES.map((tableName) => db.table(tableName)), db.syncTombstones]
 
 /**
@@ -81,7 +98,7 @@ export const undoChange = async (entryId: number, options: { force?: boolean } =
       const current = await db.table<AnyRecord>(op.table).get(op.recordId)
       if (op.kind === 'delete') {
         if (current) conflicts.push(`${describeOp(op)} was created again after the delete`)
-      } else if (current && current.updatedAt !== (op.after as AnyRecord | undefined)?.updatedAt) {
+      } else if (current && !sameContent(current, op.after as AnyRecord | undefined)) {
         conflicts.push(`${describeOp(op)} was changed after this`)
       }
     }
