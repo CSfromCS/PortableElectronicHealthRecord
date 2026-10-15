@@ -166,6 +166,7 @@ export class PuhrrOAuthProvider implements OAuthServerProvider {
   }
 
   private renderSignIn(res: Response, id: string, client: OAuthClientInformationFull, params: AuthorizationParams, error?: string): void {
+    const nonce = randomBytes(16).toString('base64url')
     const name = escapeHtml(client.client_name || 'An application')
     const returnTo = escapeHtml(new URL(params.redirectUri).host)
     const writeOption = this.options.allowWrites
@@ -181,44 +182,72 @@ button{margin-top:1rem;padding:.7rem 1.2rem;font-size:1rem;width:100%} .err{colo
 </style></head><body>
 <h1>Sign in to PUHRR</h1>
 <p><strong>${name}</strong> wants to use your PUHRR data. After you sign in it returns to <strong>${returnTo}</strong>.</p>
-${error ? `<p class="err">${escapeHtml(error)}</p>` : ''}
-<form method="post" action="/oauth/confirm" autocomplete="off">
+<p class="err" id="err"${error ? '' : ' hidden'}>${error ? escapeHtml(error) : ''}</p>
+<form id="signin" method="post" action="/oauth/confirm" autocomplete="off">
 <input type="hidden" name="id" value="${escapeHtml(id)}">
 <label for="passphrase">Passphrase</label>
 <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" autofocus required>
 <p>What may it do?</p>
 <label><input type="radio" name="scope" value="read" checked> Read only</label>
 ${writeOption}
-<button type="submit">Allow</button>
+<button type="submit" id="go">Allow</button>
 </form>
 <p class="small">If you did not start this from your own app, close this page.</p>
+<script nonce="${nonce}">
+// Submit in the background and go straight back to the app. A browser that interrupts a form submission with a
+// warning page would otherwise lose the result; this still works as a plain form if scripts are off.
+(function () {
+  var form = document.getElementById('signin'), button = document.getElementById('go'), err = document.getElementById('err');
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    button.disabled = true; button.textContent = 'Checking...';
+    fetch('/oauth/confirm', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: new URLSearchParams(new FormData(form)) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.redirect) { button.textContent = 'Returning to the app...'; window.location.assign(j.redirect); return; }
+        err.textContent = (j && j.error) || 'Something went wrong.'; err.hidden = false;
+        button.disabled = false; button.textContent = 'Allow';
+      })
+      .catch(function () { err.textContent = 'Could not reach the server.'; err.hidden = false; button.disabled = false; button.textContent = 'Allow'; });
+  });
+})();
+</script>
 </body></html>`
     res.status(200)
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
     res.setHeader('Cache-Control', 'no-store')
-    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
+    res.setHeader('Content-Security-Policy', `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'`)
     res.setHeader('X-Frame-Options', 'DENY')
     res.setHeader('Referrer-Policy', 'no-referrer')
     res.send(page)
   }
 
-  /** The sign-in form posts here. */
+  /** The sign-in form posts here (in the background, expecting JSON; or as a plain form, expecting a redirect). */
   readonly confirmHandler: RequestHandler = async (req: Request, res: Response) => {
+    const wantsJson = (req.headers.accept ?? '').includes('application/json')
     const body = (req.body ?? {}) as Record<string, unknown>
     const id = typeof body.id === 'string' ? body.id : ''
     const passphrase = typeof body.passphrase === 'string' ? body.passphrase : ''
     const wantsWrite = body.scope === 'write' && this.options.allowWrites
+    res.setHeader('Cache-Control', 'no-store')
+    res.setHeader('Referrer-Policy', 'no-referrer')
+
+    const fail = (status: number, message: string): void => {
+      if (wantsJson) res.status(status).json({ error: message })
+      else res.status(status).type('text/plain').send(message)
+    }
+
     const entry = this.pending.get(id)
     if (!entry || entry.expiresAt <= Date.now()) {
       this.pending.delete(id)
-      res.status(400).setHeader('Cache-Control', 'no-store').type('text/plain').send('This sign-in request expired. Start again from the app.')
+      fail(400, 'This sign-in request expired. Start again from the app.')
       return
     }
 
     const recent = this.failures.filter((t) => Date.now() - t < LOCKOUT_MS)
     this.failures = recent
     if (recent.length >= MAX_FAILURES) {
-      res.status(429).setHeader('Cache-Control', 'no-store').type('text/plain').send('Too many wrong passphrases. Try again in 15 minutes.')
+      fail(429, 'Too many wrong passphrases. Try again in 15 minutes.')
       return
     }
 
@@ -226,12 +255,14 @@ ${writeOption}
     if (!ok) {
       this.failures.push(Date.now())
       await new Promise((resolve) => setTimeout(resolve, 1000))
-      this.renderSignIn(res, id, entry.client, entry.params, 'That passphrase is not right.')
+      if (wantsJson) res.status(401).json({ error: 'That passphrase is not right.' })
+      else this.renderSignIn(res, id, entry.client, entry.params, 'That passphrase is not right.')
       return
     }
 
+    // The request stays usable until it expires, so pressing the button again (or going back and forward) works.
+    // Each success issues a fresh single-use code.
     this.failures = []
-    this.pending.delete(id)
     const scopes = wantsWrite ? [SCOPE_READ, SCOPE_WRITE] : [SCOPE_READ]
     const code = newSecret('pac')
     this.codes.set(code, {
@@ -244,9 +275,8 @@ ${writeOption}
     const target = new URL(entry.params.redirectUri)
     target.searchParams.set('code', code)
     if (entry.params.state) target.searchParams.set('state', entry.params.state)
-    res.setHeader('Cache-Control', 'no-store')
-    res.setHeader('Referrer-Policy', 'no-referrer')
-    res.redirect(303, target.toString())
+    if (wantsJson) res.status(200).json({ redirect: target.toString() })
+    else res.redirect(303, target.toString())
   }
 
   // -- tokens --
