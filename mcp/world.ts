@@ -12,6 +12,7 @@ import {
   indexMasterProblemsById,
 } from '@/features/reporting/templateReport'
 import type {
+  CustomAction,
   CustomView,
   DailyUpdate,
   LabEntry,
@@ -34,6 +35,7 @@ export type World = {
   tagsById: Map<number, TagDefinition>
   tagEvents: TagEvent[]
   views: CustomView[]
+  customActions: CustomAction[]
   templates: ReportTemplate[]
   masterProblems: MasterProblem[]
   vitalsByPatient: Map<number, VitalEntry[]>
@@ -47,7 +49,7 @@ export type World = {
 
 export const loadWorld = async (): Promise<World> => {
   const [
-    patients, tagGroups, tagDefinitions, tagEvents, views, templates, dateTimeFormats,
+    patients, tagGroups, tagDefinitions, tagEvents, views, customActions, templates, dateTimeFormats,
     masterProblems, vitals, labs, orders, medications, dailyUpdates,
   ] = await Promise.all([
     db.patients.toArray(),
@@ -55,6 +57,7 @@ export const loadWorld = async (): Promise<World> => {
     db.tagDefinitions.toArray(),
     db.tagEvents.toArray(),
     db.customViews.toArray(),
+    db.customActions.toArray(),
     db.reportTemplates.toArray(),
     db.dateTimeFormats.toArray(),
     db.masterProblems.toArray(),
@@ -78,6 +81,7 @@ export const loadWorld = async (): Promise<World> => {
     tagsById,
     tagEvents,
     views: [...views].sort((a, b) => a.sortOrder - b.sortOrder),
+    customActions: [...customActions].sort((a, b) => a.sortOrder - b.sortOrder),
     templates: [...templates].sort((a, b) => a.sortOrder - b.sortOrder),
     masterProblems,
     vitalsByPatient,

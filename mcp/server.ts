@@ -133,6 +133,32 @@ export const createPuhrrServer = (room: RoomFollower): McpServer => {
     },
   }, ({ date, ...selection }) => run(async () => json(describeChecklist(await room.getWorld(), date, selection as PatientSelection))))
 
+  server.registerTool('list_custom_actions', {
+    description: "The user's custom actions (the buttons in PUHRR, such as Start Admission Papers): what each adds to the checklist, which tags it needs or changes, and whether it is a button (manual) or fires by itself when a tag is added (automatic). Use run_custom_action to press a manual one.",
+    inputSchema: {},
+  }, () => run(async () => {
+    const world = await room.getWorld()
+    const names = (ids: number[]) => ids.map((id) => world.tagsById.get(id)?.name ?? `#${id}`)
+    const effects = (list: Array<{ tagId: number; action: 'add' | 'remove' }>) => list.map((effect) => `${effect.action} ${names([effect.tagId])[0]}`)
+    return json(world.customActions.map((action) => ({
+      name: action.name,
+      id: action.id,
+      enabled: !action.disabled,
+      for: action.scope === 'patient' ? 'one patient (room + last name)' : 'General checklist (no patient)',
+      trigger: action.triggerType === 'automatic' ? `automatic: when the tag ${names(action.triggerTagId !== undefined ? [action.triggerTagId] : [])[0] ?? '?'} is added` : 'manual button',
+      alwaysAdds: action.checklistItems,
+      alwaysTagEffects: effects(action.tagEffects),
+      conditions: action.conditions.map((condition) => ({
+        needsTags: names(condition.requiredTagIds),
+        ...(condition.daysOfWeek?.length ? { daysOfWeek: condition.daysOfWeek } : {}),
+        ...(condition.daysOfMonth?.length ? { daysOfMonth: condition.daysOfMonth } : {}),
+        adds: condition.checklistItems,
+        tagEffects: effects(condition.tagEffects),
+      })),
+      ...(action.templateRunTemplateId !== undefined ? { rendersTemplate: world.templates.find((template) => template.id === action.templateRunTemplateId)?.name ?? `#${action.templateRunTemplateId}` } : {}),
+    })))
+  }))
+
   server.registerTool('list_views', {
     description: 'Saved views (named filter + sort combinations) the user made in PUHRR.',
     inputSchema: {},

@@ -21,7 +21,7 @@ import {
 } from '@/features/templates/templateEngine'
 import { toLocalISODate, toLocalTime } from '@/lib/dateTime'
 import { formatFullName, joinNonBlank } from '@/lib/patientIdentity'
-import type { CustomView, Patient, ReportTemplate, TagDefinition } from '@/types'
+import type { CustomAction, CustomView, Patient, ReportTemplate, TagDefinition } from '@/types'
 import type { World } from './world'
 
 /** A problem with the request that the caller can fix — shown to the caller as the tool's answer, so
@@ -424,4 +424,22 @@ export const renderReport = (world: World, template: ReportTemplate, selection: 
   }
   const text = generateTemplateOutput(template, patients, buildTemplateRenderContext(world.renderData))
   return { text, patients: patients.map((patient) => patientIdentifier(patient)) }
+}
+
+/** A custom action by exact name (any case) or id. Never guesses: a near miss answers with the closest names. */
+export const resolveCustomAction = (world: World, ref: { actionId?: number; name?: string }): CustomAction => {
+  if (ref.actionId !== undefined) {
+    const found = world.customActions.find((action) => action.id === ref.actionId)
+    if (!found) throw new ToolError(`No custom action has id ${ref.actionId}.`)
+    return found
+  }
+  if (!ref.name) throw new ToolError('Say which custom action: its exact name or an actionId. list_custom_actions shows them.')
+  const wanted = lower(ref.name)
+  const exact = world.customActions.filter((action) => lower(action.name) === wanted)
+  if (exact.length === 1) return exact[0]
+  if (exact.length > 1) throw new ToolError(`More than one custom action is named "${ref.name}" (ids ${exact.map((action) => action.id).join(', ')}).`)
+  const close = world.customActions.filter((action) => lower(action.name).includes(wanted) || wanted.includes(lower(action.name)))
+  throw new ToolError(`No custom action is named exactly "${ref.name}". ${close.length > 0
+    ? `Closest: ${close.map((action) => `"${action.name}"`).join('; ')}. Ask the user which one they mean.`
+    : `Custom actions: ${world.customActions.map((action) => `"${action.name}"`).join(', ') || '(none)'}.`}`)
 }

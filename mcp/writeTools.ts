@@ -23,6 +23,7 @@ import {
   editProblem,
   moveChecklistItem,
   planDelete,
+  runCustomAction,
   reorderProblems,
   resolvePatientForWrite,
   setChecklistItemDone,
@@ -41,7 +42,7 @@ import {
   updateVitals,
 } from './mutations'
 import { describeOps } from './describeChanges'
-import { ToolError, patientIdentifier } from './queries'
+import { ToolError, patientIdentifier, resolveCustomAction } from './queries'
 import type { RoomFollower } from './room'
 import type { World } from './world'
 
@@ -76,6 +77,7 @@ const act = (room: RoomFollower, tool: string, handler: (world: World) => Promis
   return json({
     done: entryId !== null,
     summary: result.summary,
+    ...(result.report ? { report: result.report } : {}),
     ...(entryId !== null ? { ...describeOps(ops), changeId: entryId, undo: `undo_change with changeId ${entryId}` } : { note: 'Nothing needed to change.' }),
     storedInRoom: outcome.stored,
     ...(outcome.warning ? { warning: outcome.warning } : {}),
@@ -191,6 +193,24 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
     description: 'Add or remove existing tags on a patient (not ward or service tags, and not tags that discharge a patient). Adding a tag runs the same automatic custom actions PUHRR runs. A tag name that does not match exactly is refused with the closest existing ones; never create a tag just to make a name fit.',
     inputSchema: { ...patientShape, add: z.array(z.string()).optional(), remove: z.array(z.string()).optional() },
   }, ({ add, remove, ...ref }) => act(room, 'set_tags', (world) => setTags(world, resolvePatientForWrite(world, toRef(ref)), { add, remove })))
+
+  server.registerTool('run_custom_action', {
+    description: "Press one of the user's manual custom action buttons (e.g. Start Admission Papers) exactly as PUHRR does: it adds that action's checklist items for the patient (or the General checklist) and applies its tag effects; items already listed are skipped. Patient actions need room AND last name; General actions take none. If no condition matches the patient it does nothing and says which tags are missing: tell the user and add a tag only if they say so. A General action with a template also returns its rendered report: pass `report.text` on exactly as returned. Find names with list_custom_actions.",
+    inputSchema: {
+      name: z.string().optional().describe('Exact action name.'),
+      actionId: z.number().int().optional(),
+      room: z.string().optional().describe('With lastName, for patient actions.'),
+      lastName: z.string().optional(),
+      patientId: z.number().int().optional().describe('Only to settle two patients who share a room and last name.'),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Checklist date, YYYY-MM-DD; default today.'),
+    },
+  }, ({ name, actionId, room: r, lastName, patientId, date }) => act(room, 'run_custom_action', (world) => {
+    const action = resolveCustomAction(world, { name, actionId })
+    const patient = r !== undefined || lastName !== undefined || patientId !== undefined
+      ? resolvePatientForWrite(world, toRef({ room: r ?? '', lastName: lastName ?? '', patientId }))
+      : null
+    return runCustomAction(world, { action, patient, date })
+  }))
 
   server.registerTool('create_tag', {
     description: 'Create a new tag. Only after the user has said they want a NEW tag with this exact name, because the usual cause of a near-miss is that the tag already exists under another spelling. Similar existing tags block this unless the user confirmed none of them is meant.',
