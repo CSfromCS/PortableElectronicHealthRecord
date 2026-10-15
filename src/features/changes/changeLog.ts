@@ -128,7 +128,8 @@ export const listChanges = async (limit = 20): Promise<ChangeLogEntry[]> =>
   db.changeLog.orderBy('at').reverse().limit(limit).toArray()
 
 /** Drops entries older than the retention window, and shrinks any entry still holding whole
- * before/after records (from before the log kept only changed fields) down to the fields that changed. */
+ * before/after records (from before the log kept only changed fields) down to the fields that changed.
+ * Returns how many entries it dropped or shrank, so a caller that can push knows whether to. */
 export const pruneChangeLog = async (now = new Date()): Promise<number> => {
   const cutoff = new Date(now.getTime() - CHANGE_LOG_RETENTION_DAYS * 86_400_000).toISOString()
   const stale = await db.changeLog.where('at').below(cutoff).primaryKeys()
@@ -141,5 +142,5 @@ export const pruneChangeLog = async (now = new Date()): Promise<number> => {
     const moreOps = (entry.moreOps ?? 0) + (entry.ops.length - kept.length)
     await db.changeLog.update(entry.id, { ops: kept.map(compactOp), ...(moreOps > 0 ? { moreOps } : {}) })
   }
-  return stale.length
+  return stale.length + legacy.length
 }
