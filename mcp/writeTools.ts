@@ -57,7 +57,7 @@ const run = async (task: () => Promise<TextResult>): Promise<TextResult> => {
   }
 }
 
-const SOURCE = 'medmin'
+const SOURCE = 'mcp'
 
 /**
  * Makes one change and reports it: on the freshest copy of the room, recorded in the change log

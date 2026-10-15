@@ -24,7 +24,7 @@ import { formatFullName, joinNonBlank } from '@/lib/patientIdentity'
 import type { CustomView, Patient, ReportTemplate, TagDefinition } from '@/types'
 import type { World } from './world'
 
-/** A problem with the request that the caller can fix — shown to Medmin as the tool's answer, so
+/** A problem with the request that the caller can fix — shown to the caller as the tool's answer, so
  * the message says exactly what to ask the user. */
 export class ToolError extends Error {}
 

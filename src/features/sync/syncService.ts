@@ -32,9 +32,9 @@ const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
 // v4 adds per-record uid/updatedAt, date/time formats and deletion tombstones. A v3 snapshot (one
 // pushed before every device updated) is still readable — its records get their sync fields as
 // they're imported — while an app still on v3 refuses a v4 snapshot and asks to update.
-// v5 adds the change log (what Medmin changed, with what is needed to undo it). Older snapshots are
+// v5 adds the change log (what an MCP client changed, with what is needed to undo it). Older snapshots are
 // still readable; an app on v4 refuses a v5 snapshot and asks to update, so a device that cannot
-// show or undo Medmin's changes never takes part once Medmin is writing.
+// show or undo those changes never takes part once an MCP client is writing.
 const SYNC_DATA_VERSION = 5
 const OLDEST_READABLE_SYNC_DATA_VERSION = 3
 const DEFAULT_SYNC_ENDPOINT = 'https://puhr-sync.csfromcs.workers.dev'
@@ -995,7 +995,7 @@ const resolveConflictWithVersionUnlocked = async (
 }
 
 /**
- * Read-only access to a room, for a process that only ever follows it (the Medmin bridge). It never
+ * Read-only access to a room, for a process that only ever follows it (the MCP server). It never
  * pushes: joining downloads the room over whatever this process holds, and refreshing re-downloads
  * only when the room has changed. Unlike `syncNow` it can't create a room, so a wrong room code
  * fails instead of uploading a new empty one.
@@ -1021,7 +1021,7 @@ export const refreshRoomReadOnly = (config: SyncConfig): Promise<{ config: SyncC
  * Reconciles this process's data with the room right now: downloads the room, merges it with what's
  * here, and uploads the result if the room is missing anything. Unlike `syncNow` it doesn't decide
  * from timestamps whether there's anything to send, so a change made on a device with a slightly
- * wrong clock is still uploaded. The Medmin bridge calls it after each change it makes.
+ * wrong clock is still uploaded. The MCP server calls it after each change it makes.
  */
 export const syncWithRoom = (config: SyncConfig): Promise<SyncResult> => runExclusive(() => mergeWithRoom(config))
 

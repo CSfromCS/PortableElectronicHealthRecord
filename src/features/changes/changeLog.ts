@@ -5,7 +5,7 @@ import type { ChangeLogEntry, ChangeLogOp } from '@/types'
 export const CHANGE_LOG_RETENTION_DAYS = 30
 
 export type ChangeMeta = {
-  /** Who made the change, e.g. 'medmin'. */
+  /** Who made the change, e.g. 'mcp'. */
   source: string
   tool: string
   /** One plain sentence: what was done and to whom. `ChangeContext.setSummary` can replace it once

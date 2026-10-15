@@ -31,8 +31,8 @@ export const readRoomSettings = (env: NodeJS.ProcessEnv = process.env): RoomSett
   }
   return {
     roomCode,
-    deviceName: env.PUHRR_DEVICE_NAME?.trim() || 'Medmin',
-    username: env.PUHRR_USERNAME?.trim() || 'Medmin',
+    deviceName: env.PUHRR_DEVICE_NAME?.trim() || 'mcp',
+    username: env.PUHRR_USERNAME?.trim() || 'mcp',
     syncEndpoint: env.PUHRR_SYNC_ENDPOINT?.trim() || getDefaultSyncEndpoint(),
     allowWrites: /^(1|true|yes)$/i.test(env.PUHRR_ALLOW_WRITES?.trim() ?? ''),
   }

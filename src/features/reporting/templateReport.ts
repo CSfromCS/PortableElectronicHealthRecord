@@ -34,7 +34,7 @@ const groupByPatient = <T extends { patientId: number }>(entries: T[], sortList:
 }
 
 // Each of these is the display order the app's own tabs and reports use. They live here, not in
-// App.tsx, so anything that renders a report (the app, the Medmin bridge) orders entries the same.
+// App.tsx, so anything that renders a report (the app, the MCP server) orders entries the same.
 
 export const groupMedicationsByPatient = (medications: MedicationEntry[]): Map<number, MedicationEntry[]> =>
   groupByPatient(medications, (list) => {
@@ -123,7 +123,7 @@ export const buildTemplateRenderContext = (data: TemplateRenderData, now = new D
 /**
  * Renders `template` across `patientsForBody` (ignored for a Prints-Once template, which only ever
  * produces one block) and stitches on the header/footer. The one place a report is assembled —
- * the Reports tab, the "run a template" custom action and the Medmin bridge all call this, so a
+ * the Reports tab, the "run a template" custom action and the MCP server all call this, so a
  * report never differs by where it was generated.
  */
 export const generateTemplateOutput = (template: ReportTemplate, patientsForBody: Patient[], ctx: TemplateRenderContext): string => {

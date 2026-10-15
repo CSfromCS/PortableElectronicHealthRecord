@@ -181,7 +181,7 @@ import {
 import { markSyncImportTransaction } from './features/sync/syncMeta'
 import { runAutomaticCustomActionsForTagAddition as runSharedAutomaticCustomActionsForTagAddition } from './features/customActions/automaticActions'
 import { pruneChangeLog } from './features/changes/changeLog'
-import { RecentChangesCard } from './features/changes/RecentChangesCard'
+import { ChangeHistoryCard } from './features/changes/ChangeHistoryCard'
 import { computeAbgDerivedValues } from './features/labs/labDerived'
 import { useAutoSync } from './features/sync/useAutoSync'
 import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, Images, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
@@ -9052,7 +9052,7 @@ function App() {
               </CardTitle>
             </CardHeader>
             <CardContent className='px-4 pb-4 space-y-5'>
-              <RecentChangesCard />
+              <ChangeHistoryCard />
               <div className='space-y-2'>
                 <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Sync Status</p>
                 <div className='rounded-xl border border-clay/25 bg-warm-ivory px-3.5 py-3 space-y-2'>
@@ -9373,7 +9373,6 @@ function App() {
                     ['Restore an older version', 'Only the first sync with an existing room opens the version picker (upload this device or download room data). Choosing an older version restores it and uploads it as the room’s latest snapshot.'],
                     ['If sync cannot connect', 'PUHRR stops without uploading when room lookup or conflict checks fail. Check the connection and retry; a failed check is never treated as an empty room.'],
                     ['Keep backup safety', 'Sync includes profile, Problems, vitals, medications, labs, orders, tags, report templates, date/time formats, custom views, and custom actions. Photos are excluded. Continue exporting JSON backup regularly from Settings, especially before device/browser changes.'],
-                    ['See what Medmin changed', 'If you use the Medmin assistant, Settings → Recent Medmin changes lists everything it changed, newest first. Tap Undo on any of them to put it back, including a deleted patient or entry (kept for 30 days). If something was edited again after the change, you\u2019re warned before it\u2019s overwritten.'],
                     ['Keep app versions aligned', 'Every linked device needs the same PUHRR version. If sync reports an unsupported room version, reload PUHRR on each device to update it, then try again.'],
                   ] as [string, string][]).map(([title, detail], i) => (
                     <li key={i} className='flex gap-2.5 items-start'>

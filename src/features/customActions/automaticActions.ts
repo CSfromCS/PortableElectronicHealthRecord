@@ -19,7 +19,7 @@ export const appendChecklistItemsToPatientDate = async (patientId: number, date:
 /**
  * Fires every "Automatic on tag added" Custom Action whose trigger tag is in `addedTagIds`,
  * regardless of how the tag(s) got added. A patient matching none of an action's conditions is
- * simply left unaffected, and named in the returned messages. Shared by the app and the Medmin
+ * simply left unaffected, and named in the returned messages. Shared by the app and the MCP
  * bridge so tagging a patient does the same thing wherever it happens.
  */
 export const runAutomaticCustomActionsForTagAddition = async (options: {

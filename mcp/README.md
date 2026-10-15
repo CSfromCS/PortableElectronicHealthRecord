@@ -1,11 +1,11 @@
-# puhrr-mcp — PUHRR for Medmin
+# puhrr-mcp — an MCP server for PUHRR
 
-An [MCP](https://modelcontextprotocol.io) server that lets an AI agent (Medmin, running on Hermes)
-**read** the user's PUHRR data, generate reports from the user's own report templates, and — only
-when switched on — **change** PUHRR.
+An [MCP](https://modelcontextprotocol.io) server (stdio) that gives any MCP-compatible client access
+to your PUHRR data: **read** it, generate reports from your own report templates, and — only when
+switched on — **change** it.
 
 - **Read-only by default.** Set `PUHRR_ALLOW_WRITES=1` to add the write tools. Without it the write
-  tools do not exist, and the bridge has no way to upload anything.
+  tools do not exist, and the server has no way to upload anything.
 - **Same code as the app.** It runs PUHRR's own template engine, filter, sort, tag and checklist
   logic in Node, so a report generated here is character-for-character what the Reports tab makes,
   and a change made here is made the way the app would make it.
@@ -25,10 +25,10 @@ when switched on — **change** PUHRR.
 | `list_views` | Saved views |
 | `list_templates` | Each template's exact format spelled out, plus a sample of its output |
 | `preview_template` | A template on sample data |
-| `render_report` | A template with real patients — **send the result exactly as returned** |
+| `render_report` | A template with real patients — the text is final and should be used exactly as returned |
 
 A name that doesn't match exactly (a ward, tag, template, saved view) is never guessed: the tool
-answers with the closest existing ones so the agent can ask the user.
+answers with the closest existing ones so the caller can ask the user.
 
 ### Write tools (only with `PUHRR_ALLOW_WRITES=1`)
 
@@ -42,7 +42,7 @@ answers with the closest existing ones so the agent can ask the user.
 | Needs a yes first | `request_delete` (patient, vital, lab, medication, order, problem, view, template), `request_discharge`, then `confirm_action` |
 | Safety | `recent_changes`, `undo_change` |
 
-Not included: creating brand-new template variables (do that in PUHRR; Medmin can duplicate a
+Not included: creating brand-new template variables (do that in PUHRR; a client can duplicate a
 template and reword it), and photos (they don't sync yet).
 
 ### The guardrails
@@ -55,70 +55,65 @@ template and reword it), and photos (they don't sync yet).
   `create_tag`, which needs the user's approved name and is blocked while a similar one exists.
 - **Deleting and discharging are two steps.** `request_delete` / `request_discharge` change nothing
   and return a plain description plus a 10-minute code; `confirm_action` runs it. Checklist items
-  are the one exception (single step, but undoable). The agent is instructed to get the user's yes
+  are the one exception (single step, but undoable). The client is instructed to get the user's yes
   in between; the code makes a one-shot accident impossible but cannot prove a human said yes.
 - **Everything is logged and undoable.** Each change is recorded (what it was, to whom, and what
-  every record looked like before and after), synced to the user's devices, and shown in PUHRR under
-  Settings → Recent Medmin changes with an Undo button. Deleted patients and entries are recoverable
-  for 30 days. Undo refuses if the thing was edited again since, unless the user agrees to overwrite.
+  every record looked like before and after), synced to your devices, and shown in PUHRR under
+  Settings → Change history with an Undo button. Deleted patients and entries are recoverable for 30
+  days. Undo refuses if the thing was edited again since, unless the user agrees to overwrite.
 - **No silent loss.** A change is made on the freshest copy of the room and uploaded before the
   answer comes back. If the room can't be reached, the answer says the change is **not** stored,
   and it is sent with the next change.
 
-## Setting it up (Medmin can do this from chat)
+## Setting it up
 
-Requires Node 20 or newer and git on the VPS.
+Requires Node 20 or newer and git.
 
 1. **Get the code.**
    ```bash
-   git clone https://github.com/CSfromCS/PortableElectronicHealthRecord.git /opt/puhrr
-   cd /opt/puhrr && npm ci
+   git clone https://github.com/CSfromCS/PortableElectronicHealthRecord.git puhrr
+   cd puhrr && npm ci
    ```
    (`git pull && npm ci` later updates it.)
 
 2. **Store the room code in a private file** — the same room code PUHRR's sync uses. It unlocks all
-   patient data, so keep it out of chat history, notes and Medmin's memory:
-   ```bash
-   sudo install -d -m 700 /etc/puhrr
-   sudo install -m 600 /dev/null /etc/puhrr/room-code
-   # then put the room code in that file, and delete the message you sent it in
-   ```
-   Make the file readable only by the account Hermes runs as (`chown` it to that account).
+   of your patient data, so keep it out of chat history, notes and anything shared. Make the file
+   readable only by the account that runs the server.
 
 3. **Check it starts.**
    ```bash
-   cd /opt/puhrr && PUHRR_ROOM_CODE_FILE=/etc/puhrr/room-code npm run mcp
+   PUHRR_ROOM_CODE_FILE=/path/to/room-code npm run mcp
    ```
    It should print `puhrr-mcp ready (read-only), room xxxxx` to stderr and wait. Stop it with Ctrl+C.
    A wrong room code fails here with a clear message and creates nothing.
 
-4. **Register it with Hermes** in `~/.hermes/config.yaml`
-   ([Hermes MCP docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp)):
-   ```yaml
-   mcp_servers:
-     puhrr:
-       command: "node"
-       args:
-         - "/opt/puhrr/node_modules/tsx/dist/cli.mjs"
-         - "--tsconfig"
-         - "/opt/puhrr/mcp/tsconfig.json"
-         - "/opt/puhrr/mcp/puhrr-mcp.ts"
-       env:
-         PUHRR_ROOM_CODE_FILE: "/etc/puhrr/room-code"
-         PUHRR_TIMEZONE: "Asia/Manila"
-         LANG: "en_US.UTF-8"
-         # PUHRR_ALLOW_WRITES: "1"   # uncomment only when the user wants Medmin to make changes
+4. **Register it with your MCP client.** It is a stdio server. Most clients take an entry like this
+   (adjust the paths; the key names follow the common `mcpServers` convention):
+   ```json
+   {
+     "mcpServers": {
+       "puhrr": {
+         "command": "node",
+         "args": [
+           "/path/to/puhrr/node_modules/tsx/dist/cli.mjs",
+           "--tsconfig", "/path/to/puhrr/mcp/tsconfig.json",
+           "/path/to/puhrr/mcp/puhrr-mcp.ts"
+         ],
+         "env": {
+           "PUHRR_ROOM_CODE_FILE": "/path/to/room-code",
+           "PUHRR_TIMEZONE": "Asia/Manila"
+         }
+       }
+     }
+   }
    ```
    Use `node` directly, not `npm run`: npm prints a banner to stdout, which would corrupt the
-   protocol. Then restart the Hermes gateway so it picks up the new server.
+   protocol.
 
-5. **Try it:** ask Medmin for the sync status, then for a census.
-
-6. **Turning on changes (optional, later).** Update PUHRR on **every** device first (phone, MacBook)
-   so each can show and undo what Medmin does: an older version will say it needs updating. Then
-   add `PUHRR_ALLOW_WRITES: "1"` to the `env` block, restart the gateway, and try one small change
-   (add a vitals entry to a test patient), then check it appears on the phone and in
-   Settings → Recent Medmin changes.
+5. **Turning on changes (optional).** Update PUHRR on **every** device first so each can show and
+   undo changes: an older version will say it needs updating. Then add `"PUHRR_ALLOW_WRITES": "1"`
+   to `env`, restart the client, and try one small change on a test patient, then check it appears
+   on your devices and in Settings → Change history.
 
 ## Settings
 
@@ -126,19 +121,19 @@ Requires Node 20 or newer and git on the VPS.
 |---|---|---|
 | `PUHRR_ROOM_CODE_FILE` | — | File containing the room code (preferred) |
 | `PUHRR_ROOM_CODE` | — | The room code itself, if no file is used |
-| `PUHRR_TIMEZONE` | `Asia/Manila` | Timezone for "today" and Current Date/Time in reports. Set it to the hospital's, not the VPS's |
+| `PUHRR_TIMEZONE` | `Asia/Manila` | Timezone for "today" and Current Date/Time in reports. Set it to your own |
 | `PUHRR_ALLOW_WRITES` | off | `1` adds the write tools |
-| `PUHRR_DEVICE_NAME` | `Medmin` | Name this connection shows under in sync |
-| `PUHRR_USERNAME` | `Medmin` | User name for the sync room |
+| `PUHRR_DEVICE_NAME` | `mcp` | Name this connection shows under in sync |
+| `PUHRR_USERNAME` | `mcp` | User name for the sync room |
 | `PUHRR_SYNC_ENDPOINT` | PUHRR's Worker | Sync service URL |
-| `LANG` | server's | Locale for date and time wording in reports. Set it to match what PUHRR shows on the user's phone |
+| `LANG` | system's | Locale for date and time wording in reports. Set it to match what PUHRR shows on your phone |
 
 ## Notes
 
-- Data is as fresh as the last sync from the user's devices, re-checked at most every 10 seconds
-  per question. A phone with PUHRR closed doesn't push, so its newest edits appear when it's opened.
-- Merging is per record: if Medmin and the user edit the **same record** (e.g. the same patient's
+- Data is as fresh as the last sync from your devices, re-checked at most every 10 seconds per
+  request. A device with PUHRR closed doesn't push, so its newest edits appear when it's opened.
+- Merging is per record: if the server and you edit the **same record** (e.g. the same patient's
   profile) before either syncs, the later edit wins for that record. New entries from both survive.
 - Every report is generated at the moment it's asked for, with the current time in `PUHRR_TIMEZONE`.
-- The server's built-in instructions tell the agent never to write or reformat a report itself, and (in write mode) the rules above.
-  Keep Medmin's own prompt consistent with that.
+- The server's built-in instructions tell the client never to write or reformat a report itself,
+  and (in write mode) the rules above.

@@ -869,7 +869,7 @@ export const updateTemplate = async (world: World, name: string, changes: { newN
   const checkTokens = (text: string, variables: Record<string, unknown>, where: string) => {
     for (const part of tokenizePatternText(text)) {
       if (part.type === 'variableRef' && !(part.id in variables)) {
-        throw new ToolError(`The ${where} uses a variable that this template does not define. Medmin can reorder or reword the literal text and reuse the template's existing variables, but cannot create new ones; add those in PUHRR.`)
+        throw new ToolError(`The ${where} uses a variable that this template does not define. The caller can reorder or reword the literal text and reuse the template's existing variables, but cannot create new ones; add those in PUHRR.`)
       }
     }
   }

@@ -1611,7 +1611,7 @@ db.version(31).stores({
   simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
   syncTombstones: 'uid, table, deletedAt',
 }).upgrade(async (tx) => {
-  // Medmin integration, phase 1: every synced record gets a permanent cross-device `uid` and an
+  // Sync bookkeeping: every synced record gets a permanent cross-device `uid` and an
   // `updatedAt` (from its own lastModified/lastUpdated/createdAt where it has one), so sync can
   // tell edits apart from untouched records. From here on the hooks below keep both current.
   await backfillSyncMeta(tx)
