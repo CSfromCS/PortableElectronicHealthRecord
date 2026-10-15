@@ -186,7 +186,7 @@ const signature = (tables: Partial<Record<SyncedTableName, MergeRow[]>>, tombsto
  * Combines this device's data with the room's, record by record. A record is matched by `uid`; when
  * both sides have it, the later `updatedAt` wins. A deletion beats the record unless the record was
  * edited after it. A record only one side has is kept, which is what stops either device's new
- * entries — a phone's new vitals, Medmin's new order — from being overwritten by the other's copy.
+ * entries — a phone's new vitals, an MCP client's new order — from being overwritten by the other's copy.
  * Pure: reads nothing and writes nothing, so it can run inside one local transaction.
  */
 export const mergeSyncSnapshots = (local: MergeSide, remote: MergeSide, now = new Date()): MergeResult => {

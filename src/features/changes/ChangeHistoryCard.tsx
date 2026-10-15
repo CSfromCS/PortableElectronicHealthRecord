@@ -23,10 +23,10 @@ const describeCounts = (entry: ChangeLogEntry): string => {
 }
 
 /**
- * What Medmin changed, newest first, each with an Undo. Shows nothing until there's something to
+ * Recent changes made through the MCP server, newest first, each with an Undo. Shows nothing until there's something to
  * show. A deleted patient or entry stays here for 30 days, which is what makes it recoverable.
  */
-export function RecentChangesCard() {
+export function ChangeHistoryCard() {
   const entries = useLiveQuery(() => listChanges(15), [])
   const [confirmingId, setConfirmingId] = useState<number | null>(null)
   const [conflicts, setConflicts] = useState<string[]>([])
@@ -57,10 +57,10 @@ export function RecentChangesCard() {
 
   return (
     <div className='space-y-2'>
-      <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Recent Medmin changes</p>
+      <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Change history</p>
       <div className='rounded-xl border border-clay/25 bg-warm-ivory px-3.5 py-3 space-y-3'>
         <p className='text-[11px] text-clay'>
-          Everything Medmin changed in PUHRR. Undo puts it back, including deleted patients and entries, for {CHANGE_LOG_RETENTION_DAYS} days.
+          Recent changes you can undo. Undo puts a change back, including deleted patients and entries, for {CHANGE_LOG_RETENTION_DAYS} days.
         </p>
         {message ? <p className='text-xs text-espresso'>{message}</p> : null}
         <ul className='space-y-2.5'>

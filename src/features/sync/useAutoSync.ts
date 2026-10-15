@@ -3,7 +3,7 @@ import { type SyncConfig, type SyncNowResult, syncNow } from './syncService'
 import { subscribeToLocalSyncedChanges } from './syncMeta'
 
 /** How long after the last edit before it's pushed — long enough that typing in a field is one
- * push, short enough that Medmin (or the other device) sees the change within seconds. */
+ * push, short enough that another device sees the change within seconds. */
 export const AUTO_SYNC_PUSH_DELAY_MS = 5_000
 /** How often an open, visible PUHRR checks the room for changes made elsewhere. */
 export const AUTO_SYNC_POLL_INTERVAL_MS = 60_000

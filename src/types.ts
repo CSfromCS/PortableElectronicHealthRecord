@@ -32,13 +32,13 @@ export interface ChangeLogOp {
   after?: Record<string, unknown>
 }
 
-/** A group of record changes made together by one action (one Medmin tool call). Synced, so every
- * device can see what Medmin did and undo it; a delete keeps the deleted records here, which is
+/** A group of record changes made together by one action (one MCP tool call). Synced, so every
+ * device can see what was done and undo it; a delete keeps the deleted records here, which is
  * what makes it recoverable for 30 days. */
 export interface ChangeLogEntry extends SyncMeta {
   id?: number
   at: string
-  /** Who made the change, e.g. 'medmin'. */
+  /** Who made the change, e.g. 'mcp'. */
   source: string
   tool: string
   /** One plain sentence: what was done and to whom. */
