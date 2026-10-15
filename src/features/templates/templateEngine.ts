@@ -1,3 +1,4 @@
+import { buildMasterChecklistItemsForSource } from '@/features/checklist/masterChecklist'
 import { type DateTimeWindow, type PatientPoolContext, matchesPatientPool } from '@/features/filters/patientFilterUtils'
 import { composeDiagnosisTextConfigurable } from '@/features/patients/serviceDiagnosis'
 import { buildLabReportBlockPieces, formatOrderStatus } from '@/features/reporting/reportBuilders'
@@ -672,6 +673,7 @@ const resolveFlatVariable = (
     case 'roomNumber': return patient.roomNumber
     case 'ward': return patient.wardTagId !== undefined ? ctx.tagsById.get(patient.wardTagId)?.name ?? '' : ''
     case 'lastName': return patient.lastName
+    case 'lastNameUppercase': return patient.lastName.toUpperCase()
     case 'firstName': return patient.firstName
     case 'middleName': return patient.middleName ?? ''
     case 'age': return patient.age !== undefined ? String(patient.age) : ''
@@ -916,7 +918,8 @@ const resolveProblemsBlock = (config: BlockVariableConfig, updates: DailyUpdate[
   return groupTexts.join(resolveJoinString(config.groupSeparator, config.customGroupSeparator))
 }
 
-const resolveChecklistBlock = (config: BlockVariableConfig, updates: DailyUpdate[], admitDateEffective: string, ctx: TemplateRenderContext): string => {
+const resolveChecklistBlock = (config: BlockVariableConfig, patientId: number, updates: DailyUpdate[], admitDateEffective: string, ctx: TemplateRenderContext): string => {
+  if (config.rangeMode === 'masterChecklist') return resolveMasterChecklistBlock(config, patientId, updates, ctx)
   const scoped = filterByRangeMode(updates, config, admitDateEffective, (e) => e.date, () => '', (e) => e.lastUpdated, false)
   const groupTexts = [...scoped]
     .sort((a, b) => a.date.localeCompare(b.date))
@@ -931,6 +934,22 @@ const resolveChecklistBlock = (config: BlockVariableConfig, updates: DailyUpdate
     })
     .filter(Boolean)
   return groupTexts.join(resolveJoinString(config.groupSeparator, config.customGroupSeparator))
+}
+
+/** Checklist's 'masterChecklist' range mode — the same items the Master Checklist screen shows
+ * for today (reusing its own builder, so the two can't drift apart): today's entry if it exists,
+ * otherwise only the unfinished items carried forward from the latest earlier day. A single
+ * dated group, since carry-forward already folds earlier days into "today". The General checklist
+ * is `patientId` -1, which is also what a Header/Footer's placeholder patient resolves to. */
+const resolveMasterChecklistBlock = (config: BlockVariableConfig, patientId: number, updates: DailyUpdate[], ctx: TemplateRenderContext): string => {
+  const viewDate = toLocalISODate(ctx.nowDate)
+  const items = buildMasterChecklistItemsForSource(patientId, '', updates, viewDate).filter((item) => item.text.trim())
+  if (items.length === 0) return ''
+  const body = items
+    .map((item) => renderEntryPattern(config.entryPatternText, config.entryFieldIds, config.entryFieldDateTimeFormats, (fieldId) => resolveChecklistEntryField(fieldId, item, config)))
+    .join(resolveJoinString(config.entrySeparator, config.customEntrySeparator))
+  if (!config.showGroupHeader) return body
+  return [renderGroupHeader(viewDate, config, ctx), body].join('\n')
 }
 
 /** MedicationEntry carries no date, so there's no range mode to filter by — `includeXMedications`
@@ -970,7 +989,7 @@ const resolveBlockVariable = (
     case 'labs': return resolveLabsBlock(config, ctx.labsByPatient.get(patientId) ?? [], admitDateEffective, ctx)
     case 'orders': return resolveOrdersBlock(config, ctx.ordersByPatient.get(patientId) ?? [], admitDateEffective, ctx)
     case 'problems': return resolveProblemsBlock(config, ctx.dailyUpdatesByPatient.get(patientId) ?? [], admitDateEffective, ctx)
-    case 'checklist': return resolveChecklistBlock(config, ctx.dailyUpdatesByPatient.get(patientId) ?? [], admitDateEffective, ctx)
+    case 'checklist': return resolveChecklistBlock(config, patientId, ctx.dailyUpdatesByPatient.get(patientId) ?? [], admitDateEffective, ctx)
     case 'medications': return resolveMedicationsBlock(config, patient, ctx.medicationsByPatient.get(patientId) ?? [])
     default: return ''
   }
@@ -1010,10 +1029,28 @@ export const renderTemplateForPatient = (template: Pick<ReportTemplate, 'pattern
   return renderResolvedSegments(collapseBlanks(resolved))
 }
 
+/** Whether a patient should be left out of a Per-Patient body entirely. Only ever true for a
+ * template using Checklist's 'masterChecklist' range mode, which mirrors the Master Checklist
+ * screen — and that screen lists a patient only if they have something on it. So a patient whose
+ * every master-mode Checklist placeholder resolves blank is dropped, rather than leaving a bare
+ * heading line behind. A template with no such placeholder is never affected. */
+export const isPatientEmptyForMasterChecklist = (
+  template: Pick<ReportTemplate, 'patternText' | 'variables'>,
+  patient: Patient,
+  ctx: TemplateRenderContext,
+): boolean => {
+  const masterChecklistInstances = [...template.patternText.matchAll(VARIABLE_TOKEN_REGEX)]
+    .map((match) => template.variables[match[1]])
+    .filter((instance): instance is Extract<TemplateVariableInstance, { kind: 'block' }> =>
+      instance?.kind === 'block' && instance.variableId === 'checklist' && instance.config.rangeMode === 'masterChecklist')
+  if (masterChecklistInstances.length === 0) return false
+  return masterChecklistInstances.every((instance) => resolveVariableInstance(instance, patient, ctx).trim() === '')
+}
+
 /** Flat variables that read patient data — everything except the two non-patient special
  * variables (Current Date/Time), which don't make a template Per-Patient on their own. */
 const PATIENT_DEPENDENT_FLAT_VARIABLES = new Set<FlatVariableId>([
-  'roomNumber', 'ward', 'lastName', 'firstName', 'middleName', 'age', 'sex',
+  'roomNumber', 'ward', 'lastName', 'lastNameUppercase', 'firstName', 'middleName', 'age', 'sex',
   'mainService', 'referralService', 'clinicalSummary',
   'admitDate', 'admitTime', 'referralDate', 'referralTime', 'dischargeDate', 'dischargeTime', 'database',
 ])
@@ -1163,8 +1200,9 @@ const renderGroupPatientList = (
   template: Pick<ReportTemplate, 'patternText' | 'variables' | 'patientSeparator' | 'customPatientSeparator' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'>,
   ctx: TemplateRenderContext,
 ): string => {
-  if (patients.length === 0 && !template.groupShowListBracketsWhenEmpty) return ''
-  const rows = patients
+  const visiblePatients = patients.filter((patient) => !isPatientEmptyForMasterChecklist(template, patient, ctx))
+  if (visiblePatients.length === 0 && !template.groupShowListBracketsWhenEmpty) return ''
+  const rows = visiblePatients
     .map((patient) => renderTemplateForPatient(template, patient, ctx))
     .join(resolveJoinString(template.patientSeparator, template.customPatientSeparator))
   return `${template.groupListOpenText}${rows}${template.groupListCloseText}`
@@ -1311,6 +1349,7 @@ const describeMedicationsConfig = (config: BlockVariableConfig): string => {
 }
 
 export const describeBlockConfig = (config: BlockVariableConfig): string => {
+  if (config.rangeMode === 'masterChecklist') return 'Master Checklist (unfinished carried forward)'
   if (config.rangeMode === 'numberOfEntries') return `Last ${config.entryCount} entries`
   if (config.relativeMode === 'sinceAdmission') return 'Since Admission Date'
   if (config.relativeMode === 'lastNDays') return `Last ${config.lastNDays} days`
@@ -1336,6 +1375,7 @@ export const FLAT_VARIABLE_LABELS: Record<FlatVariableId, string> = {
   roomNumber: 'Room Number',
   ward: 'Ward/Location',
   lastName: 'Surname',
+  lastNameUppercase: 'Surname (UPPERCASE)',
   firstName: 'First Name',
   middleName: 'Middle Name',
   age: 'Age',

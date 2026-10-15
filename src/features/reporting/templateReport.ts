@@ -4,6 +4,7 @@ import {
   type TemplateRenderContext,
   buildCurrentDateTimeText,
   classifyTemplateRepeatMode,
+  isPatientEmptyForMasterChecklist,
   renderGroupedBody,
   renderTemplateForPatient,
   resolveJoinString,
@@ -132,6 +133,7 @@ export const generateTemplateOutput = (template: ReportTemplate, patientsForBody
     : classifyTemplateRepeatMode(template) === 'prints-once'
       ? renderTemplateForPatient(template, PLACEHOLDER_PATIENT_FOR_PRINTS_ONCE, ctx)
       : patientsForBody
+        .filter((patient) => !isPatientEmptyForMasterChecklist(template, patient, ctx))
         .map((patient) => renderTemplateForPatient(template, patient, ctx))
         .join(resolveJoinString(template.patientSeparator, template.customPatientSeparator))
   const headerText = template.headerPatternText
