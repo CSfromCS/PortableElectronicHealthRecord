@@ -1,8 +1,14 @@
 import { db } from '@/db'
-import { SYNCED_TABLE_NAMES, beginChangeRecording, notifyLocalSyncedChange } from '@/features/sync/syncMeta'
-import type { ChangeLogEntry, ChangeLogOp } from '@/types'
+import { SYNCED_TABLE_NAMES, beginChangeRecording } from '@/features/sync/syncMeta'
+import type { ChangeLogEntry, ChangeLogField, ChangeLogOp } from '@/types'
 
 export const CHANGE_LOG_RETENTION_DAYS = 30
+
+/** Fields that change on every write or only identify a record: not worth logging. */
+const BOOKKEEPING = new Set(['id', 'uid', 'updatedAt', 'lastModified'])
+const MAX_TEXT = 200
+const MAX_FIELDS = 12
+export const MAX_OPS = 25
 
 export type ChangeMeta = {
   /** Who made the change, e.g. 'mcp'. */
@@ -22,35 +28,67 @@ export type ChangeContext = {
 
 type AnyRecord = Record<string, unknown> & { uid?: string; updatedAt?: string }
 
-const stableJson = (value: unknown): string =>
-  JSON.stringify(value, (_key, nested) =>
-    nested && typeof nested === 'object' && !Array.isArray(nested)
-      ? Object.fromEntries(Object.entries(nested as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : nested)
-
-/**
- * Whether a record still looks the way a change left it. The stamp (`updatedAt`) is left out: putting a
- * record back stamps it afresh so the revert syncs, which would otherwise make undoing two changes in a row
- * (newest first) look like a conflict on the second.
- */
-const sameContent = (current: AnyRecord, expected: AnyRecord | undefined): boolean => {
-  if (!expected) return false
-  const withoutStamp = (record: AnyRecord) => Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'updatedAt'))
-  return stableJson(withoutStamp(current)) === stableJson(withoutStamp(expected))
-}
-
 const syncedScope = () => [...SYNCED_TABLE_NAMES.map((tableName) => db.table(tableName)), db.syncTombstones]
 
+const isEmpty = (value: unknown): boolean =>
+  value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)
+
+const sameValue = (a: unknown, b: unknown): boolean => (isEmpty(a) && isEmpty(b)) || JSON.stringify(a) === JSON.stringify(b)
+
+const show = (value: unknown): string => {
+  if (isEmpty(value)) return '(empty)'
+  const text = typeof value === 'string' ? value : JSON.stringify(value)
+  return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…` : text
+}
+
 /**
- * Runs `work` as one recorded change: every record it adds, edits or deletes is captured with how
- * it looked before and after, and stored as a single entry in the change log — in the same
+ * What a change did to one record, as just the fields it touched (old → new, long text shortened) —
+ * not whole copies of the record, which is what made the log the biggest part of every sync snapshot.
+ */
+const toLoggedOp = (
+  table: string,
+  recordId: number,
+  kind: ChangeLogOp['kind'],
+  before: Record<string, unknown> = {},
+  after: Record<string, unknown> = {},
+): ChangeLogOp => {
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => !BOOKKEEPING.has(key))
+
+  const fields: ChangeLogField[] = []
+  for (const key of keys) {
+    if (kind === 'add') {
+      if (!isEmpty(after[key])) fields.push({ field: key, to: show(after[key]) })
+    } else if (kind === 'delete') {
+      if (!isEmpty(before[key])) fields.push({ field: key, from: show(before[key]) })
+    } else if (!sameValue(before[key], after[key])) {
+      fields.push({ field: key, from: show(before[key]), to: show(after[key]) })
+    }
+  }
+
+  return {
+    table,
+    recordId,
+    kind,
+    fields: fields.slice(0, MAX_FIELDS),
+    ...(fields.length > MAX_FIELDS ? { moreFields: fields.length - MAX_FIELDS } : {}),
+  }
+}
+
+/** The compact form of an op. Entries written before the log kept only changed fields hold whole
+ * `before`/`after` records instead; they are converted here when read and rewritten by `pruneChangeLog`. */
+export const compactOp = (op: ChangeLogOp): ChangeLogOp =>
+  op.fields ? op : toLoggedOp(op.table, op.recordId, op.kind, op.before, op.after)
+
+/**
+ * Runs `work` as one recorded change: every record it adds, edits or deletes is captured as the
+ * fields that changed (old and new value) and stored as a single entry in the change log — in the same
  * transaction, so a change and its record either both happen or neither does. A change that ends
  * up changing nothing leaves no entry.
  *
  * The capturing happens in the database hooks, so `work` is ordinary code (including the app's own
  * helpers that open nested transactions) and can't forget to say what it touched.
  */
-export const recordChange = async <T>(meta: ChangeMeta, work: (context: ChangeContext) => Promise<T>): Promise<{ result: T; entryId: number | null; ops: ChangeLogOp[] }> =>
+export const recordChange = async <T>(meta: ChangeMeta, work: (context: ChangeContext) => Promise<T>): Promise<{ result: T; entryId: number | null; ops: ChangeLogOp[]; moreOps?: number }> =>
   db.transaction('rw', syncedScope(), async () => {
     const events = beginChangeRecording()
     const entryMeta = { ...meta }
@@ -63,75 +101,45 @@ export const recordChange = async <T>(meta: ChangeMeta, work: (context: ChangeCo
     for (const event of events.values()) {
       const after = await db.table<AnyRecord>(event.table).get(event.key)
       if (!event.before && after) {
-        ops.push({ table: event.table, recordId: event.key, kind: 'add', after: structuredClone(after) })
+        ops.push(toLoggedOp(event.table, event.key, 'add', undefined, after))
       } else if (event.before && !after) {
-        ops.push({ table: event.table, recordId: event.key, kind: 'delete', before: event.before })
+        ops.push(toLoggedOp(event.table, event.key, 'delete', event.before))
       } else if (event.before && after && JSON.stringify(event.before) !== JSON.stringify(after)) {
-        ops.push({ table: event.table, recordId: event.key, kind: 'update', before: event.before, after: structuredClone(after) })
+        const op = toLoggedOp(event.table, event.key, 'update', event.before, after)
+        // Only bookkeeping (a re-stamped record) differed: nothing the user would call a change.
+        if (op.fields && (op.fields.length > 0 || op.moreFields)) ops.push(op)
       }
     }
 
     if (ops.length === 0) return { result, entryId: null, ops }
-    const entryId = await db.changeLog.add({ at: new Date().toISOString(), ...entryMeta, ops }) as number
-    return { result, entryId, ops }
-  })
-
-export type UndoOutcome =
-  | { undone: true; entry: ChangeLogEntry }
-  | { undone: false; entry: ChangeLogEntry; conflicts: string[] }
-
-const describeOp = (op: ChangeLogOp): string => `${op.table} #${op.recordId}`
-
-/**
- * Reverses a recorded change. If anything it touched was changed again afterwards (someone edited
- * the record, or re-created a deleted one), nothing is undone unless `force` is set: undoing then
- * would silently overwrite that later work.
- */
-export const undoChange = async (entryId: number, options: { force?: boolean } = {}): Promise<UndoOutcome> =>
-  db.transaction('rw', syncedScope(), async () => {
-    const entry = await db.changeLog.get(entryId)
-    if (!entry) throw new Error(`There is no recorded change #${entryId}.`)
-    if (entry.undoneAt) throw new Error(`Change #${entryId} was already undone.`)
-
-    const conflicts: string[] = []
-    for (const op of entry.ops) {
-      const current = await db.table<AnyRecord>(op.table).get(op.recordId)
-      if (op.kind === 'delete') {
-        if (current) conflicts.push(`${describeOp(op)} was created again after the delete`)
-      } else if (current && !sameContent(current, op.after as AnyRecord | undefined)) {
-        conflicts.push(`${describeOp(op)} was changed after this`)
-      }
-    }
-    if (conflicts.length > 0 && !options.force) return { undone: false as const, entry, conflicts }
-
-    for (const op of [...entry.ops].reverse()) {
-      const table = db.table<AnyRecord>(op.table)
-      if (op.kind === 'add') {
-        await table.delete(op.recordId)
-      } else if (op.kind === 'update') {
-        await table.put({ ...(op.before as AnyRecord) })
-      } else {
-        const before = op.before as AnyRecord
-        await table.put({ ...before, __keepSyncMeta: true })
-        if (before.uid) await db.syncTombstones.delete(before.uid)
-      }
-    }
-
-    const undoneAt = new Date().toISOString()
-    await db.changeLog.update(entryId, { undoneAt })
-    notifyLocalSyncedChange()
-    return { undone: true as const, entry: { ...entry, undoneAt } }
+    const kept = ops.slice(0, MAX_OPS)
+    const moreOps = ops.length - kept.length
+    const entryId = await db.changeLog.add({
+      at: new Date().toISOString(),
+      ...entryMeta,
+      ops: kept,
+      ...(moreOps > 0 ? { moreOps } : {}),
+    }) as number
+    return { result, entryId, ops: kept, ...(moreOps > 0 ? { moreOps } : {}) }
   })
 
 /** Newest first. */
 export const listChanges = async (limit = 20): Promise<ChangeLogEntry[]> =>
   db.changeLog.orderBy('at').reverse().limit(limit).toArray()
 
-/** Drops entries older than the retention window — which is also how long a deleted record stays
- * recoverable. */
+/** Drops entries older than the retention window, and shrinks any entry still holding whole
+ * before/after records (from before the log kept only changed fields) down to the fields that changed. */
 export const pruneChangeLog = async (now = new Date()): Promise<number> => {
   const cutoff = new Date(now.getTime() - CHANGE_LOG_RETENTION_DAYS * 86_400_000).toISOString()
   const stale = await db.changeLog.where('at').below(cutoff).primaryKeys()
   if (stale.length > 0) await db.changeLog.bulkDelete(stale)
+
+  const legacy = (await db.changeLog.toArray()).filter((entry) => entry.ops.some((op) => !op.fields))
+  for (const entry of legacy) {
+    if (entry.id === undefined) continue
+    const kept = entry.ops.slice(0, MAX_OPS)
+    const moreOps = (entry.moreOps ?? 0) + (entry.ops.length - kept.length)
+    await db.changeLog.update(entry.id, { ops: kept.map(compactOp), ...(moreOps > 0 ? { moreOps } : {}) })
+  }
   return stale.length
 }

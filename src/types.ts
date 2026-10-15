@@ -20,21 +20,34 @@ export interface SyncTombstone {
   recordId?: number
 }
 
-/** One thing a record-level change did to the database: what a record looked like before and
- * after, so the change can be shown and, if wanted, undone. */
+/** One field a change touched, as text for reading back (long values shortened). `from` is absent for
+ * an added record, `to` for a deleted one. */
+export interface ChangeLogField {
+  field: string
+  from?: string
+  to?: string
+}
+
+/** One thing a record-level change did to the database: the fields it touched, so the change can be
+ * shown. It is not enough to undo a change, on purpose: whole copies of records made the log the
+ * biggest part of every sync snapshot. */
 export interface ChangeLogOp {
   table: string
   recordId: number
   kind: 'add' | 'update' | 'delete'
-  /** The record as it was; absent for an add. */
+  /** Absent only on entries written before the log kept just changed fields; `pruneChangeLog`
+   * rewrites those. */
+  fields?: ChangeLogField[]
+  /** How many more touched fields were left out of `fields`. */
+  moreFields?: number
+  /** Legacy: the record as it was. */
   before?: Record<string, unknown>
-  /** The record as the change left it; absent for a delete. */
+  /** Legacy: the record as the change left it. */
   after?: Record<string, unknown>
 }
 
 /** A group of record changes made together by one action (one MCP tool call). Synced, so the
- * MCP server can list and undo it from any device; a delete keeps the deleted records here, which is
- * what makes it recoverable for 30 days. */
+ * MCP server can list what was changed from any device. */
 export interface ChangeLogEntry extends SyncMeta {
   id?: number
   at: string
@@ -46,8 +59,8 @@ export interface ChangeLogEntry extends SyncMeta {
   patientId?: number
   patientIdentifier?: string
   ops: ChangeLogOp[]
-  /** Set when the change was undone. */
-  undoneAt?: string
+  /** How many more records the change touched than `ops` lists. */
+  moreOps?: number
 }
 
 export interface Patient extends SyncMeta {

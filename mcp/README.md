@@ -40,11 +40,11 @@ answers with the closest existing ones so the caller can ask the user.
 | Daily work | `add_vitals` / `update_vitals`, `add_medication` / `update_medication`, `add_order` / `update_order`, `add_lab` / `update_lab` (validated against the lab templates; calculated ABG fields filled in) |
 | Checklist | `add_checklist_item` (with note), `edit_checklist_item`, `complete_checklist_item`, `reopen_checklist_item`, `delete_checklist_item`, `move_checklist_item` — for a patient or the General checklist |
 | Problems and notes | `add_problem`, `edit_problem`, `set_problem_status`, `reorder_problems`, `set_daily_note` (S/O/A/P and per-problem notes) |
-| Simple problem list | `add_simple_problems`, `edit_simple_problem`, `delete_simple_problems`, `reorder_simple_problems`, `group_simple_problems` (group or ungroup lines under a master problem). `create_problem_lists` writes an approved package in one undoable step: the lines, the master problems (sub-problems and date identified included) and the grouping. Master problems themselves use `add_problem`, `edit_problem`, `set_problem_status`, `reorder_problems` |
+| Simple problem list | `add_simple_problems`, `edit_simple_problem`, `delete_simple_problems`, `reorder_simple_problems`, `group_simple_problems` (group or ungroup lines under a master problem). `create_problem_lists` writes an approved package in one step: the lines, the master problems (sub-problems and date identified included) and the grouping. Master problems themselves use `add_problem`, `edit_problem`, `set_problem_status`, `reorder_problems` |
 | Custom actions | `run_custom_action`: presses a manual button (patient or General) the way the app does; items already listed are skipped, and a patient who matches no condition is left alone with the missing tags named. A General action with a template also returns its rendered report |
 | Views and templates | `create_view`, `update_view`, `duplicate_template`, `update_template` (rename, on/off, and reword or reorder a format using the variables it already has) |
 | Needs a yes first | `request_delete` (patient, vital, lab, medication, order, problem, view, template), `request_discharge`, then `confirm_action` |
-| Safety | `recent_changes`, `undo_change` |
+| Safety | `recent_changes` |
 
 Not included: creating brand-new template variables (do that in PUHRR; a client can duplicate a
 template and reword it), and photos (they don't sync yet).
@@ -59,14 +59,14 @@ template and reword it), and photos (they don't sync yet).
   `create_tag`, which needs the user's approved name and is blocked while a similar one exists.
 - **Deleting and discharging are two steps.** `request_delete` / `request_discharge` change nothing
   and return a plain description plus a 10-minute code; `confirm_action` runs it. Checklist items
-  are the one exception (single step, but undoable). The client is instructed to get the user's yes
+  are the one exception (single step, with no undo). The client is instructed to get the user's yes
   in between; the code makes a one-shot accident impossible but cannot prove a human said yes.
-- **Everything is logged and undoable.** Each change is recorded (what it was, to whom, and what
-  every record looked like before and after) and synced to your devices. PUHRR has no screen for it:
-  after every change the server's answer lists each field that changed (old value → new value) and
-  the change id, and the client is told to read that back to the user, who can ask for an undo at
-  any time (`recent_changes` lists earlier ones). Deleted patients and entries are recoverable for 30
-  days. Undo refuses if the thing was edited again since, unless the user agrees to overwrite.
+- **Everything is logged, nothing is undone.** Each change is recorded (what it was, to whom, and
+  the fields it changed, old value → new value) and synced to your devices. PUHRR has no screen for
+  it: after every change the server's answer lists each field that changed, and the client is told
+  to read that back to the user (`recent_changes` lists earlier ones). The log keeps only the changed
+  fields, not copies of the records, so it stays small; the price is that there is no undo and a
+  deletion cannot be brought back.
 - **No silent loss.** A change is made on the freshest copy of the room and uploaded before the
   answer comes back. If the room can't be reached, the answer says the change is **not** stored,
   and it is sent with the next change.
@@ -119,7 +119,7 @@ Requires Node 20 or newer and git.
 5. **Turning on changes (optional).** Update PUHRR on **every** device first so each can sync the
    change log: an older version will say it needs updating. Then add `"PUHRR_ALLOW_WRITES": "1"`
    to `env`, restart the client, and try one small change on a test patient, then check it appears
-   on your devices, that the client reported exactly what it changed, and that asking it to undo puts it back.
+   on your devices, and that the client reported exactly what it changed.
 
 ## Remote access (HTTPS, with sign-in)
 
@@ -155,7 +155,7 @@ state file and start it again; to change the passphrase, run `mcp:passphrase` ag
 | `PUHRR_MCP_HTTP_HOST` / `PUHRR_MCP_HTTP_PORT` | `127.0.0.1` / `8787` | Where it listens (behind the proxy) |
 | `PUHRR_ALLOW_LOCAL_HOST` | off | `1` also answers to `localhost` (for testing only) |
 
-`PUHRR_ALLOW_WRITES=1` decides whether "read and edit" is offered at all. Everything the write tools do is still logged and undoable.
+`PUHRR_ALLOW_WRITES=1` decides whether "read and edit" is offered at all. Everything the write tools do is still logged.
 
 ## Settings
 

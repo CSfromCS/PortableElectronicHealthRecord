@@ -1275,8 +1275,8 @@ function App() {
     void refreshSyncInsight(syncConfig)
   }, [refreshSyncInsight, syncConfig])
 
-  // Changes older than the retention window (30 days) are dropped, which is also when a deleted
-  // record stops being recoverable.
+  // Changes older than the retention window (30 days) are dropped, and older-format entries that
+  // still hold whole records are shrunk to the fields that changed.
   useEffect(() => {
     void pruneChangeLog()
   }, [])

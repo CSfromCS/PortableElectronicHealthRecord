@@ -153,14 +153,6 @@ export const registerSyncMetaHooks = (db: Dexie): void => {
     const table = db.table<SyncedRecord>(tableName)
 
     table.hook('creating', (primaryKey, record, transaction) => {
-      // Undoing a delete puts the record back exactly as it was, uid included.
-      if (record.__keepSyncMeta === true) {
-        delete record.__keepSyncMeta
-        record.updatedAt = new Date().toISOString()
-        recordEvent(transaction, tableName, primaryKey)
-        notifyLocalSyncedChange()
-        return undefined
-      }
       if (isUntrackedWrite(transaction)) {
         // Keep what the import brought; only fill in what an older payload or backup lacks.
         if (typeof record.uid !== 'string' || !record.uid) record.uid = createSyncUid()
