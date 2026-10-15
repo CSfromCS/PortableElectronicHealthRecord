@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { pruneChangeLog } from '@/features/changes/changeLog'
 import {
   type SyncConfig,
   buildSyncConfig,
@@ -111,6 +112,7 @@ export class RoomFollower {
     const run = async (): Promise<WriteOutcome<T>> => {
       const world = await this.forceRefresh()
       const result = await work(world)
+      await pruneChangeLog()
 
       let stored = true
       let warning: string | undefined
@@ -152,11 +154,26 @@ export class RoomFollower {
       changed = result.changed
     }
 
+    if (changed && this.settings.allowWrites) await this.pruneAndStore()
+
     if (changed || !this.world) {
       this.world = await loadWorld()
       this.lastRefreshedAt = new Date().toISOString()
     }
     this.lastCheckedAt = Date.now()
     return this.world
+  }
+
+  /** Drops expired change-log entries and shrinks old-format ones, then uploads the smaller copy.
+   * The app does this when it opens; without it here, a room full of old entries stays that size
+   * because this copy keeps sending them back. If the upload fails the next refresh retries it. */
+  private async pruneAndStore(): Promise<void> {
+    if (!this.config || await pruneChangeLog() === 0) return
+    try {
+      this.config = (await syncWithRoom(this.config)).config
+      this.unsynced = false
+    } catch {
+      this.unsynced = true
+    }
   }
 }
