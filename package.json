@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "mcp": "tsx --tsconfig mcp/tsconfig.json mcp/puhrr-mcp.ts"
+    "mcp": "tsx --tsconfig mcp/tsconfig.json mcp/puhrr-mcp.ts",
+    "mcp:remote": "tsx --tsconfig mcp/tsconfig.json mcp/remote.ts",
+    "mcp:passphrase": "tsx --tsconfig mcp/tsconfig.json mcp/setup-passphrase.ts"
   },
   "dependencies": {
     "@fontsource-variable/plus-jakarta-sans": "^5.2.8",
@@ -26,6 +28,7 @@
     "clsx": "^2.1.1",
     "dexie": "^4.3.0",
     "dexie-react-hooks": "^4.2.0",
+    "express": "^5.3.0",
     "lucide-react": "^0.570.0",
     "pwa-asset-generator": "^8.1.2",
     "react": "^19.2.0",
@@ -42,6 +45,7 @@
     "@storybook/addon-a11y": "^10.2.9",
     "@storybook/addon-docs": "^10.2.9",
     "@storybook/react-vite": "^10.2.9",
+    "@types/express": "^5.0.6",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
