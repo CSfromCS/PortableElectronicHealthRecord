@@ -32,8 +32,8 @@ export interface ChangeLogOp {
   after?: Record<string, unknown>
 }
 
-/** A group of record changes made together by one action (one MCP tool call). Synced, so every
- * device can see what was done and undo it; a delete keeps the deleted records here, which is
+/** A group of record changes made together by one action (one MCP tool call). Synced, so the
+ * MCP server can list and undo it from any device; a delete keeps the deleted records here, which is
  * what makes it recoverable for 30 days. */
 export interface ChangeLogEntry extends SyncMeta {
   id?: number

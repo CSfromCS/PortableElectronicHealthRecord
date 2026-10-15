@@ -58,8 +58,10 @@ template and reword it), and photos (they don't sync yet).
   are the one exception (single step, but undoable). The client is instructed to get the user's yes
   in between; the code makes a one-shot accident impossible but cannot prove a human said yes.
 - **Everything is logged and undoable.** Each change is recorded (what it was, to whom, and what
-  every record looked like before and after), synced to your devices, and shown in PUHRR under
-  Settings → Change history with an Undo button. Deleted patients and entries are recoverable for 30
+  every record looked like before and after) and synced to your devices. PUHRR has no screen for it:
+  after every change the server's answer lists each field that changed (old value → new value) and
+  the change id, and the client is told to read that back to the user, who can ask for an undo at
+  any time (`recent_changes` lists earlier ones). Deleted patients and entries are recoverable for 30
   days. Undo refuses if the thing was edited again since, unless the user agrees to overwrite.
 - **No silent loss.** A change is made on the freshest copy of the room and uploaded before the
   answer comes back. If the room can't be reached, the answer says the change is **not** stored,
@@ -110,10 +112,10 @@ Requires Node 20 or newer and git.
    Use `node` directly, not `npm run`: npm prints a banner to stdout, which would corrupt the
    protocol.
 
-5. **Turning on changes (optional).** Update PUHRR on **every** device first so each can show and
-   undo changes: an older version will say it needs updating. Then add `"PUHRR_ALLOW_WRITES": "1"`
+5. **Turning on changes (optional).** Update PUHRR on **every** device first so each can sync the
+   change log: an older version will say it needs updating. Then add `"PUHRR_ALLOW_WRITES": "1"`
    to `env`, restart the client, and try one small change on a test patient, then check it appears
-   on your devices and in Settings → Change history.
+   on your devices, that the client reported exactly what it changed, and that asking it to undo puts it back.
 
 ## Settings
 
