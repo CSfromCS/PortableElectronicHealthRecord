@@ -40,6 +40,7 @@ import {
   updateView,
   updateVitals,
 } from './mutations'
+import { describeOps } from './describeChanges'
 import { ToolError, patientIdentifier } from './queries'
 import type { RoomFollower } from './room'
 import type { World } from './world'
@@ -71,11 +72,11 @@ const act = (room: RoomFollower, tool: string, handler: (world: World) => Promis
     if (done.patient) context.setPatient({ id: done.patient.id, identifier: patientIdentifier(done.patient) })
     return done
   }))
-  const { result, entryId } = outcome.result
+  const { result, entryId, ops } = outcome.result
   return json({
     done: entryId !== null,
     summary: result.summary,
-    ...(entryId !== null ? { changeId: entryId, undo: `undo_change with changeId ${entryId}` } : { note: 'Nothing needed to change.' }),
+    ...(entryId !== null ? { ...describeOps(ops), changeId: entryId, undo: `undo_change with changeId ${entryId}` } : { note: 'Nothing needed to change.' }),
     storedInRoom: outcome.stored,
     ...(outcome.warning ? { warning: outcome.warning } : {}),
   })
@@ -367,7 +368,7 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
   }))
 
   server.registerTool('recent_changes', {
-    description: 'What has been changed through this connection, newest first, with each change id for undo_change.',
+    description: 'What has been changed through this connection, newest first, with each change id for undo_change and, per change, the fields it changed (old value → new value).',
     inputSchema: { limit: z.number().int().positive().max(50).optional() },
   }, ({ limit }) => run(async () => {
     await room.forceRefresh()
@@ -377,6 +378,7 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
       what: entry.summary,
       patient: entry.patientIdentifier ?? null,
       undone: Boolean(entry.undoneAt),
+      ...describeOps(entry.ops),
     })))
   }))
 

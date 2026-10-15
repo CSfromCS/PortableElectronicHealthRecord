@@ -181,7 +181,6 @@ import {
 import { markSyncImportTransaction } from './features/sync/syncMeta'
 import { runAutomaticCustomActionsForTagAddition as runSharedAutomaticCustomActionsForTagAddition } from './features/customActions/automaticActions'
 import { pruneChangeLog } from './features/changes/changeLog'
-import { ChangeHistoryCard } from './features/changes/ChangeHistoryCard'
 import { computeAbgDerivedValues } from './features/labs/labDerived'
 import { useAutoSync } from './features/sync/useAutoSync'
 import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, Images, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
@@ -9052,7 +9051,6 @@ function App() {
               </CardTitle>
             </CardHeader>
             <CardContent className='px-4 pb-4 space-y-5'>
-              <ChangeHistoryCard />
               <div className='space-y-2'>
                 <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Sync Status</p>
                 <div className='rounded-xl border border-clay/25 bg-warm-ivory px-3.5 py-3 space-y-2'>
