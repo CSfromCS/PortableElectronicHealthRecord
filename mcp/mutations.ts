@@ -1,5 +1,6 @@
 import { db } from '@/db'
 import {
+  appendChecklistItemsForPatientDate,
   insertNewChecklistItem,
   normalizeChecklistItemsKeepingBlanks,
   reorderChecklistItems,
@@ -9,6 +10,15 @@ import {
 } from '@/features/checklist/checklistUtils'
 import { GENERAL_CHECKLIST_LABEL, GENERAL_CHECKLIST_PATIENT_ID } from '@/features/checklist/masterChecklist'
 import { appendChecklistItemsToPatientDate, runAutomaticCustomActionsForTagAddition } from '@/features/customActions/automaticActions'
+import {
+  actionHasApplicableEffect,
+  actionHasApplicableGeneralEffect,
+  applyCustomActionEffects,
+  applyGeneralCustomActionEffects,
+  formatPatientLabelForNotice,
+  resolveMatchingConditions,
+  resolveMatchingGeneralConditions,
+} from '@/features/customActions/customActionUtils'
 import { LAB_TEMPLATES, OTHERS_LABEL_KEY, OTHERS_LAB_TEMPLATE_ID, OTHERS_RESULT_KEY, UST_ABG_TEMPLATE_ID, getNormalRangeFieldKey, getUlnFieldKey } from '@/features/labs/labTemplates'
 import { withAbgDerivedValues } from '@/features/labs/labDerived'
 import { buildActiveDailyProblemNotes } from '@/features/problems/problemUtils'
@@ -24,17 +34,19 @@ import { applyTagToPatient, isPatientActive, removeTagFromPatient } from '@/feat
 import { clearPatientWardTag, getOrCreateWardTag, setPatientWardTag } from '@/features/tags/wardTagUtils'
 import { tokenizePatternText } from '@/features/templates/templateEngine'
 import { toLocalISODate, toLocalTime } from '@/lib/dateTime'
-import type { CustomView, DailyUpdate, LabEntry, MasterProblem, MedicationEntry, OrderEntry, Patient, ReportTemplate, TagDefinition, VitalEntry } from '@/types'
+import type { CustomAction, CustomView, DailyUpdate, LabEntry, MasterProblem, MedicationEntry, OrderEntry, Patient, ReportTemplate, TagDefinition, VitalEntry } from '@/types'
 import {
   type PatientSelection,
   ToolError,
+  renderReport,
+  resolveTemplate,
   patientIdentifier,
   resolveSort,
   resolveTag,
   resolveView,
   suggestTags,
 } from './queries'
-import type { World } from './world'
+import { type World, loadWorld } from './world'
 
 const lower = (value: string): string => value.trim().toLowerCase()
 const clean = (value: string | undefined): string => (value ?? '').trim()
@@ -53,7 +65,8 @@ const requireTime = (value: string | undefined, fallback: string, label = 'time'
   return value
 }
 
-export type Done = { summary: string; patient?: Patient }
+/** `report` is text the caller must pass on to the user exactly as it is (a template a custom action ran). */
+export type Done = { summary: string; patient?: Patient; report?: { template: string; patients: string[]; text: string } }
 
 // --- Who is being changed ----------------------------------------------------------------------------
 
@@ -966,4 +979,77 @@ export const planDelete = async (world: World, input: { kind: DeleteKind; patien
   const template = resolveTemplateForEdit(world, input.name ?? '')
   if (template.locked) throw new ToolError(`"${template.name}" is a built-in template and cannot be deleted.`)
   return { summary: `Delete the report template "${template.name}".`, run: async () => { await db.reportTemplates.delete(template.id as number); return { summary: `Deleted the template "${template.name}".` } } }
+}
+
+// --- Custom actions ------------------------------------------------------------------------------------------------
+
+const tagNames = (world: World, ids: number[]): string[] => ids.map((id) => world.tagsById.get(id)?.name ?? `#${id}`)
+
+const missingTagsHint = (world: World, patient: Patient, action: CustomAction): string => {
+  const options = action.conditions.map((condition) => {
+    const missing = condition.requiredTagIds.filter((id) => !(patient.tagIds ?? []).includes(id) && !(patient.mainServiceTagIds ?? []).includes(id) && !(patient.referralServiceTagIds ?? []).includes(id))
+    return missing.length > 0 ? `needs ${tagNames(world, missing).join(' + ')}` : 'is limited to certain days'
+  })
+  return options.length > 0 ? ` Its conditions: ${options.join('; ')}.` : ''
+}
+
+/**
+ * Presses a manual custom action's button, the way PUHRR does: a patient action adds its checklist items (and
+ * those of every matching condition) to that patient's checklist for the date and applies its tag effects; a
+ * general action does the same on the General checklist and, if it has a template, renders it. Items already on
+ * the list are skipped, so running it twice adds nothing twice. When no condition matches the patient nothing
+ * happens: the answer says which tags are missing, and the user decides whether to add one.
+ */
+export const runCustomAction = async (world: World, input: { action: CustomAction; patient: Patient | null; date?: string }): Promise<Done> => {
+  const { action } = input
+  if (action.disabled) throw new ToolError(`"${action.name}" is switched off in PUHRR.`)
+  if (action.triggerType === 'automatic') {
+    throw new ToolError(`"${action.name}" runs by itself when the tag ${tagNames(world, action.triggerTagId !== undefined ? [action.triggerTagId] : []).join('') || '(unset)'} is added to a patient (use set_tags). It has no button to press.`)
+  }
+  const date = requireDate(input.date, toLocalISODate())
+
+  if (action.scope === 'patient') {
+    if (!input.patient) throw new ToolError(`"${action.name}" is for one patient: give the room and last name.`)
+    const patient = await freshPatient(input.patient.id as number)
+    const matched = resolveMatchingConditions(patient, action)
+    if (!actionHasApplicableEffect(action, matched)) {
+      throw new ToolError(`"${action.name}" did nothing for ${formatPatientLabelForNotice(patient)}: no condition matches this patient.${missingTagsHint(world, patient, action)} Tell the user, and add a tag with set_tags only if they say so.`)
+    }
+    const target = { patient, date }
+    const before = new Set((await currentChecklist(target)).map((item) => item.text))
+    await applyCustomActionEffects(patient, action, matched, await freshTags(), (items) => appendChecklistItemsToPatientDate(patient.id as number, date, items))
+    const after = await currentChecklist(target)
+    const added = after.map((item) => item.text).filter((text) => !before.has(text))
+    const afterPatient = await freshPatient(patient.id as number)
+    const tagChange = [...(patient.tagIds ?? [])].sort().join() === [...(afterPatient.tagIds ?? [])].sort().join() ? '' : ' Tags were changed too.'
+    return {
+      summary: `Ran "${action.name}" for ${patientIdentifier(afterPatient)} (checklist of ${date}): ${added.length > 0 ? `added ${added.length} item(s): ${added.join('; ')}` : 'all its items were already on the list'}.${tagChange}`,
+      patient: afterPatient,
+    }
+  }
+
+  if (input.patient) throw new ToolError(`"${action.name}" is a General action: it takes no patient. Run it without room and last name.`)
+  const matched = resolveMatchingGeneralConditions(action)
+  const hasEffect = actionHasApplicableGeneralEffect(action, matched)
+  const target = { patient: null, date }
+  const before = new Set((await currentChecklist(target)).map((item) => item.text))
+  if (hasEffect) await applyGeneralCustomActionEffects(action, matched, (items) => appendChecklistItemsForPatientDate(GENERAL_CHECKLIST_PATIENT_ID, date, items))
+  const added = (await currentChecklist(target)).map((item) => item.text).filter((text) => !before.has(text))
+  const checklistPart = !hasEffect
+    ? `"${action.name}" has nothing to add today`
+    : `Ran "${action.name}" (General checklist of ${date}): ${added.length > 0 ? `added ${added.length} item(s): ${added.join('; ')}` : 'all its items were already on the list'}`
+
+  if (action.templateRunTemplateId === undefined) return { summary: `${checklistPart}.` }
+
+  const fresh = await loadWorld()
+  const template = resolveTemplate(fresh, { templateId: action.templateRunTemplateId })
+  const rendered = renderReport(fresh, template, {
+    tags: tagNames(fresh, action.templateRunFilterTagIds ?? []),
+    tagMode: action.templateRunFilterTagMode ?? 'OR',
+    wards: tagNames(fresh, action.templateRunFilterWardTagIds ?? []),
+  })
+  return {
+    summary: `${checklistPart}. It also rendered the template "${template.name}" for ${rendered.patients.length} patient(s), using the action's saved filter.`,
+    report: { template: template.name, patients: rendered.patients, text: rendered.text },
+  }
 }
