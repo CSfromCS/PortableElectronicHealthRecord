@@ -29,7 +29,7 @@ Request body:
 ```
 - `gistId` null on first push (creates new Gist), string on subsequent pushes (updates existing)
 - `description` is a JSON string stored in the Gist's description field (unencrypted metadata)
-- `blob` is the AES-256-GCM encrypted, base64-encoded full database snapshot
+- `blob` is the full database snapshot, gzip-compressed, then AES-256-GCM encrypted and base64-encoded (`"2."` + base64 of flag, salt, IV, ciphertext). Older snapshots (base64 of a JSON envelope, no compression) are still readable. The Worker treats the blob as opaque text.
 
 Response: `{ "gistId": "abc123..." }`
 
