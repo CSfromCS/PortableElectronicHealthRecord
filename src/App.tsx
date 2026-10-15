@@ -5633,9 +5633,13 @@ function App() {
     setSyncStatus('syncing')
 
     try {
+      // The newest listed version is simply the room as it is, so download it as 'latest': picking a
+      // specific revision re-uploads it as a new snapshot, which is needless here and can fail when
+      // the room is close to its size limit — leaving the device on its first sync again.
+      const newestVersionSha = conflictVersions[0]?.sha
       const result = selectedConflictVersion === 'local'
         ? await resolveConflictKeepLocal(syncConfig)
-        : await resolveConflictWithVersion(syncConfig, selectedConflictVersion)
+        : await resolveConflictWithVersion(syncConfig, selectedConflictVersion === newestVersionSha ? 'latest' : selectedConflictVersion)
 
       setSyncConflictOpen(false)
       setConflictVersions([])
@@ -5651,7 +5655,7 @@ function App() {
     } finally {
       setIsSyncBusy(false)
     }
-  }, [applySyncResult, isSyncBusy, refreshSyncInsight, selectedConflictVersion, syncConfig])
+  }, [applySyncResult, conflictVersions, isSyncBusy, refreshSyncInsight, selectedConflictVersion, syncConfig])
 
   const exportBackup = async () => {
     const payload: BackupPayload = {

@@ -50,6 +50,21 @@ const toCryptoBuffer = (bytes: Uint8Array): ArrayBuffer => {
   return copiedBuffer
 }
 
+/** gzip with the platform's stream API; absent only on browsers older than 2023. */
+const gzip = async (bytes: Uint8Array): Promise<Uint8Array | null> => {
+  if (typeof CompressionStream === 'undefined') return null
+  const stream = new Blob([toCryptoBuffer(bytes)]).stream().pipeThrough(new CompressionStream('gzip'))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
+const gunzip = async (bytes: Uint8Array): Promise<Uint8Array> => {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('This browser cannot read the compressed sync data. Update your browser.')
+  }
+  const stream = new Blob([toCryptoBuffer(bytes)]).stream().pipeThrough(new DecompressionStream('gzip'))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
 const deriveEncryptionKey = async (roomCode: string, salt: Uint8Array): Promise<CryptoKey> => {
   const crypto = getCrypto()
   const roomCodeKeyMaterial = await crypto.subtle.importKey(
@@ -85,29 +100,42 @@ export const sha256Hex = async (value: string): Promise<string> => {
     .join('')
 }
 
+// Blob format v2: "2." + base64 of [flag | salt | iv | AES-GCM ciphertext]. The flag says whether the
+// plaintext was gzipped before encrypting; it is also the GCM additional data, so it can't be
+// changed without the decrypt failing. Compressing before encrypting is safe here: the snapshot is
+// the user's own data, never mixed with anything an outsider chooses, so there is no
+// chosen-plaintext length oracle. v1 blobs (base64 of a JSON envelope) are still readable.
+const BLOB_V2_PREFIX = '2.'
+const FLAG_PLAIN = 0
+const FLAG_GZIP = 1
+/** Cap on decompressed size, so a corrupted blob can't expand without bound. */
+const MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024
+
 export const encryptPayloadToBlob = async (payload: unknown, roomCode: string): Promise<string> => {
   const crypto = getCrypto()
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES))
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
   const encryptionKey = await deriveEncryptionKey(roomCode, salt)
   const plaintextBytes = textEncoder.encode(JSON.stringify(payload))
+  const compressed = await gzip(plaintextBytes)
+  const useGzip = compressed !== null && compressed.length < plaintextBytes.length
+  const flag = new Uint8Array([useGzip ? FLAG_GZIP : FLAG_PLAIN])
   const encryptedBuffer = await crypto.subtle.encrypt(
     {
       name: 'AES-GCM',
       iv: toCryptoBuffer(iv),
+      additionalData: toCryptoBuffer(flag),
     },
     encryptionKey,
-    plaintextBytes,
+    toCryptoBuffer(useGzip ? compressed : plaintextBytes),
   )
 
-  const packedPayload: PackedCipherPayload = {
-    version: 1,
-    salt: bytesToBase64(salt),
-    iv: bytesToBase64(iv),
-    ciphertext: bytesToBase64(new Uint8Array(encryptedBuffer)),
-  }
-
-  return bytesToBase64(textEncoder.encode(JSON.stringify(packedPayload)))
+  const packed = new Uint8Array(1 + SALT_BYTES + IV_BYTES + encryptedBuffer.byteLength)
+  packed.set(flag, 0)
+  packed.set(salt, 1)
+  packed.set(iv, 1 + SALT_BYTES)
+  packed.set(new Uint8Array(encryptedBuffer), 1 + SALT_BYTES + IV_BYTES)
+  return BLOB_V2_PREFIX + bytesToBase64(packed)
 }
 
 const isPackedCipherPayload = (value: unknown): value is PackedCipherPayload => {
@@ -122,7 +150,49 @@ const isPackedCipherPayload = (value: unknown): value is PackedCipherPayload => 
   )
 }
 
+const parseJson = <T>(bytes: Uint8Array): T => {
+  try {
+    return JSON.parse(textDecoder.decode(bytes)) as T
+  } catch {
+    throw new Error('Decrypted payload is not valid JSON.')
+  }
+}
+
+const decryptBlobV2 = async <T>(blob: string, roomCode: string): Promise<T> => {
+  let packed: Uint8Array
+  try {
+    packed = base64ToBytes(blob.slice(BLOB_V2_PREFIX.length))
+  } catch {
+    throw new Error('Encrypted payload format is invalid.')
+  }
+  if (packed.length <= 1 + SALT_BYTES + IV_BYTES) throw new Error('Encrypted payload format is invalid.')
+
+  const flag = packed.subarray(0, 1)
+  if (flag[0] !== FLAG_PLAIN && flag[0] !== FLAG_GZIP) throw new Error('Encrypted payload format is invalid.')
+  const salt = packed.subarray(1, 1 + SALT_BYTES)
+  const iv = packed.subarray(1 + SALT_BYTES, 1 + SALT_BYTES + IV_BYTES)
+  const ciphertext = packed.subarray(1 + SALT_BYTES + IV_BYTES)
+
+  const decryptionKey = await deriveEncryptionKey(roomCode, salt)
+  let decrypted: Uint8Array
+  try {
+    decrypted = new Uint8Array(await getCrypto().subtle.decrypt(
+      { name: 'AES-GCM', iv: toCryptoBuffer(iv), additionalData: toCryptoBuffer(flag) },
+      decryptionKey,
+      toCryptoBuffer(ciphertext),
+    ))
+  } catch {
+    throw new Error('Unable to decrypt data. Check room code.')
+  }
+
+  const plaintext = flag[0] === FLAG_GZIP ? await gunzip(decrypted) : decrypted
+  if (plaintext.length > MAX_DECOMPRESSED_BYTES) throw new Error('Decrypted payload is too large.')
+  return parseJson<T>(plaintext)
+}
+
 export const decryptBlobToPayload = async <T>(blob: string, roomCode: string): Promise<T> => {
+  if (blob.startsWith(BLOB_V2_PREFIX)) return decryptBlobV2<T>(blob, roomCode)
+
   const packedText = textDecoder.decode(base64ToBytes(blob))
   let packed: unknown
 
@@ -156,9 +226,5 @@ export const decryptBlobToPayload = async <T>(blob: string, roomCode: string): P
     throw new Error('Unable to decrypt data. Check room code.')
   }
 
-  try {
-    return JSON.parse(textDecoder.decode(new Uint8Array(decrypted))) as T
-  } catch {
-    throw new Error('Decrypted payload is not valid JSON.')
-  }
+  return parseJson<T>(new Uint8Array(decrypted))
 }
