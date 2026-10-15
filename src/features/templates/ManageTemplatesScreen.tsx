@@ -92,7 +92,7 @@ type PickerTab = {
 /** Grouped so it's obvious at a glance which category of information a variable pulls from,
  * rather than one long undifferentiated list. */
 const PICKER_TABS: PickerTab[] = [
-  { id: 'identity', label: 'Identity', flatIds: ['roomNumber', 'ward', 'lastName', 'firstName', 'middleName', 'age', 'sex'] },
+  { id: 'identity', label: 'Identity', flatIds: ['roomNumber', 'ward', 'lastName', 'lastNameUppercase', 'firstName', 'middleName', 'age', 'sex'] },
   { id: 'clinical', label: 'Clinical', flatIds: ['mainService', 'referralService', 'clinicalSummary', 'database'], diagnosisIds: DIAGNOSIS_VARIABLE_ORDER },
   { id: 'dates', label: 'Dates', flatIds: ['admitDate', 'admitTime', 'referralDate', 'referralTime', 'dischargeDate', 'dischargeTime', 'currentDate', 'currentTime'] },
   { id: 'tags', label: 'Tags' },
@@ -809,6 +809,9 @@ const BlockVariableConfigDialog = ({
   const isMedications = variableId === 'medications'
   const supportsEntryPattern = !isLabs
   const isGrouped = variableId === 'problems' || variableId === 'checklist'
+  const rangeModes: BlockVariableRangeMode[] = variableId === 'checklist'
+    ? ['numberOfEntries', 'dateRange', 'masterChecklist']
+    : ['numberOfEntries', 'dateRange']
 
   const handleSaveClick = () => {
     if (!isMedications && config.rangeMode === 'dateRange' && config.relativeMode === 'fixed') {
@@ -858,7 +861,7 @@ const BlockVariableConfigDialog = ({
             ) : (
               <div className='space-y-3'>
                 <div className='flex gap-1 rounded-lg border border-clay/20 bg-warm-ivory p-1'>
-                  {(['numberOfEntries', 'dateRange'] as BlockVariableRangeMode[]).map((mode) => (
+                  {rangeModes.map((mode) => (
                     <Button
                       key={mode}
                       type='button'
@@ -867,10 +870,16 @@ const BlockVariableConfigDialog = ({
                       className='flex-1 text-xs'
                       onClick={() => setConfig((previous) => ({ ...previous, rangeMode: mode }))}
                     >
-                      {mode === 'numberOfEntries' ? 'Number of Entries' : 'Date Range'}
+                      {mode === 'numberOfEntries' ? 'Number of Entries' : mode === 'dateRange' ? 'Date Range' : 'Master Checklist'}
                     </Button>
                   ))}
                 </div>
+
+                {config.rangeMode === 'masterChecklist' ? (
+                  <FieldTip>
+                    Shows what the Master Checklist screen shows for today: today's items if there are any, otherwise only the unfinished items carried forward from the latest earlier day. A patient with nothing to show is left out of the report entirely. In a Header or Footer, this is the General (no patient) checklist.
+                  </FieldTip>
+                ) : null}
 
                 {config.rangeMode === 'numberOfEntries' ? (
                   <div className='space-y-1'>
@@ -1377,6 +1386,7 @@ const VariablePickerDialog = ({
   onPickTags,
   onPickBlock,
   onPickDiagnosis,
+  onPickGeneralChecklist,
   restrictToCurrentDateTime = false,
 }: {
   open: boolean
@@ -1385,9 +1395,11 @@ const VariablePickerDialog = ({
   onPickTags: () => void
   onPickBlock: (variableId: BlockVariableId) => void
   onPickDiagnosis: (variableId: DiagnosisVariableId) => void
+  onPickGeneralChecklist: () => void
   /** Header/Footer content prints once per run, not per patient, so only Current Date/Current
    * Time (plus whatever literal text is typed) make sense there — every other variable reads from
-   * a specific patient and is left out of the picker entirely in this mode. */
+   * a specific patient and is left out of the picker entirely in this mode. The one exception is
+   * the General Checklist, which isn't tied to any patient. */
   restrictToCurrentDateTime?: boolean
 }) => (
   <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -1408,6 +1420,13 @@ const VariablePickerDialog = ({
                 {FLAT_VARIABLE_LABELS[variableId]}
               </button>
             ))}
+            <button
+              type='button'
+              className='w-full rounded-md px-2 py-1.5 text-left text-sm text-espresso hover:bg-white/70 transition-colors'
+              onClick={onPickGeneralChecklist}
+            >
+              General Checklist
+            </button>
           </div>
         </ScrollArea>
       ) : (
@@ -1544,6 +1563,10 @@ const FormatPatternEditor = ({
 
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pendingBlockVariable, setPendingBlockVariable] = useState<BlockVariableId | null>(null)
+  /** True while the Checklist dialog was opened from the Header/Footer picker's "General
+   * Checklist" entry rather than a normal Checklist pick — only changes the new chip's starting
+   * range mode (Master Checklist), nothing else. */
+  const [pendingGeneralChecklist, setPendingGeneralChecklist] = useState(false)
   const [tagsDialogOpen, setTagsDialogOpen] = useState(false)
   const [pendingDiagnosisVariable, setPendingDiagnosisVariable] = useState<DiagnosisVariableId | null>(null)
   const [pendingDateTimeFlatId, setPendingDateTimeFlatId] = useState<FlatVariableId | null>(null)
@@ -1902,7 +1925,8 @@ const FormatPatternEditor = ({
       const instance = variablesRef.current[reconfiguringId]
       if (instance?.kind === 'block') return instance.config
     }
-    return buildDefaultBlockVariableConfig(pendingBlockVariable ?? 'vitals')
+    const defaults = buildDefaultBlockVariableConfig(pendingBlockVariable ?? 'vitals')
+    return pendingGeneralChecklist ? { ...defaults, rangeMode: 'masterChecklist' as BlockVariableRangeMode } : defaults
   })()
 
   const currentTagsConfig = (() => {
@@ -1955,7 +1979,7 @@ const FormatPatternEditor = ({
       </div>
       <FieldTip>
         {variableScope === 'currentDateTimeOnly'
-          ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time — this prints once per run, so no patient-specific variable is available here.'
+          ? 'Type directly, press Enter for a new line, and click "Add Variable" for Current Date/Current Time or the General Checklist — this prints once per run, so no patient-specific variable is available here.'
           : 'Type directly, press Enter for a new line, and click "Add Variable" to drop one in at your cursor. Click an inserted Vitals/Labs/Problems/Checklist/Orders/Medications/Tags/Diagnosis block — or a date/time variable — to change its settings.'}
       </FieldTip>
 
@@ -1987,6 +2011,12 @@ const FormatPatternEditor = ({
           setReconfiguringId(null)
           setPendingDiagnosisVariable(variableId)
         }}
+        onPickGeneralChecklist={() => {
+          setPickerOpen(false)
+          setReconfiguringId(null)
+          setPendingGeneralChecklist(true)
+          setPendingBlockVariable('checklist')
+        }}
       />
 
       <BlockVariableConfigDialog
@@ -1994,7 +2024,7 @@ const FormatPatternEditor = ({
         variableId={pendingBlockVariable}
         initialConfig={currentBlockConfig}
         dateTimeFormats={dateTimeFormats}
-        onCancel={() => { setPendingBlockVariable(null); setReconfiguringId(null) }}
+        onCancel={() => { setPendingBlockVariable(null); setReconfiguringId(null); setPendingGeneralChecklist(false) }}
         onSave={(config) => {
           if (pendingBlockVariable === null) return
           const instance: TemplateVariableInstance = { kind: 'block', variableId: pendingBlockVariable, config }
@@ -2005,6 +2035,7 @@ const FormatPatternEditor = ({
           }
           setPendingBlockVariable(null)
           setReconfiguringId(null)
+          setPendingGeneralChecklist(false)
         }}
       />
 

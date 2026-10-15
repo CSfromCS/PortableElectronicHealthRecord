@@ -440,6 +440,7 @@ export type FlatVariableId =
   | 'roomNumber'
   | 'ward'
   | 'lastName'
+  | 'lastNameUppercase'
   | 'firstName'
   | 'middleName'
   | 'age'
@@ -463,10 +464,15 @@ export type FlatVariableId =
  * their own — see the medications-only config fields below for how it's scoped instead. */
 export type BlockVariableId = 'vitals' | 'labs' | 'problems' | 'checklist' | 'orders' | 'medications'
 
-/** 'latest' was removed as a distinct mode — it was exactly equivalent to 'numberOfEntries' with
+/** 'masterChecklist' is Checklist-only: instead of printing whole dated entries, it mirrors the
+ * Master Checklist screen for today — today's entry if there is one, otherwise just the unfinished
+ * items carried forward from the latest earlier day (see `buildMasterChecklistItemsForSource`).
+ * Number of Entries/Date Range settings are ignored in this mode.
+ *
+ * 'latest' was removed as a distinct mode — it was exactly equivalent to 'numberOfEntries' with
  * entryCount 1 (or, for date-grouped record types, the single most recent day), so existing rows
  * migrate to that instead of keeping a redundant option in the UI. */
-export type BlockVariableRangeMode = 'dateRange' | 'numberOfEntries'
+export type BlockVariableRangeMode = 'dateRange' | 'numberOfEntries' | 'masterChecklist'
 
 export type RelativeDateRangeMode = 'fixed' | 'sinceAdmission' | 'lastNDays'
 
