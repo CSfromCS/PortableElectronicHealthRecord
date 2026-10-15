@@ -646,7 +646,7 @@ export const deleteChecklistItem = async (target: ChecklistTarget, ref: ItemRef)
   const index = pickItem(items, ref, `${checklistLabel(target.patient)}'s checklist`)
   const item = items[index]
   await editChecklist(target, (previous) => previous.filter((_, position) => position !== index))
-  return { summary: `Removed "${item.text}" from the checklist of ${checklistLabel(target.patient)}. It can be undone.`, patient: target.patient ?? undefined }
+  return { summary: `Removed "${item.text}" from the checklist of ${checklistLabel(target.patient)}.`, patient: target.patient ?? undefined }
 }
 
 export const moveChecklistItem = async (target: ChecklistTarget, ref: ItemRef, placement: { before?: ItemRef; after?: ItemRef }): Promise<Done> => {

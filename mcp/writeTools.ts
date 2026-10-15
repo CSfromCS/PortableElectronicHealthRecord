@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { listChanges, recordChange, undoChange } from '@/features/changes/changeLog'
+import { listChanges, recordChange } from '@/features/changes/changeLog'
 import type { Patient } from '@/types'
 import {
   type ChecklistTarget,
@@ -69,8 +69,8 @@ const SOURCE = 'mcp'
 
 /**
  * Makes one change and reports it: on the freshest copy of the room, recorded in the change log
- * (so it can be listed and undone), then uploaded before this returns. The answer always names
- * who was changed and how to undo it.
+ * (so it can be listed), then uploaded before this returns. The answer always names who was
+ * changed and which fields.
  */
 const act = (room: RoomFollower, tool: string, handler: (world: World) => Promise<Done>): Promise<TextResult> => run(async () => {
   const outcome = await room.write((world) => recordChange({ source: SOURCE, tool, summary: tool }, async (context) => {
@@ -79,12 +79,12 @@ const act = (room: RoomFollower, tool: string, handler: (world: World) => Promis
     if (done.patient) context.setPatient({ id: done.patient.id, identifier: patientIdentifier(done.patient) })
     return done
   }))
-  const { result, entryId, ops } = outcome.result
+  const { result, entryId, ops, moreOps } = outcome.result
   return json({
     done: entryId !== null,
     summary: result.summary,
     ...(result.report ? { report: result.report } : {}),
-    ...(entryId !== null ? { ...describeOps(ops), changeId: entryId, undo: `undo_change with changeId ${entryId}` } : { note: 'Nothing needed to change.' }),
+    ...(entryId !== null ? describeOps(ops, moreOps) : { note: 'Nothing needed to change.' }),
     storedInRoom: outcome.stored,
     ...(outcome.warning ? { warning: outcome.warning } : {}),
   })
@@ -148,7 +148,7 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
       confirmationCode: code,
       willDo: action.summary,
       nothingChangedYet: true,
-      next: `Tell the user exactly what is above and ask if they want it. Only if they clearly say yes, call confirm_action with this code (valid ${PENDING_MINUTES} minutes). It can be undone afterwards for 30 days.`,
+      next: `Tell the user exactly what is above and ask if they want it. Only if they clearly say yes, call confirm_action with this code (valid ${PENDING_MINUTES} minutes). This cannot be undone afterwards.`,
     })
   }
 
@@ -291,7 +291,7 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
   server.registerTool('reopen_checklist_item', { description: 'Un-check a completed item; it moves back up.', inputSchema: { ...checklistShape, ...itemShape } },
     ({ index, text, ...target }) => act(room, 'reopen_checklist_item', (world) => setChecklistItemDone(checklistTarget(world, target), { index, text }, false)))
   server.registerTool('delete_checklist_item', {
-    description: 'Remove a checklist item. No confirmation step, but it can be undone with undo_change.',
+    description: 'Remove a checklist item. One step, with no confirmation and no undo: only when the user clearly asked for exactly this item to go.',
     inputSchema: { ...checklistShape, ...itemShape },
   }, ({ index, text, ...target }) => act(room, 'delete_checklist_item', (world) => deleteChecklistItem(checklistTarget(world, target), { index, text })))
   server.registerTool('move_checklist_item', {
@@ -337,7 +337,7 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
     inputSchema: { ...patientShape, ...simpleRefShape, newText: z.string() },
   }, ({ itemId, text, newText, ...ref }) => act(room, 'edit_simple_problem', (world) => editSimpleProblem(resolvePatientForWrite(world, toRef(ref)), { itemId, text }, newText)))
   server.registerTool('delete_simple_problems', {
-    description: 'Remove lines from the Simple Problem List. One step, but it can be undone with undo_change.',
+    description: 'Remove lines from the Simple Problem List. One step, with no confirmation and no undo: only when the user clearly asked for exactly these lines to go.',
     inputSchema: { ...patientShape, lines: z.array(z.object(simpleRefShape)).min(1) },
   }, ({ lines, ...ref }) => act(room, 'delete_simple_problems', (world) => deleteSimpleProblems(resolvePatientForWrite(world, toRef(ref)), lines)))
   server.registerTool('reorder_simple_problems', {
@@ -355,7 +355,7 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
   }, ({ lines, problemId, problemTitle, action, ...ref }) => act(room, 'group_simple_problems', (world) =>
     groupSimpleProblems(world, resolvePatientForWrite(world, toRef(ref)), lines, { problemId, title: problemTitle }, action ?? 'group')))
   server.registerTool('create_problem_lists', {
-    description: 'Write an APPROVED problem list package in one step (one undo): the Simple Problem List lines, the master problems (with sub-problems and the date each was identified) and which lines are grouped under which problem. Use it only after the user has seen and approved the proposal. Lines and problems that already exist are reused. dateIdentified is YYYY-MM-DD (or YYYY-MM / YYYY when only partly known); leave it out to mean the admission date.',
+    description: 'Write an APPROVED problem list package in one step: the Simple Problem List lines, the master problems (with sub-problems and the date each was identified) and which lines are grouped under which problem. Use it only after the user has seen and approved the proposal. Lines and problems that already exist are reused. dateIdentified is YYYY-MM-DD (or YYYY-MM / YYYY when only partly known); leave it out to mean the admission date.',
     inputSchema: {
       ...patientShape,
       simpleItems: z.array(z.string()).optional().describe('Simple-list lines, in order.'),
@@ -397,7 +397,7 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
     inputSchema: { name: z.string(), newName: z.string().optional(), enabled: z.boolean().optional(), patternText: z.string().optional(), headerPatternText: z.string().optional(), footerPatternText: z.string().optional() },
   }, ({ name, ...changes }) => act(room, 'update_template', (world) => updateTemplate(world, name, changes)))
 
-  // --- Deleting, confirming, undoing ---------------------------------------------------------------------------------
+  // --- Deleting, confirming, recent changes ---------------------------------------------------------------------------------
 
   server.registerTool('request_delete', {
     description: 'Step one of deleting something. Changes nothing: it returns exactly what would be removed and a code. Tell the user that, word for word, and only after a clear yes call confirm_action. kind: patient (with everything recorded for them), vital, lab, medication, order, problem (with its sub-problems), view, or template.',
@@ -436,29 +436,15 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
   }))
 
   server.registerTool('recent_changes', {
-    description: 'What has been changed through this connection, newest first, with each change id for undo_change and, per change, the fields it changed (old value → new value).',
+    description: 'What has been changed through this connection, newest first, with the fields each change touched (old value → new value). Changes cannot be undone: to put something back, change it back by hand with the user\'s say-so.',
     inputSchema: { limit: z.number().int().positive().max(50).optional() },
   }, ({ limit }) => run(async () => {
     await room.forceRefresh()
     return json((await listChanges(limit ?? 15)).map((entry) => ({
-      changeId: entry.id,
       at: entry.at,
       what: entry.summary,
       patient: entry.patientIdentifier ?? null,
-      undone: Boolean(entry.undoneAt),
-      ...describeOps(entry.ops),
+      ...describeOps(entry.ops, entry.moreOps),
     })))
-  }))
-
-  server.registerTool('undo_change', {
-    description: 'Undo one change by its changeId, including restoring something deleted (possible for 30 days). If the thing was edited again since, it refuses and says so; only use force after the user agrees to overwrite those later edits.',
-    inputSchema: { changeId: z.number().int(), force: z.boolean().optional() },
-  }, ({ changeId, force }) => run(async () => {
-    const outcome = await room.write(async () => undoChange(changeId, { force }))
-    const result = outcome.result
-    if (!result.undone) {
-      return { isError: true, content: [{ type: 'text' as const, text: `Not undone: ${result.conflicts.join('; ')}. Tell the user and ask whether to undo anyway.` }] }
-    }
-    return json({ undone: true, summary: result.entry.summary, storedInRoom: outcome.stored, ...(outcome.warning ? { warning: outcome.warning } : {}) })
   }))
 }

@@ -32,9 +32,9 @@ const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
 // v4 adds per-record uid/updatedAt, date/time formats and deletion tombstones. A v3 snapshot (one
 // pushed before every device updated) is still readable — its records get their sync fields as
 // they're imported — while an app still on v3 refuses a v4 snapshot and asks to update.
-// v5 adds the change log (what an MCP client changed, with what is needed to undo it). Older snapshots are
+// v5 adds the change log (what an MCP client changed, field by field). Older snapshots are
 // still readable; an app on v4 refuses a v5 snapshot and asks to update, so a device that cannot
-// show or undo those changes never takes part once an MCP client is writing.
+// carry those changes never takes part once an MCP client is writing.
 const SYNC_DATA_VERSION = 5
 const OLDEST_READABLE_SYNC_DATA_VERSION = 3
 const DEFAULT_SYNC_ENDPOINT = 'https://puhr-sync.csfromcs.workers.dev'
