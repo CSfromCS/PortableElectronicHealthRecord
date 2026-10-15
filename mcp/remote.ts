@@ -77,7 +77,8 @@ const main = async () => {
   // One line per request: no query strings, no bodies, no tokens.
   app.use((req: Request, res: Response, next: NextFunction) => {
     const started = Date.now()
-    res.on('finish', () => console.error(`${new Date().toISOString()} ${req.method} ${req.path} ${res.statusCode} ${Date.now() - started}ms`))
+    const path = req.path // read now: a router mounted later rewrites it
+    res.on('finish', () => console.error(`${new Date().toISOString()} ${req.method} ${path} ${res.statusCode} ${Date.now() - started}ms`))
     next()
   })
 
