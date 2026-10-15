@@ -42,7 +42,8 @@ const main = async () => {
   mkdirSync(dirname(file), { recursive: true })
   writeFileSync(file, `${await hashPassphrase(first)}\n`, { mode: 0o600 })
   try { chmodSync(file, 0o600) } catch { /* not supported everywhere */ }
-  console.error(`Saved. Restart the remote server so it uses the new passphrase (existing sign-ins stay valid until you delete ${file}.state.json).`)
+  const stateFile = process.env.PUHRR_OAUTH_STATE_FILE?.trim() || `${file}.state.json`
+  console.error(`Saved. Restart the remote server so it uses the new passphrase. Existing sign-ins stay valid until you delete ${stateFile}.`)
 }
 
 main().catch((error: unknown) => {

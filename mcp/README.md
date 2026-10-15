@@ -121,6 +121,42 @@ Requires Node 20 or newer and git.
    to `env`, restart the client, and try one small change on a test patient, then check it appears
    on your devices, that the client reported exactly what it changed, and that asking it to undo puts it back.
 
+## Remote access (HTTPS, with sign-in)
+
+For a client that cannot start a local program (a phone, a web app), the same tools can be served over HTTPS:
+`npm run mcp:remote`. Access needs a sign-in; nothing is reachable without it.
+
+1. **Set the passphrase.** In a terminal you can type in (over ssh, `ssh -t`):
+   `PUHRR_OAUTH_PASSPHRASE_FILE=/path/to/passphrase npm run mcp:passphrase`. It is read without being shown and only a
+   salted hash is saved (at least 12 characters; a few random words work well).
+2. **Run the server** with the settings below. It listens on `127.0.0.1` only.
+3. **Put a reverse proxy with a TLS certificate in front of it** (for example Caddy, which gets a certificate by itself),
+   on a hostname that points to the machine. Ports 80 and 443 must be reachable.
+4. **Add the address `https://<your-host>/mcp`** as a connector in the client. It registers itself, sends you to a sign-in page,
+   and you type the passphrase and choose **read only** or **read and edit**. The client then holds a one-hour access token
+   and a 30-day refresh token. Only hashes of tokens are stored.
+
+What it does for you: PKCE, dynamic client registration (redirects are accepted only to `https://claude.ai/api/mcp/auth_callback`,
+`https://claude.com/api/mcp/auth_callback`, loopback addresses, and `PUHRR_OAUTH_REDIRECTS`), token revocation, a lockout after
+5 wrong passphrases (15 minutes, for everyone), a check of the `Host` header, and one server per client session so the two-step
+delete and discharge codes survive between requests. A read-only sign-in never sees the write tools.
+
+Good practice at the proxy: only the sign-in page (`/authorize`, `/oauth/confirm`) and the discovery documents
+(`/.well-known/*`) need to be reachable by a person's browser. `/mcp`, `/token`, `/register` and `/revoke` are called by the client's
+servers, so they can be limited to that client's published address range. To sign everyone out, stop the server, delete the
+state file and start it again; to change the passphrase, run `mcp:passphrase` again and restart.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PUHRR_PUBLIC_URL` | — | The https address clients use, no path (required) |
+| `PUHRR_OAUTH_PASSPHRASE_FILE` | — | File made by `mcp:passphrase` (required) |
+| `PUHRR_OAUTH_STATE_FILE` | `<passphrase file>.state.json` | Registered clients and token hashes |
+| `PUHRR_OAUTH_REDIRECTS` | — | Extra allowed redirect URIs, comma-separated |
+| `PUHRR_MCP_HTTP_HOST` / `PUHRR_MCP_HTTP_PORT` | `127.0.0.1` / `8787` | Where it listens (behind the proxy) |
+| `PUHRR_ALLOW_LOCAL_HOST` | off | `1` also answers to `localhost` (for testing only) |
+
+`PUHRR_ALLOW_WRITES=1` decides whether "read and edit" is offered at all. Everything the write tools do is still logged and undoable.
+
 ## Settings
 
 | Variable | Default | Meaning |
