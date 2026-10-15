@@ -10,6 +10,7 @@ import {
   listTags,
   previewTemplate,
   renderReport,
+  describeProblemLists,
   resolvePatient,
   resolveTemplate,
   selectPatients,
@@ -39,6 +40,7 @@ CHANGING THINGS — these rules protect real patients:
 - Deleting and discharging are two steps. request_delete / request_discharge change nothing and return a code and a plain description. Tell the user that description, and call confirm_action only after they clearly say yes to it. Never confirm on your own initiative, never reuse a code for something else, and never describe the action differently from the tool.
 - After EVERY change, tell the user exactly what you did, from the tool's answer and nothing else: who (room and last name), then each field or entry that changed with its old and new value (deleted items: what was removed), and the change id. Do not summarize it away or add what the tool did not say. Keep it short. If a call changed nothing, say so. The app has no history screen, so this message is the user's only record of the edit.
 - Every change can be undone (recent_changes, undo_change), including deletions for 30 days. End each report by saying the user can ask you to undo it. If the user says "undo that", "that was wrong" or names an earlier edit, undo exactly that change by its id (call recent_changes if you need to find it), then say what was put back. If undo is refused because the thing was edited again, say so and ask before using force.
+- Problem lists: draft them in your reply first (simple lines: positive findings and key negatives; then master problems with the date each was identified and which lines are grouped under each). Write only after the user approves or corrects the draft, with create_problem_lists. Never write a drafted list on your own.
 - If a result says the change could not be stored in the sync room, tell the user plainly: it is not yet on their devices.`
 
 const selectionShape = {
@@ -132,6 +134,11 @@ export const createPuhrrServer = (room: RoomFollower): McpServer => {
       ...selectionShape,
     },
   }, ({ date, ...selection }) => run(async () => json(describeChecklist(await room.getWorld(), date, selection as PatientSelection))))
+
+  server.registerTool('get_problem_lists', {
+    description: "A patient's Simple Problem List (each line with its itemId and the master problems it is grouped under) and Master Problem List (numbered like the Problems tab, with sub-problems, status and date identified). Read this before adding or changing anything.",
+    inputSchema: { ...patientRefShape },
+  }, (ref) => run(async () => json(describeProblemLists(await room.getWorld(), resolvePatient(await room.getWorld(), ref)))))
 
   server.registerTool('list_custom_actions', {
     description: "The user's custom actions (the buttons in PUHRR, such as Start Admission Papers): what each adds to the checklist, which tags it needs or changes, and whether it is a button (manual) or fires by itself when a tag is added (automatic). Use run_custom_action to press a manual one.",
