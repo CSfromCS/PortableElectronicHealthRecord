@@ -13,18 +13,24 @@ import {
   addOrder,
   addPatient,
   addProblem,
+  addSimpleProblems,
   addVitals,
+  createProblemLists,
   createTag,
   createView,
   deleteChecklistItem,
+  deleteSimpleProblems,
   dischargePatient,
   duplicateTemplate,
   editChecklistItem,
   editProblem,
+  editSimpleProblem,
+  groupSimpleProblems,
   moveChecklistItem,
   planDelete,
   runCustomAction,
   reorderProblems,
+  reorderSimpleProblems,
   resolvePatientForWrite,
   setChecklistItemDone,
   setDailyNote,
@@ -319,6 +325,48 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
     inputSchema: { ...patientShape, order: z.array(z.number().int()), parentProblemId: z.number().int().optional() },
   }, ({ order, parentProblemId, ...ref }) => act(room, 'reorder_problems', (world) =>
     reorderProblems(world, resolvePatientForWrite(world, toRef(ref)), { order, parent: { problemId: parentProblemId } })))
+  // --- Simple problem list --------------------------------------------------------------------------------------------
+
+  const simpleRefShape = { itemId: z.number().int().optional(), text: z.string().optional().describe('The exact text of the line.') }
+  server.registerTool('add_simple_problems', {
+    description: 'Add lines to the end of a patient\'s Simple Problem List: one salient finding per line, as in the Simple Problem List tab. Lines already on the list are skipped. Call get_problem_lists first so you do not repeat what is there.',
+    inputSchema: { ...patientShape, lines: z.array(z.string()).min(1) },
+  }, ({ lines, ...ref }) => act(room, 'add_simple_problems', (world) => addSimpleProblems(resolvePatientForWrite(world, toRef(ref)), lines)))
+  server.registerTool('edit_simple_problem', {
+    description: 'Reword one line of the Simple Problem List (by itemId or its exact current text).',
+    inputSchema: { ...patientShape, ...simpleRefShape, newText: z.string() },
+  }, ({ itemId, text, newText, ...ref }) => act(room, 'edit_simple_problem', (world) => editSimpleProblem(resolvePatientForWrite(world, toRef(ref)), { itemId, text }, newText)))
+  server.registerTool('delete_simple_problems', {
+    description: 'Remove lines from the Simple Problem List. One step, but it can be undone with undo_change.',
+    inputSchema: { ...patientShape, lines: z.array(z.object(simpleRefShape)).min(1) },
+  }, ({ lines, ...ref }) => act(room, 'delete_simple_problems', (world) => deleteSimpleProblems(resolvePatientForWrite(world, toRef(ref)), lines)))
+  server.registerTool('reorder_simple_problems', {
+    description: 'Set the order of the Simple Problem List. order lists every line\'s itemId once, first to last.',
+    inputSchema: { ...patientShape, order: z.array(z.number().int()) },
+  }, ({ order, ...ref }) => act(room, 'reorder_simple_problems', (world) => reorderSimpleProblems(resolvePatientForWrite(world, toRef(ref)), order)))
+  server.registerTool('group_simple_problems', {
+    description: 'Group Simple Problem List lines under a master problem (color-coding them to it), or take them out of it again. A line can sit under several problems. The problem must already exist and be active (add_problem or create_problem_lists).',
+    inputSchema: {
+      ...patientShape,
+      lines: z.array(z.object(simpleRefShape)).min(1),
+      problemId: z.number().int().optional(), problemTitle: z.string().optional(),
+      action: z.enum(['group', 'ungroup']).optional().describe('Default group.'),
+    },
+  }, ({ lines, problemId, problemTitle, action, ...ref }) => act(room, 'group_simple_problems', (world) =>
+    groupSimpleProblems(world, resolvePatientForWrite(world, toRef(ref)), lines, { problemId, title: problemTitle }, action ?? 'group')))
+  server.registerTool('create_problem_lists', {
+    description: 'Write an APPROVED problem list package in one step (one undo): the Simple Problem List lines, the master problems (with sub-problems and the date each was identified) and which lines are grouped under which problem. Use it only after the user has seen and approved the proposal. Lines and problems that already exist are reused. dateIdentified is YYYY-MM-DD (or YYYY-MM / YYYY when only partly known); leave it out to mean the admission date.',
+    inputSchema: {
+      ...patientShape,
+      simpleItems: z.array(z.string()).optional().describe('Simple-list lines, in order.'),
+      problems: z.array(z.object({
+        title: z.string(), dateIdentified: z.string().optional(),
+        items: z.array(z.string()).optional().describe('Exact texts of simple-list lines to group under this problem.'),
+        subProblems: z.array(z.object({ title: z.string(), dateIdentified: z.string().optional(), items: z.array(z.string()).optional() })).optional(),
+      })),
+    },
+  }, ({ simpleItems, problems, ...ref }) => act(room, 'create_problem_lists', (world) => createProblemLists(resolvePatientForWrite(world, toRef(ref)), { simpleItems, problems })))
+
   server.registerTool('set_daily_note', {
     description: 'Write a day\'s progress note: Subjective, Objective, Assessment, Plan, and/or the notes under individual problems. appendText adds to what is already there.',
     inputSchema: {

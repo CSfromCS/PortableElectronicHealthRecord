@@ -23,6 +23,7 @@ switched on — **change** it.
 | `get_patient` | Everything about one patient: profile, diagnoses, problems, notes, checklist, vitals, meds, orders, labs |
 | `get_checklist` | What the Master Checklist shows for a date, including unfinished items carried forward |
 | `list_views` | Saved views |
+| `get_problem_lists` | A patient's Simple Problem List (with each line's grouping) and Master Problem List, numbered like the Problems tab |
 | `list_custom_actions` | The custom action buttons: what each adds to the checklist, the tags it needs or changes, manual or automatic |
 | `list_templates` | Each template's exact format spelled out, plus a sample of its output |
 | `preview_template` | A template on sample data |
@@ -39,6 +40,7 @@ answers with the closest existing ones so the caller can ask the user.
 | Daily work | `add_vitals` / `update_vitals`, `add_medication` / `update_medication`, `add_order` / `update_order`, `add_lab` / `update_lab` (validated against the lab templates; calculated ABG fields filled in) |
 | Checklist | `add_checklist_item` (with note), `edit_checklist_item`, `complete_checklist_item`, `reopen_checklist_item`, `delete_checklist_item`, `move_checklist_item` — for a patient or the General checklist |
 | Problems and notes | `add_problem`, `edit_problem`, `set_problem_status`, `reorder_problems`, `set_daily_note` (S/O/A/P and per-problem notes) |
+| Simple problem list | `add_simple_problems`, `edit_simple_problem`, `delete_simple_problems`, `reorder_simple_problems`, `group_simple_problems` (group or ungroup lines under a master problem). `create_problem_lists` writes an approved package in one undoable step: the lines, the master problems (sub-problems and date identified included) and the grouping. Master problems themselves use `add_problem`, `edit_problem`, `set_problem_status`, `reorder_problems` |
 | Custom actions | `run_custom_action`: presses a manual button (patient or General) the way the app does; items already listed are skipped, and a patient who matches no condition is left alone with the missing tags named. A General action with a template also returns its rendered report |
 | Views and templates | `create_view`, `update_view`, `duplicate_template`, `update_template` (rename, on/off, and reword or reorder a format using the variables it already has) |
 | Needs a yes first | `request_delete` (patient, vital, lab, medication, order, problem, view, template), `request_discharge`, then `confirm_action` |

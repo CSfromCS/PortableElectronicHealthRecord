@@ -8,6 +8,7 @@ import {
   matchesTagWardFilter,
   patientPoolCriteriaNeedWindow,
 } from '@/features/filters/patientFilterUtils'
+import { buildMasterProblemLabels } from '@/features/problems/problemUtils'
 import { DEFAULT_PATIENT_SORT_CONFIG, type PatientSortConfig, sortPatientsByConfig } from '@/features/patients/patientSort'
 import { buildTemplateRenderContext, generateTemplateOutput } from '@/features/reporting/templateReport'
 import { WARD_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
@@ -442,4 +443,32 @@ export const resolveCustomAction = (world: World, ref: { actionId?: number; name
   throw new ToolError(`No custom action is named exactly "${ref.name}". ${close.length > 0
     ? `Closest: ${close.map((action) => `"${action.name}"`).join('; ')}. Ask the user which one they mean.`
     : `Custom actions: ${world.customActions.map((action) => `"${action.name}"`).join(', ') || '(none)'}.`}`)
+}
+
+/** Both problem lists of one patient, numbered the way the Problems tab numbers them. */
+export const describeProblemLists = (world: World, patient: Patient) => {
+  const problems = world.masterProblems.filter((problem) => problem.patientId === patient.id)
+  const labels = buildMasterProblemLabels(problems)
+  const label = (id: number) => labels.get(id) ?? `#${id}`
+  const byLabel = (a: { id?: number }, b: { id?: number }) => label(a.id as number).localeCompare(label(b.id as number), undefined, { numeric: true })
+  return {
+    patient: patientIdentifier(patient),
+    simpleProblemList: world.simpleProblemItems
+      .filter((item) => item.patientId === patient.id)
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((item) => ({
+        itemId: item.id,
+        text: item.text,
+        groupedUnder: item.groupedMasterProblemIds.map((id) => `${label(id)} ${world.masterProblems.find((problem) => problem.id === id)?.currentTitle ?? ''}`.trim()),
+      })),
+    masterProblemList: [...problems].sort(byLabel).map((problem) => ({
+      problemId: problem.id,
+      number: label(problem.id as number),
+      title: problem.currentTitle,
+      parentId: problem.parentId,
+      status: problem.status,
+      dateIdentified: problem.dateIdentified || '(blank: shows the admission date)',
+      ...(problem.status === 'resolved' ? { dateResolved: problem.dateResolved, resolutionNotes: problem.resolutionNotes } : {}),
+    })),
+  }
 }

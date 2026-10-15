@@ -21,7 +21,7 @@ import {
 } from '@/features/customActions/customActionUtils'
 import { LAB_TEMPLATES, OTHERS_LABEL_KEY, OTHERS_LAB_TEMPLATE_ID, OTHERS_RESULT_KEY, UST_ABG_TEMPLATE_ID, getNormalRangeFieldKey, getUlnFieldKey } from '@/features/labs/labTemplates'
 import { withAbgDerivedValues } from '@/features/labs/labDerived'
-import { buildActiveDailyProblemNotes } from '@/features/problems/problemUtils'
+import { buildActiveDailyProblemNotes, buildMasterProblemLabels } from '@/features/problems/problemUtils'
 import { SERVICE_TAG_GROUP_NAME, WARD_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
 import { getOrCreateServiceTag } from '@/features/tags/serviceTagUtils'
 import {
@@ -34,7 +34,7 @@ import { applyTagToPatient, isPatientActive, removeTagFromPatient } from '@/feat
 import { clearPatientWardTag, getOrCreateWardTag, setPatientWardTag } from '@/features/tags/wardTagUtils'
 import { tokenizePatternText } from '@/features/templates/templateEngine'
 import { toLocalISODate, toLocalTime } from '@/lib/dateTime'
-import type { CustomAction, CustomView, DailyUpdate, LabEntry, MasterProblem, MedicationEntry, OrderEntry, Patient, ReportTemplate, TagDefinition, VitalEntry } from '@/types'
+import type { CustomAction, CustomView, DailyUpdate, LabEntry, MasterProblem, MedicationEntry, OrderEntry, Patient, ReportTemplate, SimpleProblemItem, TagDefinition, VitalEntry } from '@/types'
 import {
   type PatientSelection,
   ToolError,
@@ -699,30 +699,35 @@ const ensureDailyUpdate = async (patientId: number, date: string): Promise<Daily
   return (await db.dailyUpdates.get(id)) as DailyUpdate
 }
 
-export const addProblem = async (world: World, patient: Patient, input: { title: string; parent?: { problemId?: number; title?: string }; dateIdentified?: string }): Promise<Done> => {
-  const title = clean(input.title)
-  if (!title) throw new ToolError('A problem needs a title.')
-  const parent = input.parent && (input.parent.problemId !== undefined || input.parent.title) ? resolveProblem(world, patient, input.parent) : null
-  if (parent?.parentId !== null && parent !== null) throw new ToolError('A sub-problem cannot have its own sub-problems.')
-  const siblings = world.masterProblems.filter((problem) => problem.patientId === patient.id && problem.parentId === (parent?.id ?? null))
+/** Adds one master problem at the end of its siblings, and, like the Problems tab, shows it on the day that's open. */
+const insertMasterProblem = async (patient: Patient, parentId: number | null, title: string, dateIdentified: string): Promise<number> => {
+  const siblings = (await db.masterProblems.where('patientId').equals(patient.id as number).toArray()).filter((problem) => problem.parentId === parentId)
   const id = await db.masterProblems.add({
     patientId: patient.id as number,
-    parentId: parent?.id ?? null,
+    parentId,
     sortOrder: siblings.length,
     currentTitle: title,
     nameHistory: [],
-    dateIdentified: clean(input.dateIdentified),
+    dateIdentified,
     status: 'active',
     dateResolved: null,
     resolutionNotes: '',
     mergedIntoId: null,
     createdAt: nowIso(),
   }) as number
-  // Like the Problems tab: the new problem also shows on the day that's open.
   const daily = await ensureDailyUpdate(patient.id as number, toLocalISODate())
   if (!daily.problems.some((note) => note.masterProblemId === id)) {
     await db.dailyUpdates.update(daily.id as number, { problems: [...daily.problems, { masterProblemId: id, notes: '' }], lastUpdated: nowIso() })
   }
+  return id
+}
+
+export const addProblem = async (world: World, patient: Patient, input: { title: string; parent?: { problemId?: number; title?: string }; dateIdentified?: string }): Promise<Done> => {
+  const title = clean(input.title)
+  if (!title) throw new ToolError('A problem needs a title.')
+  const parent = input.parent && (input.parent.problemId !== undefined || input.parent.title) ? resolveProblem(world, patient, input.parent) : null
+  if (parent?.parentId !== null && parent !== null) throw new ToolError('A sub-problem cannot have its own sub-problems.')
+  await insertMasterProblem(patient, parent?.id ?? null, title, clean(input.dateIdentified))
   await touchPatient(patient.id as number)
   return { summary: `Added the problem "${title}"${parent ? ` under "${parent.currentTitle}"` : ''} for ${patientIdentifier(patient)}.`, patient }
 }
@@ -1051,5 +1056,199 @@ export const runCustomAction = async (world: World, input: { action: CustomActio
   return {
     summary: `${checklistPart}. It also rendered the template "${template.name}" for ${rendered.patients.length} patient(s), using the action's saved filter.`,
     report: { template: template.name, patients: rendered.patients, text: rendered.text },
+  }
+}
+
+// --- Simple problem list, and the whole problem lists in one go ------------------------------------------------------
+
+export type SimpleRef = { itemId?: number; text?: string }
+
+const simpleItemsOf = async (patientId: number): Promise<SimpleProblemItem[]> =>
+  (await db.simpleProblemItems.where('patientId').equals(patientId).toArray()).sort((a, b) => a.sortOrder - b.sortOrder)
+
+const pickSimpleItem = (items: SimpleProblemItem[], patient: Patient, ref: SimpleRef): SimpleProblemItem => {
+  if (ref.itemId !== undefined) {
+    const found = items.find((item) => item.id === ref.itemId)
+    if (!found) throw new ToolError(`${patientIdentifier(patient)} has no simple-list item with id ${ref.itemId}.`)
+    return found
+  }
+  const wanted = lower(ref.text ?? '')
+  if (!wanted) throw new ToolError('Say which simple-list item: an itemId or its exact text.')
+  const matches = items.filter((item) => lower(item.text) === wanted)
+  if (matches.length === 1) return matches[0]
+  const listing = items.map((item) => `${item.id}: ${item.text}`).join(' | ')
+  throw new ToolError(matches.length === 0
+    ? `No simple-list item reads "${ref.text}" for ${patientIdentifier(patient)}. Items: ${listing || '(none)'}.`
+    : `More than one item reads "${ref.text}". Use itemId: ${matches.map((item) => item.id).join(', ')}.`)
+}
+
+const renumberSimpleItems = async (orderedIds: number[]): Promise<void> => {
+  for (const [index, id] of orderedIds.entries()) await db.simpleProblemItems.update(id, { sortOrder: index })
+}
+
+export const addSimpleProblems = async (patient: Patient, texts: string[]): Promise<Done> => {
+  const cleaned = texts.map(clean).filter((text) => text.length > 0)
+  if (cleaned.length === 0) throw new ToolError('Give at least one line of text.')
+  const existing = await simpleItemsOf(patient.id as number)
+  const seen = new Set(existing.map((item) => lower(item.text)))
+  const added: string[] = []
+  const skipped: string[] = []
+  let order = existing.length
+  for (const text of cleaned) {
+    if (seen.has(lower(text))) { skipped.push(text); continue }
+    seen.add(lower(text))
+    await db.simpleProblemItems.add({ patientId: patient.id as number, text, sortOrder: order++, groupedMasterProblemIds: [], createdAt: nowIso() })
+    added.push(text)
+  }
+  if (added.length > 0) await touchPatient(patient.id as number)
+  return {
+    summary: `Simple problem list of ${patientIdentifier(patient)}: added ${added.length} line(s)${added.length ? ` (${added.join('; ')})` : ''}${skipped.length ? `; already on the list: ${skipped.join('; ')}` : ''}.`,
+    patient,
+  }
+}
+
+export const editSimpleProblem = async (patient: Patient, ref: SimpleRef, newText: string): Promise<Done> => {
+  const item = pickSimpleItem(await simpleItemsOf(patient.id as number), patient, ref)
+  const text = clean(newText)
+  if (!text) throw new ToolError('The line cannot be blank. To remove it use delete_simple_problems.')
+  await db.simpleProblemItems.update(item.id as number, { text })
+  await touchPatient(patient.id as number)
+  return { summary: `Simple problem list of ${patientIdentifier(patient)}: "${item.text}" is now "${text}".`, patient }
+}
+
+export const deleteSimpleProblems = async (patient: Patient, refs: SimpleRef[]): Promise<Done> => {
+  if (refs.length === 0) throw new ToolError('Say which lines to remove.')
+  const items = await simpleItemsOf(patient.id as number)
+  const picked = refs.map((ref) => pickSimpleItem(items, patient, ref))
+  const ids = new Set(picked.map((item) => item.id as number))
+  await db.simpleProblemItems.bulkDelete([...ids])
+  await renumberSimpleItems(items.filter((item) => !ids.has(item.id as number)).map((item) => item.id as number))
+  await touchPatient(patient.id as number)
+  return { summary: `Simple problem list of ${patientIdentifier(patient)}: removed ${picked.length} line(s) (${picked.map((item) => item.text).join('; ')}).`, patient }
+}
+
+export const reorderSimpleProblems = async (patient: Patient, order: number[]): Promise<Done> => {
+  const items = await simpleItemsOf(patient.id as number)
+  const ids = items.map((item) => item.id as number)
+  const sameSet = order.length === ids.length && new Set(order).size === order.length && order.every((id) => ids.includes(id))
+  if (!sameSet) throw new ToolError(`order must list every simple-list item id once. Items: ${items.map((item) => `${item.id}: ${item.text}`).join(' | ')}.`)
+  await renumberSimpleItems(order)
+  await touchPatient(patient.id as number)
+  return { summary: `Simple problem list of ${patientIdentifier(patient)}: reordered.`, patient }
+}
+
+export const groupSimpleProblems = async (
+  world: World,
+  patient: Patient,
+  refs: SimpleRef[],
+  problemRef: { problemId?: number; title?: string },
+  action: 'group' | 'ungroup',
+): Promise<Done> => {
+  if (refs.length === 0) throw new ToolError('Say which simple-list lines.')
+  const problem = resolveProblem(world, patient, problemRef)
+  if (action === 'group' && problem.status !== 'active') throw new ToolError(`"${problem.currentTitle}" is resolved: only active problems can have lines grouped under them.`)
+  const items = await simpleItemsOf(patient.id as number)
+  const picked = refs.map((ref) => pickSimpleItem(items, patient, ref))
+  const changed: string[] = []
+  for (const item of picked) {
+    const has = item.groupedMasterProblemIds.includes(problem.id as number)
+    if (action === 'group' && !has) {
+      await db.simpleProblemItems.update(item.id as number, { groupedMasterProblemIds: [...item.groupedMasterProblemIds, problem.id as number] })
+      changed.push(item.text)
+    } else if (action === 'ungroup' && has) {
+      await db.simpleProblemItems.update(item.id as number, { groupedMasterProblemIds: item.groupedMasterProblemIds.filter((id) => id !== problem.id) })
+      changed.push(item.text)
+    }
+  }
+  if (changed.length > 0) await touchPatient(patient.id as number)
+  const verb = action === 'group' ? 'grouped under' : 'taken out of'
+  return {
+    summary: `${patientIdentifier(patient)}: ${changed.length ? `${changed.length} simple-list line(s) ${verb} "${problem.currentTitle}" (${changed.join('; ')})` : `nothing to change, those lines were already ${action === 'group' ? 'under' : 'not under'} "${problem.currentTitle}"`}.`,
+    patient,
+  }
+}
+
+export type ProblemSpec = {
+  title: string
+  dateIdentified?: string
+  items?: string[]
+  subProblems?: Array<{ title: string; dateIdentified?: string; items?: string[] }>
+}
+
+/**
+ * The approved package in one change: the simple problem list lines, the master problems (and sub-problems) with
+ * their dates, and which lines are grouped under which problem. Lines and problems that already exist (same text /
+ * same title and parent, problem still active) are reused, never doubled.
+ */
+export const createProblemLists = async (patient: Patient, input: { simpleItems?: string[]; problems: ProblemSpec[] }): Promise<Done> => {
+  const patientId = patient.id as number
+  if (input.problems.length === 0 && (input.simpleItems ?? []).length === 0) throw new ToolError('Give simple-list lines and/or problems.')
+  for (const spec of input.problems) {
+    if (!clean(spec.title)) throw new ToolError('Every problem needs a title.')
+    for (const sub of spec.subProblems ?? []) if (!clean(sub.title)) throw new ToolError(`A sub-problem of "${spec.title}" has no title.`)
+  }
+
+  // 1. Simple-list lines: the ones asked for, then any line only mentioned under a problem.
+  const mentioned = input.problems.flatMap((spec) => [...(spec.items ?? []), ...(spec.subProblems ?? []).flatMap((sub) => sub.items ?? [])])
+  const texts = [...(input.simpleItems ?? []), ...mentioned].map(clean).filter((text) => text.length > 0)
+  const existing = await simpleItemsOf(patientId)
+  const idByText = new Map(existing.map((item) => [lower(item.text), item.id as number]))
+  const groups = new Map(existing.map((item) => [item.id as number, new Set(item.groupedMasterProblemIds)]))
+  let order = existing.length
+  let linesAdded = 0
+  for (const text of texts) {
+    if (idByText.has(lower(text))) continue
+    const id = await db.simpleProblemItems.add({ patientId, text, sortOrder: order++, groupedMasterProblemIds: [], createdAt: nowIso() }) as number
+    idByText.set(lower(text), id)
+    groups.set(id, new Set())
+    linesAdded += 1
+  }
+
+  // 2. Problems and sub-problems, 3. grouping.
+  const findActive = async (parentId: number | null, title: string): Promise<number | null> => {
+    const found = (await db.masterProblems.where('patientId').equals(patientId).toArray())
+      .find((problem) => problem.parentId === parentId && problem.status === 'active' && lower(problem.currentTitle) === lower(title))
+    return found ? (found.id as number) : null
+  }
+  const groupUnder = (problemId: number, items: string[] | undefined) => {
+    for (const text of items ?? []) {
+      const itemId = idByText.get(lower(clean(text)))
+      if (itemId !== undefined) groups.get(itemId)?.add(problemId)
+    }
+  }
+  let problemsAdded = 0
+  let reused = 0
+  for (const spec of input.problems) {
+    const title = clean(spec.title)
+    let problemId = await findActive(null, title)
+    if (problemId === null) { problemId = await insertMasterProblem(patient, null, title, clean(spec.dateIdentified)); problemsAdded += 1 } else reused += 1
+    groupUnder(problemId, spec.items)
+    for (const sub of spec.subProblems ?? []) {
+      const subTitle = clean(sub.title)
+      let subId = await findActive(problemId, subTitle)
+      if (subId === null) { subId = await insertMasterProblem(patient, problemId, subTitle, clean(sub.dateIdentified)); problemsAdded += 1 } else reused += 1
+      groupUnder(subId, sub.items)
+    }
+  }
+  for (const [itemId, ids] of groups) {
+    const before = existing.find((item) => item.id === itemId)?.groupedMasterProblemIds ?? []
+    if (ids.size !== before.length || [...ids].some((id) => !before.includes(id))) await db.simpleProblemItems.update(itemId, { groupedMasterProblemIds: [...ids] })
+  }
+  await touchPatient(patientId)
+
+  // Read it back the way the Problems tab numbers it.
+  const problems = await db.masterProblems.where('patientId').equals(patientId).toArray()
+  const labels = buildMasterProblemLabels(problems)
+  const lines = (await simpleItemsOf(patientId)).filter((item) => item.groupedMasterProblemIds.length > 0)
+  const tree = problems
+    .filter((problem) => problem.status === 'active')
+    .sort((a, b) => (labels.get(a.id as number) ?? '').localeCompare(labels.get(b.id as number) ?? '', undefined, { numeric: true }))
+    .map((problem) => {
+      const under = lines.filter((item) => item.groupedMasterProblemIds.includes(problem.id as number)).map((item) => item.text)
+      return `${labels.get(problem.id as number)}. ${problem.currentTitle}${problem.dateIdentified ? ` (${problem.dateIdentified})` : ''}${under.length ? `: ${under.join('; ')}` : ''}`
+    })
+  return {
+    summary: `${patientIdentifier(patient)}: ${linesAdded} simple-list line(s) added, ${problemsAdded} problem(s) added${reused ? `, ${reused} already existed and were reused` : ''}. Problem list now: ${tree.join(' | ')}`,
+    patient,
   }
 }
