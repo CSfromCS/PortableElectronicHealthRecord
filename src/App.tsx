@@ -1836,13 +1836,32 @@ function App() {
       entriesByCategory.set(entry.category, list)
     })
 
+    // Each category keeps its bundles (one upload = one bundle), newest first, with every photo of
+    // the bundle listed, so the expanded view is the collapsed view with all photos shown.
+    const toGroups = (entries: Array<PhotoAttachment & { id: number }>): PhotoAttachmentGroup[] => {
+      const groupsById = new Map<string, PhotoAttachmentGroup>()
+      entries.forEach((entry) => {
+        const groupKey = getPhotoGroupKey(entry)
+        const existing = groupsById.get(groupKey)
+        if (existing) {
+          existing.entries.push(entry)
+          existing.totalByteSize += entry.byteSize
+          if (entry.createdAt > existing.createdAt) existing.createdAt = entry.createdAt
+          return
+        }
+        groupsById.set(groupKey, { groupId: groupKey, createdAt: entry.createdAt, entries: [entry], totalByteSize: entry.byteSize })
+      })
+      return Array.from(groupsById.values())
+        .map((group) => ({ ...group, entries: [...group.entries].sort(comparePhotosByNewest) }))
+        .sort(comparePhotoGroupsByNewest)
+    }
+
     return PHOTO_CATEGORY_OPTIONS
       .filter((option) => entriesByCategory.has(option.value))
-      .map((option) => ({
-        category: option.value,
-        label: option.label,
-        entries: [...(entriesByCategory.get(option.value) ?? [])].sort(comparePhotosByNewest),
-      }))
+      .map((option) => {
+        const entries = [...(entriesByCategory.get(option.value) ?? [])].sort(comparePhotosByNewest)
+        return { category: option.value, label: option.label, entries, groups: toGroups(entries) }
+      })
   }, [attachmentFilter, selectedPatientAllAttachments])
 
   // Every photo id currently on screen in the Photos tab, respecting both the category filter
@@ -8796,7 +8815,7 @@ function App() {
 
                         {selectedPatientAttachmentGroups.length > 0 && !photosSelection.selectionMode ? (
                           <div className='flex items-center justify-end gap-2'>
-                            <Button variant='outline' size='sm' className='hidden sm:inline-flex h-7 text-xs' onClick={() => photosSelection.setSelectionMode(true)}>Select</Button>
+                            <Button variant='outline' size='sm' className='h-7 text-xs' onClick={() => photosSelection.setSelectionMode(true)}>Select</Button>
                           </div>
                         ) : null}
                         {photosSelection.selectionMode ? (
@@ -8862,9 +8881,10 @@ function App() {
                                     <button
                                       type='button'
                                       className={cn(
-                                        'relative w-full overflow-hidden rounded border bg-warm-ivory',
+                                        'relative w-full overflow-hidden rounded border bg-warm-ivory select-none [-webkit-touch-callout:none]',
                                         groupSelected ? 'border-action-primary border-2' : 'border-clay/30',
                                       )}
+                                      onContextMenu={(event) => event.preventDefault()}
                                       onTouchStart={() => photosSelection.handleTouchStart(coverPhoto.id, () => toggleGroupSelection(group))}
                                       onTouchEnd={photosSelection.handleTouchEnd}
                                       onTouchMove={photosSelection.cancelLongPress}
@@ -8878,7 +8898,8 @@ function App() {
                                         <img
                                           src={previewUrl}
                                           alt={coverPhoto.title || `Attachment ${formatPhotoCategory(coverPhoto.category)}`}
-                                          className='h-28 w-full object-cover'
+                                          className='pointer-events-none h-28 w-full object-cover'
+                                          draggable={false}
                                           loading='lazy'
                                         />
                                       ) : (
@@ -8964,54 +8985,84 @@ function App() {
                           ) : (
                             <div className='space-y-4'>
                               {selectedPatientExpandedPhotoSections.map((section) => (
-                                <div key={section.category} className='space-y-1.5'>
+                                <div key={section.category} className='space-y-2'>
                                   <p className='text-xs font-semibold text-clay uppercase tracking-wide'>{section.label}</p>
-                                  <div className='grid grid-cols-3 sm:grid-cols-4 gap-2'>
-                                    {section.entries.map((entry) => {
-                                      const previewUrl = attachmentPreviewUrls[entry.id]
-                                      return (
-                                        <button
-                                          key={`expanded-photo-${entry.id}`}
-                                          type='button'
-                                          className={cn(
-                                            'relative aspect-square overflow-hidden rounded border bg-warm-ivory',
-                                            photosSelection.isSelected(entry.id) ? 'border-action-primary border-2' : 'border-clay/30',
-                                          )}
-                                          onTouchStart={() => photosSelection.handleTouchStart(entry.id)}
-                                          onTouchEnd={photosSelection.handleTouchEnd}
-                                          onTouchMove={photosSelection.cancelLongPress}
-                                          onTouchCancel={photosSelection.cancelLongPress}
-                                          onClick={() => {
-                                            if (photosSelection.selectionMode) photosSelection.toggle(entry.id)
-                                            else openPhotoById(entry.id)
-                                          }}
-                                        >
-                                          {previewUrl ? (
-                                            <img
-                                              src={previewUrl}
-                                              alt={entry.title || `Attachment ${formatPhotoCategory(entry.category)}`}
-                                              className='h-full w-full object-cover'
-                                              loading='lazy'
-                                            />
-                                          ) : (
-                                            <div className='h-full w-full flex items-center justify-center text-xs text-clay'>No preview</div>
-                                          )}
+                                  {section.groups.map((group) => {
+                                    const coverPhoto = group.entries[0]
+                                    const groupSelected = group.entries.length > 0 && group.entries.every((entry) => photosSelection.isSelected(entry.id))
+                                    return (
+                                      <div key={group.groupId} className='rounded-md border border-clay/40 bg-white p-1.5 space-y-1.5'>
+                                        <div className='flex items-center justify-between gap-2 px-0.5'>
+                                          <div className='min-w-0'>
+                                            <p className='text-xs text-espresso line-clamp-2'>{coverPhoto.title || '(No title)'}</p>
+                                            <p className='text-[11px] text-clay'>
+                                              {new Date(group.createdAt).toLocaleString()} • {group.entries.length} photo{group.entries.length === 1 ? '' : 's'} • {formatBytes(group.totalByteSize)}
+                                            </p>
+                                          </div>
                                           {photosSelection.selectionMode ? (
-                                            <span className='absolute left-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-white/90 shadow'>
+                                            <label className='flex shrink-0 items-center gap-1 text-[11px] text-clay'>
                                               <input
                                                 type='checkbox'
                                                 className='h-4 w-4 accent-action-primary'
-                                                checked={photosSelection.isSelected(entry.id)}
-                                                onChange={() => photosSelection.toggle(entry.id)}
-                                                onClick={(event) => event.stopPropagation()}
-                                                aria-label={`Select photo ${entry.title || formatPhotoCategory(entry.category)}`}
+                                                checked={groupSelected}
+                                                onChange={() => toggleGroupSelection(group)}
+                                                aria-label={`Select bundle ${coverPhoto.title || formatPhotoCategory(coverPhoto.category)}`}
                                               />
-                                            </span>
+                                              All
+                                            </label>
                                           ) : null}
-                                        </button>
-                                      )
-                                    })}
-                                  </div>
+                                        </div>
+                                        <div className='grid grid-cols-3 sm:grid-cols-4 gap-1.5'>
+                                          {group.entries.map((entry) => {
+                                            const previewUrl = attachmentPreviewUrls[entry.id]
+                                            return (
+                                              <button
+                                                key={`expanded-photo-${entry.id}`}
+                                                type='button'
+                                                className={cn(
+                                                  'relative aspect-square overflow-hidden rounded border bg-warm-ivory select-none [-webkit-touch-callout:none]',
+                                                  photosSelection.isSelected(entry.id) ? 'border-action-primary border-2' : 'border-clay/30',
+                                                )}
+                                                onContextMenu={(event) => event.preventDefault()}
+                                                onTouchStart={() => photosSelection.handleTouchStart(entry.id)}
+                                                onTouchEnd={photosSelection.handleTouchEnd}
+                                                onTouchMove={photosSelection.cancelLongPress}
+                                                onTouchCancel={photosSelection.cancelLongPress}
+                                                onClick={() => {
+                                                  if (photosSelection.selectionMode) photosSelection.toggle(entry.id)
+                                                  else openPhotoById(entry.id)
+                                                }}
+                                              >
+                                                {previewUrl ? (
+                                                  <img
+                                                    src={previewUrl}
+                                                    alt={entry.title || `Attachment ${formatPhotoCategory(entry.category)}`}
+                                                    className='pointer-events-none h-full w-full object-cover'
+                                                    draggable={false}
+                                                    loading='lazy'
+                                                  />
+                                                ) : (
+                                                  <div className='h-full w-full flex items-center justify-center text-xs text-clay'>No preview</div>
+                                                )}
+                                                {photosSelection.selectionMode ? (
+                                                  <span className='absolute left-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-white/90 shadow'>
+                                                    <input
+                                                      type='checkbox'
+                                                      className='h-4 w-4 accent-action-primary'
+                                                      checked={photosSelection.isSelected(entry.id)}
+                                                      onChange={() => photosSelection.toggle(entry.id)}
+                                                      onClick={(event) => event.stopPropagation()}
+                                                      aria-label={`Select photo ${entry.title || formatPhotoCategory(entry.category)}`}
+                                                    />
+                                                  </span>
+                                                ) : null}
+                                              </button>
+                                            )
+                                          })}
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
                                 </div>
                               ))}
                             </div>
