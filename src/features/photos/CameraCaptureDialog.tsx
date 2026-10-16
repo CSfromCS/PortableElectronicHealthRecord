@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Camera, ChevronLeft, Trash2 } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { acquireCameraStream, releaseCameraStream } from './cameraStream'
 
 type CapturedShot = {
   id: number
@@ -30,7 +31,6 @@ const isCameraSupported = typeof navigator !== 'undefined' && typeof navigator.m
 
 export function CameraCaptureDialog({ open, subtitle, onClose, onDone }: CameraCaptureDialogProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const streamRef = useRef<MediaStream | null>(null)
   const fallbackInputRef = useRef<HTMLInputElement | null>(null)
   const stripScrollRef = useRef<HTMLDivElement | null>(null)
   const nextShotIdRef = useRef(0)
@@ -53,11 +53,6 @@ export function CameraCaptureDialog({ open, subtitle, onClose, onDone }: CameraC
     updateStripFade()
   }, [captures])
 
-  const stopStream = () => {
-    streamRef.current?.getTracks().forEach((track) => track.stop())
-    streamRef.current = null
-  }
-
   // The caller remounts this component with a fresh `key` each time it opens a new session (see
   // App.tsx's openCameraForNewBundle/openCameraForGroup), so `permissionError`/`captures` always
   // start clean here — no manual reset-on-close/reopen needed.
@@ -66,23 +61,19 @@ export function CameraCaptureDialog({ open, subtitle, onClose, onDone }: CameraC
 
     let cancelled = false
 
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+    acquireCameraStream()
       .then((stream) => {
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop())
-          return
-        }
-        streamRef.current = stream
+        if (cancelled) return
         if (videoRef.current) videoRef.current.srcObject = stream
       })
       .catch(() => {
         if (!cancelled) setPermissionError('Camera access was denied or is unavailable.')
       })
 
+    // The stream is kept for a moment so reopening the camera doesn't ask for permission again.
     return () => {
       cancelled = true
-      stopStream()
+      releaseCameraStream()
     }
   }, [open])
 
@@ -121,13 +112,11 @@ export function CameraCaptureDialog({ open, subtitle, onClose, onDone }: CameraC
   }
 
   const handleClose = () => {
-    stopStream()
     onClose()
   }
 
   const handleDone = () => {
     const files = captures.map((shot, index) => new File([shot.blob], `capture-${index + 1}.jpg`, { type: shot.blob.type || 'image/jpeg' }))
-    stopStream()
     onDone(files)
   }
 
@@ -135,27 +124,8 @@ export function CameraCaptureDialog({ open, subtitle, onClose, onDone }: CameraC
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) handleClose() }}>
       <DialogContent showCloseButton={false} className='flex flex-col gap-0 p-0 border-0 overflow-hidden bg-black w-[95vw] max-w-3xl h-[95vh] max-h-[95vh] md:h-[92vh] md:max-h-[92vh]'>
         <DialogTitle className='sr-only'>Take photos</DialogTitle>
-        <div className='relative flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black'>
-          {!error ? (
-            <video ref={videoRef} autoPlay playsInline muted className='h-full w-full object-cover' />
-          ) : (
-            <div className='flex flex-col items-center gap-3 p-6 text-center text-white'>
-              <p className='text-sm'>{error}</p>
-              <Button size='sm' variant='secondary' onClick={() => fallbackInputRef.current?.click()}>
-                Use device camera app instead
-              </Button>
-            </div>
-          )}
-          <input
-            ref={fallbackInputRef}
-            type='file'
-            accept='image/*'
-            capture='environment'
-            className='hidden'
-            onChange={handleFallbackFiles}
-          />
-
-          <div className='absolute inset-x-0 top-0 flex items-center justify-between gap-2 p-3 bg-gradient-to-b from-black/70 to-transparent'>
+        <div className='flex flex-1 min-h-0 flex-col bg-black'>
+          <div className='flex shrink-0 items-center justify-between gap-2 p-3'>
             <button
               type='button'
               aria-label='Close camera'
@@ -170,7 +140,27 @@ export function CameraCaptureDialog({ open, subtitle, onClose, onDone }: CameraC
             <div className='h-9 w-9 shrink-0' aria-hidden='true' />
           </div>
 
-          <div className='absolute inset-x-0 bottom-0 space-y-2 p-3 bg-gradient-to-t from-black/70 to-transparent'>
+          <div className='relative flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black'>
+            {!error ? (
+              <video ref={videoRef} autoPlay playsInline muted className='h-full w-full object-contain' />
+            ) : (
+              <div className='flex flex-col items-center gap-3 p-6 text-center text-white'>
+                <p className='text-sm'>{error}</p>
+                <Button size='sm' variant='secondary' onClick={() => fallbackInputRef.current?.click()}>
+                  Use device camera app instead
+                </Button>
+              </div>
+            )}
+            <input
+              ref={fallbackInputRef}
+              type='file'
+              accept='image/*'
+              capture='environment'
+              className='hidden'
+              onChange={handleFallbackFiles}
+            />
+          </div>
+          <div className='shrink-0 space-y-2 p-3'>
             {captures.length > 0 ? (
               <div className='relative'>
                 <div ref={stripScrollRef} onScroll={updateStripFade} className='w-full overflow-x-auto overflow-y-hidden touch-pan-x'>
