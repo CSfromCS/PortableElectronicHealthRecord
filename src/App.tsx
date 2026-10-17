@@ -73,6 +73,7 @@ import {
   withTrailingBlankChecklistItem,
 } from '@/features/checklist/checklistUtils'
 import { DragHandle } from '@/lib/dnd/DragHandle'
+import { sortByOrder } from '@/lib/dnd/sortByOrder'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { FieldTip } from '@/lib/tips/FieldTip'
@@ -919,14 +920,16 @@ function App() {
   const tagDefinitions = useLiveQuery(() => db.tagDefinitions.toArray(), [])
   const allTagEvents = useLiveQuery(() => db.tagEvents.toArray(), [])
   const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
-  const customActions = useLiveQuery(() => db.customActions.toArray(), [])
-  const reportTemplates = useLiveQuery(() => db.reportTemplates.toArray(), [])
-  const dateTimeFormats = useLiveQuery(() => db.dateTimeFormats.toArray(), [])
-  const customViews = useLiveQuery(() => db.customViews.toArray(), [])
+  // Custom Actions, Report Templates, Date & Time Formats and Custom Views are drag-reorderable in
+  // their Manage screens, so they're loaded in that arranged order — `toArray()` alone would hand
+  // every picker below them the order the records were created in.
+  const customActions = useLiveQuery(async () => sortByOrder(await db.customActions.toArray()), [])
+  const reportTemplates = useLiveQuery(async () => sortByOrder(await db.reportTemplates.toArray()), [])
+  const dateTimeFormats = useLiveQuery(async () => sortByOrder(await db.dateTimeFormats.toArray()), [])
+  const customViews = useLiveQuery(async () => sortByOrder(await db.customViews.toArray()), [])
   const allMasterProblems = useLiveQuery(() => db.masterProblems.toArray(), [])
   const allSimpleProblemItems = useLiveQuery(() => db.simpleProblemItems.toArray(), [])
-  const orderedCustomViews = useMemo(() => [...(customViews ?? [])].sort((a, b) => a.sortOrder - b.sortOrder), [customViews])
-  const enabledCustomViews = useMemo(() => orderedCustomViews.filter((view) => !view.disabled), [orderedCustomViews])
+  const enabledCustomViews = useMemo(() => (customViews ?? []).filter((view) => !view.disabled), [customViews])
   // Custom Views: named, saved Tag+Ward combos shared across the Patients list, Master Checklist,
   // and Reports picker filters — save/rename/delete here since they're just Dexie CRUD, same as
   // Custom Actions and Report Templates elsewhere in this file; applying one is handled per-caller
@@ -6529,7 +6532,7 @@ function App() {
           />
         ) : view === 'manageCustomViews' ? (
           <ManageCustomViewsScreen
-            views={orderedCustomViews}
+            views={customViews ?? []}
             tags={tagDefinitions ?? []}
             groups={tagGroups ?? []}
             wards={wardTags}

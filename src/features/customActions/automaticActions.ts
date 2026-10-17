@@ -1,5 +1,6 @@
 import { db } from '@/db'
 import { appendChecklistItemsForPatientDate } from '@/features/checklist/checklistUtils'
+import { sortByOrder } from '@/lib/dnd/sortByOrder'
 import type { CustomAction, Patient, TagDefinition } from '@/types'
 import {
   actionHasApplicableEffect,
@@ -34,7 +35,7 @@ export const runAutomaticCustomActionsForTagAddition = async (options: {
   if (patientAfterAdd.id === undefined || addedTagIds.length === 0) return []
   const patientId = patientAfterAdd.id
   const addedTagIdSet = new Set(addedTagIds)
-  const matchingActions = customActions.filter(
+  const matchingActions = sortByOrder(customActions).filter(
     (action) => !action.disabled && action.triggerType === 'automatic' && action.triggerTagId !== undefined && addedTagIdSet.has(action.triggerTagId),
   )
 
