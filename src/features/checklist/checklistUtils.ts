@@ -1,5 +1,5 @@
 import { db } from '@/db'
-import { buildActiveDailyProblemNotes } from '@/features/problems/problemUtils'
+import { buildCarriedForwardProblemFields } from '@/features/problems/problemUtils'
 import type { DropPosition } from '@/lib/dnd/useDragReorder'
 import type { DailyUpdate } from '@/types'
 
@@ -222,11 +222,7 @@ export const appendChecklistItemsForPatientDate = async (
   await db.dailyUpdates.add({
     patientId,
     date,
-    problems: buildActiveDailyProblemNotes(activeMasterProblems, patientId),
-    subjective: '',
-    objective: '',
-    assessment: '',
-    plans: '',
+    ...buildCarriedForwardProblemFields(latestPriorUpdate, activeMasterProblems, patientId),
     checklist,
     lastUpdated: now,
   })

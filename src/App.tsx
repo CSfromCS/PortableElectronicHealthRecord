@@ -133,7 +133,7 @@ import {
 import { ProblemListEditor } from './features/problems/ProblemListEditor'
 import { MasterProblemListEditor } from './features/problems/MasterProblemListEditor'
 import { SimpleProblemListEditor } from './features/problems/SimpleProblemListEditor'
-import { buildActiveDailyProblemNotes, normalizeDailyProblemNotes, normalizeDailyUpdate } from './features/problems/problemUtils'
+import { buildCarriedForwardProblemFields, normalizeDailyProblemNotes, normalizeDailyUpdate } from './features/problems/problemUtils'
 const TabSettingsScreen = lazy(() =>
   import('./features/tabs/TabSettingsScreen').then((module) => ({ default: module.TabSettingsScreen })),
 )
@@ -716,6 +716,7 @@ function App() {
   const [copyLatestConfirmOpen, setCopyLatestConfirmOpen] = useState(false)
   const [pendingLatestDailyUpdate, setPendingLatestDailyUpdate] = useState<DailyUpdate | null>(null)
   const [deleteDailyConfirmOpen, setDeleteDailyConfirmOpen] = useState(false)
+  const [clearProblemEntriesConfirmOpen, setClearProblemEntriesConfirmOpen] = useState(false)
   const [pendingDeleteDailyUpdate, setPendingDeleteDailyUpdate] = useState<DailyUpdate | null>(null)
   // Generic confirm-before-delete gate: any destructive action routes through this instead of
   // firing immediately, so a single Dialog (rendered once, see below) covers every delete button.
@@ -1289,7 +1290,7 @@ function App() {
     if (selectedPatientId === null) return [] as string[]
 
     const entries = await db.dailyUpdates.where('patientId').equals(selectedPatientId).toArray()
-    return Array.from(new Set(entries.map((entry) => entry.date))).sort((a, b) => b.localeCompare(a))
+    return Array.from(new Set(entries.map((entry) => entry.date))).sort((a, b) => a.localeCompare(b))
   }, [selectedPatientId])
   const patientVitals = useLiveQuery(async () => {
     if (selectedPatientId === null) return [] as VitalEntry[]
@@ -2337,7 +2338,7 @@ function App() {
       setDailyUpdateId(undefined)
       setDailyUpdateForm({
         ...initialDailyUpdateForm,
-        problems: buildActiveDailyProblemNotes(activeMasterProblems, patientId),
+        ...buildCarriedForwardProblemFields(latestPriorUpdate, activeMasterProblems, patientId),
         checklist: toPendingChecklistItems(latestPriorUpdate?.checklist),
       })
       setDailyDirty(false)
@@ -2439,6 +2440,23 @@ function App() {
     setDeleteDailyConfirmOpen(false)
     setPendingDeleteDailyUpdate(null)
   }, [])
+
+  // New dates start with the latest entry carried forward, so this is how to start a day from
+  // scratch: blanks every problem's notes plus subjective/objective/assessment/plans, keeping the
+  // problem blocks themselves (they're the patient's Master Problem List, not this day's text).
+  const confirmClearProblemEntries = useCallback(() => {
+    setDailyUpdateForm((previous) => ({
+      ...previous,
+      problems: previous.problems.map((entry) => ({ ...entry, notes: '' })),
+      subjective: '',
+      objective: '',
+      assessment: '',
+      plans: '',
+    }))
+    setDailyDirty(true)
+    setClearProblemEntriesConfirmOpen(false)
+    setNotice(`Cleared all entries for ${dailyDate}.`)
+  }, [dailyDate])
 
   useEffect(() => {
     if (selectedPatientId === null && copyLatestConfirmOpen) {
@@ -2794,6 +2812,9 @@ function App() {
     updater: (checklist: DailyChecklistItem[]) => DailyChecklistItem[],
   ) => {
     const existingEntry = await db.dailyUpdates.where('[patientId+date]').equals([patientId, masterChecklistDate]).first()
+    // A new date created from here (rather than the Problems tab) also starts with the latest
+    // entry's problems carried forward, so opening that date's Problems tab later isn't blank.
+    const newEntryProblemSource = existingEntry ? [] : await db.masterProblems.where('patientId').equals(patientId).toArray()
     const entryForDate = existingEntry ?? (() => {
       const updates = (dailyUpdatesByPatient.get(patientId) ?? []).filter((entry) => entry.date < masterChecklistDate)
       const latestPriorUpdate = selectLatestDailyUpdate(updates)
@@ -2801,6 +2822,7 @@ function App() {
         patientId,
         date: masterChecklistDate,
         ...initialDailyUpdateForm,
+        ...buildCarriedForwardProblemFields(latestPriorUpdate, newEntryProblemSource, patientId),
         checklist: toPendingChecklistItems(latestPriorUpdate?.checklist),
         lastUpdated: new Date().toISOString(),
       } satisfies Omit<DailyUpdate, 'id'>
@@ -4510,7 +4532,7 @@ function App() {
   const renderProblemsTabContent = () => (
     <div className='space-y-3'>
       {renderDailyDateHeader('problems')}
-      <FieldTip>Copies all problem blocks in their current order, subjective, objective, assessment, and plan. Only pending checklist items carry over from the source date. Unresolved problems also carry forward automatically when you move to a new date.</FieldTip>
+      <FieldTip>A new date starts with the latest entry already carried forward: unresolved problem blocks with their notes, subjective, objective, assessment, and plan. Only pending checklist items carry over. "Clear all entries" blanks every note and field for this date, and "Copy latest entry" re-copies the latest one over it.</FieldTip>
       <ProblemListEditor
         dailyProblems={dailyUpdateForm.problems}
         onChangeDailyProblems={(problems) => {
@@ -4699,6 +4721,16 @@ function App() {
         >
           Delete day entry
         </Button>
+        {context === 'problems' ? (
+          <Button
+            type='button'
+            variant='destructive'
+            onClick={() => setClearProblemEntriesConfirmOpen(true)}
+            disabled={selectedPatientId === null}
+          >
+            Clear all entries
+          </Button>
+        ) : null}
       </div>
       <div className='space-y-1'>
         <p className='text-xs text-clay'>Saved entry dates</p>
@@ -9927,6 +9959,23 @@ function App() {
             <div className='flex gap-2 flex-wrap justify-center'>
               <Button variant='destructive' onClick={() => void confirmDeleteDailyUpdate()}>Yes, delete entry</Button>
               <Button variant='secondary' onClick={closeDeleteDailyConfirm}>Cancel</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={clearProblemEntriesConfirmOpen} onOpenChange={setClearProblemEntriesConfirmOpen}>
+          <DialogContent className='max-w-md'>
+            <DialogHeader>
+              <DialogTitle>Confirm clear all entries</DialogTitle>
+            </DialogHeader>
+            <p className='text-sm text-espresso text-center'>
+              Clear every problem note, subjective, objective, assessment, and plan on
+              <strong className='block text-center'>{dailyDate}?</strong>
+              <span className='mt-2 block text-xs text-clay'>The problems themselves and the checklist stay.</span>
+            </p>
+            <div className='flex gap-2 flex-wrap justify-center'>
+              <Button variant='destructive' onClick={confirmClearProblemEntries}>Yes, clear entries</Button>
+              <Button variant='secondary' onClick={() => setClearProblemEntriesConfirmOpen(false)}>Cancel</Button>
             </div>
           </DialogContent>
         </Dialog>
