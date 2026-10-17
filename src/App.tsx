@@ -1289,7 +1289,7 @@ function App() {
     if (selectedPatientId === null) return [] as string[]
 
     const entries = await db.dailyUpdates.where('patientId').equals(selectedPatientId).toArray()
-    return Array.from(new Set(entries.map((entry) => entry.date))).sort((a, b) => a.localeCompare(b))
+    return Array.from(new Set(entries.map((entry) => entry.date))).sort((a, b) => b.localeCompare(a))
   }, [selectedPatientId])
   const patientVitals = useLiveQuery(async () => {
     if (selectedPatientId === null) return [] as VitalEntry[]
