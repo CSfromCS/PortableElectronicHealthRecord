@@ -62,6 +62,29 @@ export const buildActiveDailyProblemNotes = (masterProblems: MasterProblem[], pa
       problem.id !== undefined && problem.patientId === patientId && problem.status === 'active')
     .map((problem) => ({ masterProblemId: problem.id, notes: '' }))
 
+/** The Problems-tab content a brand-new date starts with: everything from the latest earlier entry
+ * (problem blocks in their order with their notes, subjective, objective, assessment, plans), so
+ * nothing has to be copied over by hand. Problems resolved or deleted since then are dropped, and
+ * any active problem the earlier entry never listed is appended with blank notes. */
+export const buildCarriedForwardProblemFields = (
+  latestPriorUpdate: DailyUpdate | null | undefined,
+  masterProblems: MasterProblem[],
+  patientId: number,
+): Pick<DailyUpdate, 'problems' | 'subjective' | 'objective' | 'assessment' | 'plans'> => {
+  const active = buildActiveDailyProblemNotes(masterProblems, patientId)
+  const activeIds = new Set(active.map((entry) => entry.masterProblemId))
+  const carried = normalizeDailyProblemNotes(latestPriorUpdate?.problems).filter((entry) => activeIds.has(entry.masterProblemId))
+  const carriedIds = new Set(carried.map((entry) => entry.masterProblemId))
+
+  return {
+    problems: [...carried, ...active.filter((entry) => !carriedIds.has(entry.masterProblemId))],
+    subjective: latestPriorUpdate?.subjective ?? '',
+    objective: latestPriorUpdate?.objective ?? '',
+    assessment: latestPriorUpdate?.assessment ?? '',
+    plans: latestPriorUpdate?.plans ?? '',
+  }
+}
+
 export const normalizeDailyUpdate = (value: unknown): DailyUpdate => {
   const candidate = value as Record<string, unknown>
   const patientId = typeof candidate.patientId === 'number' ? candidate.patientId : 0

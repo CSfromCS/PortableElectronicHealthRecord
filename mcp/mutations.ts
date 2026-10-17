@@ -21,7 +21,7 @@ import {
 } from '@/features/customActions/customActionUtils'
 import { LAB_TEMPLATES, OTHERS_LABEL_KEY, OTHERS_LAB_TEMPLATE_ID, OTHERS_RESULT_KEY, UST_ABG_TEMPLATE_ID, getNormalRangeFieldKey, getUlnFieldKey } from '@/features/labs/labTemplates'
 import { withAbgDerivedValues } from '@/features/labs/labDerived'
-import { buildActiveDailyProblemNotes, buildMasterProblemLabels } from '@/features/problems/problemUtils'
+import { buildCarriedForwardProblemFields, buildMasterProblemLabels } from '@/features/problems/problemUtils'
 import { SERVICE_TAG_GROUP_NAME, WARD_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
 import { getOrCreateServiceTag } from '@/features/tags/serviceTagUtils'
 import {
@@ -578,7 +578,8 @@ const editChecklist = async (target: ChecklistTarget, updater: (items: DailyUpda
   if (existing) {
     await db.dailyUpdates.update(existing.id as number, { checklist: next, lastUpdated: nowIso() })
   } else {
-    await db.dailyUpdates.add({ patientId, date, problems: [], subjective: '', objective: '', assessment: '', plans: '', checklist: next, lastUpdated: nowIso() })
+    const masterProblems = await db.masterProblems.where('patientId').equals(patientId).toArray()
+    await db.dailyUpdates.add({ patientId, date, ...buildCarriedForwardProblemFields(latestPrior, masterProblems, patientId), checklist: next, lastUpdated: nowIso() })
   }
   if (target.patient) await touchPatient(patientId)
 }
@@ -688,11 +689,7 @@ const ensureDailyUpdate = async (patientId: number, date: string): Promise<Daily
   const id = await db.dailyUpdates.add({
     patientId,
     date,
-    problems: buildActiveDailyProblemNotes(problems, patientId),
-    subjective: '',
-    objective: '',
-    assessment: '',
-    plans: '',
+    ...buildCarriedForwardProblemFields(latestPrior, problems, patientId),
     checklist: toPendingChecklistItems(latestPrior?.checklist),
     lastUpdated: nowIso(),
   }) as number

@@ -73,6 +73,7 @@ import {
   withTrailingBlankChecklistItem,
 } from '@/features/checklist/checklistUtils'
 import { DragHandle } from '@/lib/dnd/DragHandle'
+import { sortByOrder } from '@/lib/dnd/sortByOrder'
 import { AutoGrowTextField } from '@/lib/inlineEdit/AutoGrowTextField'
 import { TapToEditField } from '@/lib/inlineEdit/TapToEditField'
 import { FieldTip } from '@/lib/tips/FieldTip'
@@ -132,7 +133,7 @@ import {
 import { ProblemListEditor } from './features/problems/ProblemListEditor'
 import { MasterProblemListEditor } from './features/problems/MasterProblemListEditor'
 import { SimpleProblemListEditor } from './features/problems/SimpleProblemListEditor'
-import { buildActiveDailyProblemNotes, normalizeDailyProblemNotes, normalizeDailyUpdate } from './features/problems/problemUtils'
+import { buildCarriedForwardProblemFields, normalizeDailyProblemNotes, normalizeDailyUpdate } from './features/problems/problemUtils'
 const TabSettingsScreen = lazy(() =>
   import('./features/tabs/TabSettingsScreen').then((module) => ({ default: module.TabSettingsScreen })),
 )
@@ -715,6 +716,7 @@ function App() {
   const [copyLatestConfirmOpen, setCopyLatestConfirmOpen] = useState(false)
   const [pendingLatestDailyUpdate, setPendingLatestDailyUpdate] = useState<DailyUpdate | null>(null)
   const [deleteDailyConfirmOpen, setDeleteDailyConfirmOpen] = useState(false)
+  const [clearProblemEntriesConfirmOpen, setClearProblemEntriesConfirmOpen] = useState(false)
   const [pendingDeleteDailyUpdate, setPendingDeleteDailyUpdate] = useState<DailyUpdate | null>(null)
   // Generic confirm-before-delete gate: any destructive action routes through this instead of
   // firing immediately, so a single Dialog (rendered once, see below) covers every delete button.
@@ -919,14 +921,16 @@ function App() {
   const tagDefinitions = useLiveQuery(() => db.tagDefinitions.toArray(), [])
   const allTagEvents = useLiveQuery(() => db.tagEvents.toArray(), [])
   const tagsById = useMemo(() => new Map((tagDefinitions ?? []).map((tag) => [tag.id as number, tag])), [tagDefinitions])
-  const customActions = useLiveQuery(() => db.customActions.toArray(), [])
-  const reportTemplates = useLiveQuery(() => db.reportTemplates.toArray(), [])
-  const dateTimeFormats = useLiveQuery(() => db.dateTimeFormats.toArray(), [])
-  const customViews = useLiveQuery(() => db.customViews.toArray(), [])
+  // Custom Actions, Report Templates, Date & Time Formats and Custom Views are drag-reorderable in
+  // their Manage screens, so they're loaded in that arranged order — `toArray()` alone would hand
+  // every picker below them the order the records were created in.
+  const customActions = useLiveQuery(async () => sortByOrder(await db.customActions.toArray()), [])
+  const reportTemplates = useLiveQuery(async () => sortByOrder(await db.reportTemplates.toArray()), [])
+  const dateTimeFormats = useLiveQuery(async () => sortByOrder(await db.dateTimeFormats.toArray()), [])
+  const customViews = useLiveQuery(async () => sortByOrder(await db.customViews.toArray()), [])
   const allMasterProblems = useLiveQuery(() => db.masterProblems.toArray(), [])
   const allSimpleProblemItems = useLiveQuery(() => db.simpleProblemItems.toArray(), [])
-  const orderedCustomViews = useMemo(() => [...(customViews ?? [])].sort((a, b) => a.sortOrder - b.sortOrder), [customViews])
-  const enabledCustomViews = useMemo(() => orderedCustomViews.filter((view) => !view.disabled), [orderedCustomViews])
+  const enabledCustomViews = useMemo(() => (customViews ?? []).filter((view) => !view.disabled), [customViews])
   // Custom Views: named, saved Tag+Ward combos shared across the Patients list, Master Checklist,
   // and Reports picker filters — save/rename/delete here since they're just Dexie CRUD, same as
   // Custom Actions and Report Templates elsewhere in this file; applying one is handled per-caller
@@ -2334,7 +2338,7 @@ function App() {
       setDailyUpdateId(undefined)
       setDailyUpdateForm({
         ...initialDailyUpdateForm,
-        problems: buildActiveDailyProblemNotes(activeMasterProblems, patientId),
+        ...buildCarriedForwardProblemFields(latestPriorUpdate, activeMasterProblems, patientId),
         checklist: toPendingChecklistItems(latestPriorUpdate?.checklist),
       })
       setDailyDirty(false)
@@ -2436,6 +2440,23 @@ function App() {
     setDeleteDailyConfirmOpen(false)
     setPendingDeleteDailyUpdate(null)
   }, [])
+
+  // New dates start with the latest entry carried forward, so this is how to start a day from
+  // scratch: blanks every problem's notes plus subjective/objective/assessment/plans, keeping the
+  // problem blocks themselves (they're the patient's Master Problem List, not this day's text).
+  const confirmClearProblemEntries = useCallback(() => {
+    setDailyUpdateForm((previous) => ({
+      ...previous,
+      problems: previous.problems.map((entry) => ({ ...entry, notes: '' })),
+      subjective: '',
+      objective: '',
+      assessment: '',
+      plans: '',
+    }))
+    setDailyDirty(true)
+    setClearProblemEntriesConfirmOpen(false)
+    setNotice(`Cleared all entries for ${dailyDate}.`)
+  }, [dailyDate])
 
   useEffect(() => {
     if (selectedPatientId === null && copyLatestConfirmOpen) {
@@ -2791,6 +2812,9 @@ function App() {
     updater: (checklist: DailyChecklistItem[]) => DailyChecklistItem[],
   ) => {
     const existingEntry = await db.dailyUpdates.where('[patientId+date]').equals([patientId, masterChecklistDate]).first()
+    // A new date created from here (rather than the Problems tab) also starts with the latest
+    // entry's problems carried forward, so opening that date's Problems tab later isn't blank.
+    const newEntryProblemSource = existingEntry ? [] : await db.masterProblems.where('patientId').equals(patientId).toArray()
     const entryForDate = existingEntry ?? (() => {
       const updates = (dailyUpdatesByPatient.get(patientId) ?? []).filter((entry) => entry.date < masterChecklistDate)
       const latestPriorUpdate = selectLatestDailyUpdate(updates)
@@ -2798,6 +2822,7 @@ function App() {
         patientId,
         date: masterChecklistDate,
         ...initialDailyUpdateForm,
+        ...buildCarriedForwardProblemFields(latestPriorUpdate, newEntryProblemSource, patientId),
         checklist: toPendingChecklistItems(latestPriorUpdate?.checklist),
         lastUpdated: new Date().toISOString(),
       } satisfies Omit<DailyUpdate, 'id'>
@@ -4507,7 +4532,7 @@ function App() {
   const renderProblemsTabContent = () => (
     <div className='space-y-3'>
       {renderDailyDateHeader('problems')}
-      <FieldTip>Copies all problem blocks in their current order, subjective, objective, assessment, and plan. Only pending checklist items carry over from the source date. Unresolved problems also carry forward automatically when you move to a new date.</FieldTip>
+      <FieldTip>A new date starts with the latest entry already carried forward: unresolved problem blocks with their notes, subjective, objective, assessment, and plan. Only pending checklist items carry over. "Clear all entries" blanks every note and field for this date, and "Copy latest entry" re-copies the latest one over it.</FieldTip>
       <ProblemListEditor
         dailyProblems={dailyUpdateForm.problems}
         onChangeDailyProblems={(problems) => {
@@ -4696,6 +4721,16 @@ function App() {
         >
           Delete day entry
         </Button>
+        {context === 'problems' ? (
+          <Button
+            type='button'
+            variant='destructive'
+            onClick={() => setClearProblemEntriesConfirmOpen(true)}
+            disabled={selectedPatientId === null}
+          >
+            Clear all entries
+          </Button>
+        ) : null}
       </div>
       <div className='space-y-1'>
         <p className='text-xs text-clay'>Saved entry dates</p>
@@ -6529,7 +6564,7 @@ function App() {
           />
         ) : view === 'manageCustomViews' ? (
           <ManageCustomViewsScreen
-            views={orderedCustomViews}
+            views={customViews ?? []}
             tags={tagDefinitions ?? []}
             groups={tagGroups ?? []}
             wards={wardTags}
@@ -9924,6 +9959,23 @@ function App() {
             <div className='flex gap-2 flex-wrap justify-center'>
               <Button variant='destructive' onClick={() => void confirmDeleteDailyUpdate()}>Yes, delete entry</Button>
               <Button variant='secondary' onClick={closeDeleteDailyConfirm}>Cancel</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={clearProblemEntriesConfirmOpen} onOpenChange={setClearProblemEntriesConfirmOpen}>
+          <DialogContent className='max-w-md'>
+            <DialogHeader>
+              <DialogTitle>Confirm clear all entries</DialogTitle>
+            </DialogHeader>
+            <p className='text-sm text-espresso text-center'>
+              Clear every problem note, subjective, objective, assessment, and plan on
+              <strong className='block text-center'>{dailyDate}?</strong>
+              <span className='mt-2 block text-xs text-clay'>The problems themselves and the checklist stay.</span>
+            </p>
+            <div className='flex gap-2 flex-wrap justify-center'>
+              <Button variant='destructive' onClick={confirmClearProblemEntries}>Yes, clear entries</Button>
+              <Button variant='secondary' onClick={() => setClearProblemEntriesConfirmOpen(false)}>Cancel</Button>
             </div>
           </DialogContent>
         </Dialog>
