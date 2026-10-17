@@ -150,6 +150,7 @@ import {
   buildPhotoFileName,
   buildPhotoUploadGroupId,
   compressImageFile,
+  copyBlobToMemory,
   formatBytes,
   formatPhotoCategory,
   getPhotoGroupKey,
@@ -3755,8 +3756,12 @@ function App() {
       const usingDefaultTitle = isAttachmentTitleDefault || trimmedTitle.length === 0
       const uploadGroupId = buildPhotoUploadGroupId()
 
+      // Compress first, so nothing is renamed or written unless every photo is ready.
+      const compressedFiles = await Promise.all(files.map((file) => compressImageFile(file)))
+
       let title: string
       let isDefaultTitle: boolean
+      const retitledTitleByGroupId = new Map<string, string>()
       if (usingDefaultTitle) {
         const baseTitle = buildDefaultPhotoTitle(attachmentCategory, now)
         const today = toLocalISODate(now)
@@ -3775,11 +3780,7 @@ function App() {
         })
 
         const assignment = resolveDefaultPhotoBatchTitle(baseTitle, Array.from(sameDayDefaultBatches.values()))
-        await Promise.all(
-          assignment.retitledBatches.map((batch) =>
-            db.photoAttachments.where('uploadGroupId').equals(batch.groupId).modify({ title: batch.title }),
-          ),
-        )
+        assignment.retitledBatches.forEach((batch) => retitledTitleByGroupId.set(batch.groupId, batch.title))
 
         title = assignment.title
         isDefaultTitle = true
@@ -3788,27 +3789,37 @@ function App() {
         isDefaultTitle = false
       }
 
-      const preparedAttachments = await Promise.all(
-        files.map(async (file, selectionOrderInGroup) => {
-          const compressed = await compressImageFile(file)
-          return {
-            patientId: selectedPatientId,
-            category: attachmentCategory,
-            title,
-            isDefaultTitle,
-            uploadGroupId,
-            selectionOrderInGroup,
-            mimeType: compressed.mimeType,
-            width: compressed.width,
-            height: compressed.height,
-            byteSize: compressed.blob.size,
-            imageBlob: compressed.blob,
-            createdAt: now.toISOString(),
-          }
-        }),
+      const preparedAttachments = compressedFiles.map((compressed, selectionOrderInGroup) => ({
+        patientId: selectedPatientId,
+        category: attachmentCategory,
+        title,
+        isDefaultTitle,
+        uploadGroupId,
+        selectionOrderInGroup,
+        mimeType: compressed.mimeType,
+        width: compressed.width,
+        height: compressed.height,
+        byteSize: compressed.blob.size,
+        imageBlob: compressed.blob,
+        createdAt: now.toISOString(),
+      }))
+
+      // Rewriting an existing photo record with the blob it was read with can leave the photo
+      // unloadable on iOS Safari, so each renamed photo gets a fresh in-memory copy of its bytes.
+      const retitledAttachments = await Promise.all(
+        selectedPatientAllAttachments
+          .filter((entry) => entry.uploadGroupId !== undefined && retitledTitleByGroupId.has(entry.uploadGroupId))
+          .map(async (entry) => ({
+            ...entry,
+            title: retitledTitleByGroupId.get(entry.uploadGroupId as string) as string,
+            imageBlob: await copyBlobToMemory(entry.imageBlob),
+          })),
       )
 
-      await db.photoAttachments.bulkAdd(preparedAttachments)
+      await db.transaction('rw', db.photoAttachments, async () => {
+        await db.photoAttachments.bulkPut(retitledAttachments)
+        await db.photoAttachments.bulkAdd(preparedAttachments)
+      })
       await touchPatientLastModified(selectedPatientId)
 
       setAttachmentTitle(buildDefaultPhotoTitle(attachmentCategory))
@@ -3916,7 +3927,12 @@ function App() {
       return
     }
 
-    await db.photoAttachments.update(attachment.id, { patientId: nextPatientId })
+    // A fresh copy of the bytes, not the blob read from the db: see copyBlobToMemory.
+    await db.photoAttachments.put({
+      ...attachment,
+      patientId: nextPatientId,
+      imageBlob: await copyBlobToMemory(attachment.imageBlob),
+    })
     await touchPatientLastModified(attachment.patientId)
     await touchPatientLastModified(nextPatientId)
 

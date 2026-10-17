@@ -128,6 +128,12 @@ export const buildPhotoFileName = (attachment: { id: number; title: string; mime
   return `${safeTitle}.${inferredExtension}`
 }
 
+/** Copies a stored photo's bytes into a fresh in-memory Blob. A Blob read back from IndexedDB can
+ * still point at the file the browser stored it in, and Safari on iOS may drop that file when the
+ * record is rewritten, leaving a photo that no longer loads. Use this on the blob of any existing
+ * photo record before writing that record back. */
+export const copyBlobToMemory = async (blob: Blob) => new Blob([await blob.arrayBuffer()], { type: blob.type })
+
 export const buildPhotoUploadGroupId = () => {
   const randomToken = Math.random().toString(36).slice(2, 10)
   return `group-${Date.now()}-${randomToken}`
