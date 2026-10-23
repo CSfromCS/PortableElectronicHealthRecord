@@ -137,6 +137,42 @@ export const hasTagAmbiguity = (ambiguity: TagAmbiguity): boolean =>
 export const renderTagDisplayText = (tag: TagDefinition): string =>
   tag.displayType === 'emoji' ? (tag.emoji ?? tag.name) : (tag.displayText?.trim() || tag.name)
 
+/**
+ * The two strings a tag can be found by: its full name and, if set, the shorthand shown on its
+ * badge (displayText, e.g. "TCVS" for "Thoracic and Cardiovascular Surgery"). Lowercased and trimmed.
+ */
+const tagSearchTerms = (tag: TagDefinition): string[] => {
+  const terms = [tag.name.trim().toLowerCase()]
+  const shorthand = tag.displayText?.trim().toLowerCase()
+  if (shorthand) terms.push(shorthand)
+  return terms
+}
+
+/** True when `query` is contained in the tag's full name or its badge shorthand; an empty query matches everything. */
+export const tagMatchesQuery = (tag: TagDefinition, query: string): boolean => {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return true
+  return tagSearchTerms(tag).some((term) => term.includes(normalized))
+}
+
+/** True when `query` equals the tag's full name or its badge shorthand exactly (case-insensitive). */
+export const tagMatchesExactly = (tag: TagDefinition, query: string): boolean => {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return false
+  return tagSearchTerms(tag).includes(normalized)
+}
+
+/**
+ * Typeahead filter for tag pickers: keeps tags matching `query` by full name or shorthand, with
+ * exact matches (typing "IM" or the full "Internal Medicine") moved to the front so Enter picks
+ * them; everything else keeps the incoming order.
+ */
+export const filterTagsByQuery = (tags: TagDefinition[], query: string): TagDefinition[] => {
+  const matches = tags.filter((tag) => tagMatchesQuery(tag, query))
+  if (!query.trim()) return matches
+  return [...matches.filter((tag) => tagMatchesExactly(tag, query)), ...matches.filter((tag) => !tagMatchesExactly(tag, query))]
+}
+
 /** Applies a tag to a patient and records a Tag Event History entry (point 3, point 8). */
 export const applyTagToPatient = async (patient: Patient, tag: TagDefinition): Promise<void> => {
   if (patient.id === undefined || tag.id === undefined) return

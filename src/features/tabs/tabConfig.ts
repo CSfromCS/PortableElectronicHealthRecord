@@ -35,7 +35,7 @@ export const PATIENT_TAB_DESCRIPTIONS: Record<PatientTabId, string> = {
   vitals: 'Structured BP/HR/RR/Temp/SpO2 log with date & time entries',
   labs: 'CBC, UA, Blood Chem, ABG templates + free-text with date/time',
   medications: 'Structured medication list: drug, dose, route, frequency, status, plus drag-to-reorder',
-  orders: "Doctor's orders with date, time, service & status tracking",
+  orders: "Doctor's orders with date, time, service & side notes",
   photos: 'Categorized image attachments with grouped uploads & carousel',
 }
 

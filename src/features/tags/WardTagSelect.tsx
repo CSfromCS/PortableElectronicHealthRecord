@@ -2,6 +2,7 @@ import { useMemo, useState, type KeyboardEvent } from 'react'
 import { Input } from '@/components/ui/input'
 import type { TagDefinition } from '@/types'
 import { TagChip } from './TagChip'
+import { filterTagsByQuery, tagMatchesExactly } from './tagUtils'
 import { findWardTagByName, isWardTagCustomized } from './wardTagUtils'
 
 type WardTagSelectProps = {
@@ -24,11 +25,14 @@ export const WardTagSelect = ({ ariaLabel, placeholder, value, availableTags, on
   const [isOpen, setIsOpen] = useState(false)
 
   const suggestions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
-    return availableTags.filter((tag) => !normalizedQuery || tag.name.toLowerCase().includes(normalizedQuery))
+    return filterTagsByQuery(availableTags, query)
   }, [availableTags, query])
 
-  const exactMatch = useMemo(() => findWardTagByName(query, availableTags), [query, availableTags])
+  // Matches the full ward name or its shorthand (displayText), so typing either picks the existing tag instead of offering to add a duplicate.
+  const exactMatch = useMemo(
+    () => findWardTagByName(query, availableTags) ?? availableTags.find((tag) => tagMatchesExactly(tag, query)),
+    [query, availableTags],
+  )
 
   const selectSuggestion = (tag: TagDefinition) => {
     if (tag.id !== undefined) onSelectExisting(tag.id)

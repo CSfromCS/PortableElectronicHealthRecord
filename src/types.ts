@@ -347,6 +347,10 @@ export interface SimpleProblemItem extends SyncMeta {
 export interface DailyProblemNote {
   masterProblemId: number
   notes: string
+  /** The problem's row is shown collapsed (title only, notes hidden) on the Problems tab. Purely a
+   * display preference — never affects reports. Carried forward with the rest of the entry when a
+   * later date starts from this one. Unset means expanded. */
+  collapsed?: boolean
 }
 
 export interface DailyUpdate extends SyncMeta {
@@ -407,7 +411,10 @@ export interface OrderEntry extends SyncMeta {
   orderTime: string
   service: string
   orderText: string
-  status: 'active' | 'carriedOut' | 'discontinued'
+  /** Legacy: orders used to carry an active/carried-out/discontinued status. It is no longer shown or
+   * set; the field is only kept so older records, backups and synced data still load. */
+  status?: 'active' | 'carriedOut' | 'discontinued'
+  /** Shown as "Side notes" — typed before, and displayed alongside, the order itself. */
   note: string
   createdAt: string
 }
@@ -492,7 +499,8 @@ export type RelativeDateRangeMode = 'fixed' | 'sinceAdmission' | 'lastNDays'
 /** Vitals entry-level fields — meaningful only inside a Vitals Block variable's own
  * `entryPatternText`/`entryFieldIds`, never inserted directly into a template's Format Pattern. */
 export type VitalsEntryFieldId = 'entryDate' | 'entryTime' | 'bp' | 'hr' | 'rr' | 'temp' | 'spo2' | 'note'
-export type OrdersEntryFieldId = 'entryDate' | 'entryTime' | 'service' | 'orderText' | 'status' | 'note'
+/** `note` is the order's "Side notes" (the id predates the label and is kept so saved templates keep working). */
+export type OrdersEntryFieldId = 'entryDate' | 'entryTime' | 'service' | 'orderText' | 'note'
 /** `resolvedMarker` resolves to `resolvedGlyph`/`unresolvedGlyph` on the config, same pattern as
  * Checklist's Checkbox field — e.g. " (resolved)"/"" (default) or "✅"/"⭕". */
 export type ProblemsEntryFieldId = 'problemIndex' | 'problemTitle' | 'problemNotes' | 'resolvedMarker'

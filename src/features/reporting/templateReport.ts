@@ -69,15 +69,7 @@ export const groupLabsByPatient = (labs: LabEntry[]): Map<number, LabEntry[]> =>
 
 export const groupOrdersByPatient = (orders: OrderEntry[]): Map<number, OrderEntry[]> =>
   groupByPatient(orders, (list) => {
-    list.sort((a, b) => {
-      if (a.status !== b.status) {
-        if (a.status === 'active') return -1
-        if (b.status === 'active') return 1
-        if (a.status === 'carriedOut') return -1
-        if (b.status === 'carriedOut') return 1
-      }
-      return b.createdAt.localeCompare(a.createdAt)
-    })
+    list.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
 
 export const groupVitalsByPatient = (vitals: VitalEntry[]): Map<number, VitalEntry[]> =>

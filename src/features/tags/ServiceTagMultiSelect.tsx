@@ -2,7 +2,7 @@ import { useMemo, useState, type KeyboardEvent } from 'react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { TagDefinition } from '@/types'
-import { findServiceTagByName } from './serviceTagUtils'
+import { filterTagsByQuery, tagMatchesExactly } from './tagUtils'
 import { TagChip, type TagChipRoleMarker } from './TagChip'
 
 type ServiceTagMultiSelectProps = {
@@ -38,14 +38,12 @@ export const ServiceTagMultiSelect = ({
   const selectedIds = useMemo(() => new Set(selectedTags.map((tag) => tag.id)), [selectedTags])
 
   const suggestions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
-    return availableTags
-      .filter((tag) => tag.id === undefined || !selectedIds.has(tag.id))
-      .filter((tag) => !normalizedQuery || tag.name.toLowerCase().includes(normalizedQuery))
+    return filterTagsByQuery(availableTags.filter((tag) => tag.id === undefined || !selectedIds.has(tag.id)), query)
   }, [availableTags, query, selectedIds])
 
   const trimmedQuery = query.trim()
-  const hasExactMatch = trimmedQuery.length > 0 && findServiceTagByName(trimmedQuery, availableTags) !== undefined
+  // A typed shorthand (e.g. "TCVS") that exactly matches an existing tag is that tag, not a new one.
+  const hasExactMatch = trimmedQuery.length > 0 && availableTags.some((tag) => tagMatchesExactly(tag, trimmedQuery))
   const canCreate = trimmedQuery.length > 0 && !hasExactMatch
 
   // Main is typically a single pick, so the suggestion list tucking away afterward keeps the

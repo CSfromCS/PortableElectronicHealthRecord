@@ -1,7 +1,7 @@
 import { buildMasterChecklistItemsForSource } from '@/features/checklist/masterChecklist'
 import { type DateTimeWindow, type PatientPoolContext, matchesPatientPool } from '@/features/filters/patientFilterUtils'
 import { composeDiagnosisTextConfigurable } from '@/features/patients/serviceDiagnosis'
-import { buildLabReportBlockPieces, formatOrderStatus } from '@/features/reporting/reportBuilders'
+import { buildLabReportBlockPieces } from '@/features/reporting/reportBuilders'
 import { resolveServiceTagNames } from '@/features/tags/serviceTagUtils'
 import { getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
 import {
@@ -329,7 +329,8 @@ export const BLOCK_JOIN_MODE_LABELS: Record<BlockJoinMode, string> = {
 // ---------------------------------------------------------------------------
 
 export const VITALS_ENTRY_FIELD_ORDER: VitalsEntryFieldId[] = ['entryDate', 'entryTime', 'bp', 'hr', 'rr', 'temp', 'spo2', 'note']
-export const ORDERS_ENTRY_FIELD_ORDER: OrdersEntryFieldId[] = ['entryDate', 'entryTime', 'service', 'orderText', 'status', 'note']
+// Side notes are typed before the order they accompany, so they're offered first.
+export const ORDERS_ENTRY_FIELD_ORDER: OrdersEntryFieldId[] = ['entryDate', 'entryTime', 'service', 'note', 'orderText']
 export const PROBLEMS_ENTRY_FIELD_ORDER: ProblemsEntryFieldId[] = ['problemIndex', 'problemTitle', 'problemNotes', 'resolvedMarker']
 export const CHECKLIST_ENTRY_FIELD_ORDER: ChecklistEntryFieldId[] = ['checkbox', 'itemText', 'itemNotes']
 export const MEDICATIONS_ENTRY_FIELD_ORDER: MedicationsEntryFieldId[] = ['medication', 'dose', 'route', 'frequency', 'note', 'statusMarker']
@@ -350,7 +351,7 @@ export const ENTRY_FIELD_LABELS_BY_BLOCK: Record<BlockVariableId, Record<string,
   },
   orders: {
     entryDate: 'Entry Date', entryTime: 'Entry Time',
-    service: 'Service', orderText: 'Order Text', status: 'Status', note: 'Note',
+    service: 'Service', note: 'Side Notes', orderText: 'Order Text',
   },
   problems: {
     problemIndex: 'Number', problemTitle: 'Title', problemNotes: 'Notes', resolvedMarker: 'Resolved Marker',
@@ -466,7 +467,6 @@ const resolveOrdersEntryField = (fieldId: string, entry: OrderEntry, dateTimeFor
     case 'entryTime': return renderSavedFormatOr(dateTimeFormatId, ctx, entry.orderDate, entry.orderTime, () => entry.orderTime ?? '')
     case 'service': return (entry.service ?? '').trim()
     case 'orderText': return entry.orderText
-    case 'status': return formatOrderStatus(entry.status)
     case 'note': return entry.note ?? ''
     default: return ''
   }
@@ -568,7 +568,9 @@ const buildDefaultEntryPattern = (variableId: BlockVariableId): {
     case 'vitals':
       return { entryFieldIds, entryPatternText: `${token('entryDate')} ${token('entryTime')} ${token('bp')} ${token('hr')} ${token('rr')} ${token('temp')} ${token('spo2')} ${token('note')}` }
     case 'orders':
-      return { entryFieldIds, entryPatternText: `${token('service')} ${token('entryDate')} ${token('entryTime')} • ${token('orderText')} — ${token('note')} (${token('status')})` }
+      // Header line, then the side notes, then the order — one field per line, so a blank service
+      // or blank side notes collapses cleanly (see collapseBlanks) without eating a separator.
+      return { entryFieldIds, entryPatternText: `${token('entryDate')} ${token('entryTime')} — ${token('service')}\n${token('note')}\n${token('orderText')}` }
     case 'problems':
       return { entryFieldIds, entryPatternText: `${token('problemIndex')}. ${token('problemTitle')}${token('resolvedMarker')}\n${token('problemNotes')}` }
     case 'checklist':
@@ -578,6 +580,51 @@ const buildDefaultEntryPattern = (variableId: BlockVariableId): {
     default:
       return { entryFieldIds: {}, entryPatternText: '' }
   }
+}
+
+/** Orders no longer have a status. Removes any `status` field (and the "(…)" wrapper the old default
+ * pattern put around it) from an Orders Block variable's entry pattern, so a template saved before
+ * the removal neither shows an orphaned chip in the editor nor leaves stray punctuation behind.
+ * Returns the same object when there is nothing to strip. */
+export const stripRemovedOrderStatusField = (config: BlockVariableConfig): BlockVariableConfig => {
+  const statusTokenIds = Object.entries(config.entryFieldIds ?? {})
+    .filter(([, fieldId]) => (fieldId as string) === 'status')
+    .map(([tokenId]) => tokenId)
+  if (statusTokenIds.length === 0) return config
+
+  let entryPatternText = config.entryPatternText
+  const entryFieldIds = { ...config.entryFieldIds }
+  const entryFieldDateTimeFormats = { ...config.entryFieldDateTimeFormats }
+  for (const tokenId of statusTokenIds) {
+    const token = buildVariableToken(tokenId)
+    entryPatternText = entryPatternText
+      .split(`(${token})`)
+      .map((piece, index, pieces) => (index < pieces.length - 1 ? piece.replace(/[ \t]+$/, '') : piece))
+      .join('')
+      .split(token)
+      .join('')
+    delete entryFieldIds[tokenId]
+    delete entryFieldDateTimeFormats[tokenId]
+  }
+  return { ...config, entryPatternText, entryFieldIds, entryFieldDateTimeFormats }
+}
+
+/** Applies `stripRemovedOrderStatusField` to every Orders Block variable in a template's variable
+ * map (the form templates are stored and backed up in). `changed` is false, and `next` is the
+ * input map, when no template variable needed it. */
+export const stripRemovedOrderStatusFromVariables = (
+  variables: Record<string, TemplateVariableInstance>,
+): { next: Record<string, TemplateVariableInstance>; changed: boolean } => {
+  let changed = false
+  const next: Record<string, TemplateVariableInstance> = { ...variables }
+  for (const [tokenId, instance] of Object.entries(next)) {
+    if (instance.kind !== 'block' || instance.variableId !== 'orders') continue
+    const stripped = stripRemovedOrderStatusField(instance.config)
+    if (stripped === instance.config) continue
+    next[tokenId] = { ...instance, config: stripped }
+    changed = true
+  }
+  return changed ? { next, changed } : { next: variables, changed }
 }
 
 export const buildDefaultBlockVariableConfig = (variableId: BlockVariableId): BlockVariableConfig => ({

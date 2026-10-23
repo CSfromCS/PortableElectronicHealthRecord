@@ -54,7 +54,7 @@ const SAMPLE_VITALS: VitalEntry[] = [
 ]
 
 const SAMPLE_ORDERS: OrderEntry[] = [
-  { id: -1, patientId: -999, orderDate: TODAY_ISO, orderTime: '07:00', service: 'IM', orderText: 'CBC and electrolytes tomorrow AM', status: 'active', note: '', createdAt: `${TODAY_ISO}T07:00:00.000Z` },
+  { id: -1, patientId: -999, orderDate: TODAY_ISO, orderTime: '07:00', service: 'IM', orderText: 'CBC and electrolytes tomorrow AM', note: '', createdAt: `${TODAY_ISO}T07:00:00.000Z` },
 ]
 
 const SAMPLE_LABS: LabEntry[] = [
