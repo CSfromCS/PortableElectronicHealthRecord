@@ -80,10 +80,15 @@ export const ManageCustomViewsScreen = ({
     setDraft(null)
   }
 
+  // A view needs a name and at least something to do: a tag or ward to filter by, or a sort to
+  // apply (a sort-only view just re-sorts the list and leaves the filter empty).
+  const canSaveDraft = (candidate: ViewDraft) =>
+    candidate.name.trim().length > 0
+    && (candidate.tagIds.length > 0 || candidate.wardTagIds.length > 0 || (candidate.sortConfig?.levels.length ?? 0) > 0)
+
   const saveDraft = async () => {
-    if (!draft) return
+    if (!draft || !canSaveDraft(draft)) return
     const name = draft.name.trim()
-    if (!name) return
     if (editingViewId !== null) {
       await db.customViews.update(editingViewId, { name, tagIds: draft.tagIds, tagMode: draft.tagMode, wardTagIds: draft.wardTagIds, sortConfig: draft.sortConfig })
     } else {
@@ -218,7 +223,7 @@ export const ManageCustomViewsScreen = ({
                     <Trash2 className='h-3.5 w-3.5' />
                   </Button>
                 </div>
-                {view.tagIds.length > 0 || view.wardTagIds.length > 0 ? (
+                {view.tagIds.length > 0 || view.wardTagIds.length > 0 || view.sortConfig ? (
                   <div className='flex flex-wrap items-center gap-1 mt-1.5 pl-7'>
                     {view.tagIds.map((tagId) => {
                       const tag = tagsById.get(tagId)
@@ -320,7 +325,7 @@ export const ManageCustomViewsScreen = ({
                     </label>
                     {draft.sortConfig ? (
                       <>
-                        <FieldTip>Applying this view also applies this sort — leaving it unchecked leaves whatever sort is already active untouched.</FieldTip>
+                        <FieldTip>Applying this view also applies this sort — leaving it unchecked leaves whatever sort is already active untouched. A view can have just a sort, with no tags or wards selected.</FieldTip>
                         <Button type='button' variant='outline' size='sm' onClick={() => setSortDialogOpen(true)}>
                           Configure Sort…
                         </Button>
@@ -331,7 +336,7 @@ export const ManageCustomViewsScreen = ({
               </ScrollArea>
               <div className='flex justify-end gap-2 pt-2'>
                 <Button variant='ghost' onClick={closeEdit}>Cancel</Button>
-                <Button onClick={() => void saveDraft()} disabled={!draft.name.trim() || (draft.tagIds.length === 0 && draft.wardTagIds.length === 0)}>Save</Button>
+                <Button onClick={() => void saveDraft()} disabled={!canSaveDraft(draft)}>Save</Button>
               </div>
             </>
           ) : null}

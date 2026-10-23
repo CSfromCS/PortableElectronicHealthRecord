@@ -60,6 +60,7 @@ import {
   buildDefaultBlockVariableConfig,
   buildGroupVariableInstanceForField,
   buildVariableToken,
+  stripRemovedOrderStatusField,
   classifyTemplateRepeatMode,
   computeAutomaticGroupCombos,
   createVariableId,
@@ -786,12 +787,15 @@ const BlockVariableConfigDialog = ({
   onCancel: () => void
   onSave: (config: BlockVariableConfig) => void
 }) => {
-  const [config, setConfig] = useState<BlockVariableConfig>(initialConfig)
+  // A template saved before Orders lost their status may still carry a Status field; drop it as the
+  // config loads so it never shows as an orphaned chip (and then gets saved back that way).
+  const loadConfig = (candidate: BlockVariableConfig) => (variableId === 'orders' ? stripRemovedOrderStatusField(candidate) : candidate)
+  const [config, setConfig] = useState<BlockVariableConfig>(() => loadConfig(initialConfig))
   const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
-      setConfig(initialConfig)
+      setConfig(loadConfig(initialConfig))
       setSaveError(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset the draft only when the dialog (re)opens, not on every initialConfig identity change

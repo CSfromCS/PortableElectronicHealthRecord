@@ -48,6 +48,7 @@ export const normalizeDailyProblemNotes = (value: unknown): DailyProblemNote[] =
     return [{
       masterProblemId,
       notes: typeof candidate.notes === 'string' ? candidate.notes : '',
+      ...(candidate.collapsed === true ? { collapsed: true } : {}),
     }]
   })
 }

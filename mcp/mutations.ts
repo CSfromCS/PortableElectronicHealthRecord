@@ -458,7 +458,7 @@ export const updateMedication = async (patient: Patient, medicationId: number, i
   return { summary: `Edited ${existing.medication} for ${patientIdentifier(patient)}: ${Object.entries(update).map(([key, value]) => `${key} → ${String(value) || '(blank)'}`).join('; ') || 'nothing changed'}.`, patient }
 }
 
-export type OrderInput = { orderText?: string; service?: string; status?: OrderEntry['status']; date?: string; time?: string; note?: string }
+export type OrderInput = { orderText?: string; service?: string; date?: string; time?: string; note?: string }
 
 export const addOrder = async (patient: Patient, input: OrderInput): Promise<Done> => {
   if (!clean(input.orderText)) throw new ToolError('Say what the order is.')
@@ -468,7 +468,6 @@ export const addOrder = async (patient: Patient, input: OrderInput): Promise<Don
     orderTime: requireTime(input.time, toLocalTime()),
     service: clean(input.service),
     orderText: clean(input.orderText),
-    status: input.status ?? 'active',
     note: clean(input.note),
     createdAt: nowIso(),
   })
@@ -482,7 +481,6 @@ export const updateOrder = async (patient: Patient, orderId: number, input: Orde
   if (input.orderText !== undefined) update.orderText = clean(input.orderText)
   if (input.service !== undefined) update.service = clean(input.service)
   if (input.note !== undefined) update.note = clean(input.note)
-  if (input.status !== undefined) update.status = input.status
   if (input.date !== undefined) update.orderDate = requireDate(input.date, existing.orderDate)
   if (input.time !== undefined) update.orderTime = requireTime(input.time, existing.orderTime)
   if (update.orderText === '') throw new ToolError('The order text cannot be blank.')

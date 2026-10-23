@@ -90,7 +90,7 @@ import {
 } from '@/lib/dateTime'
 import {
   buildStructuredLabLines,
-  formatOrderEntryWithoutService,
+  formatOrderWhen,
 } from './features/reporting/reportBuilders'
 import { formatAgeSex, formatFullName, formatRoomWard, joinNonBlank } from './lib/patientIdentity'
 import {
@@ -108,7 +108,7 @@ const ManageTemplatesScreen = lazy(() =>
 const ManageDateTimeFormatsScreen = lazy(() =>
   import('./features/templates/ManageDateTimeFormatsScreen').then((module) => ({ default: module.ManageDateTimeFormatsScreen })),
 )
-import { classifyTemplateRepeatMode } from './features/templates/templateEngine'
+import { classifyTemplateRepeatMode, stripRemovedOrderStatusFromVariables } from './features/templates/templateEngine'
 import {
   ABG_ACTUAL_FIO2_KEY,
   ABG_DESIRED_FIO2_KEY,
@@ -159,6 +159,7 @@ import {
   type DefaultTitledPhotoBatch,
 } from './features/photos/photoUtils'
 import { CameraCaptureDialog } from './features/photos/CameraCaptureDialog'
+import { PhotoZoomImage } from './features/photos/PhotoZoomImage'
 import { SyncButton, type SyncStatus } from './features/sync/SyncButton'
 import { SyncSetupDialog, type SetupDeviceName, type SetupUsername } from './features/sync/SyncSetupDialog'
 import { VersionPickerDialog } from './features/sync/VersionPickerDialog'
@@ -185,7 +186,7 @@ import { runAutomaticCustomActionsForTagAddition as runSharedAutomaticCustomActi
 import { pruneChangeLog } from './features/changes/changeLog'
 import { computeAbgDerivedValues } from './features/labs/labDerived'
 import { useAutoSync } from './features/sync/useAutoSync'
-import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, Images, ChevronLeft, ChevronRight, ChevronDown, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
+import { Users, UserRound, Settings, HeartPulse, Pill, FlaskConical, ClipboardList, Camera, Images, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, CheckCircle2, Info, Download, Upload, Trash2, Expand, Minimize2, GripVertical, Pencil, Tags as TagsIcon, LayoutGrid, Layers, Zap, FileText, Bookmark, ArrowUpNarrowWide, ArrowDownWideNarrow, Share2 } from 'lucide-react'
 import type { CustomAction, CustomActionCondition, CustomView, DateTimeFormatDefinition, ReportTemplate, TagDefinition, TagEvent, TagGroupDefinition } from './types'
 const ManageTagsScreen = lazy(() =>
   import('./features/tags/ManageTagsScreen').then((module) => ({ default: module.ManageTagsScreen })),
@@ -254,7 +255,6 @@ import {
   getOrCreateServiceTag,
   removeMainServiceTagFromPatient,
   removeReferralServiceTagFromPatient,
-  resolveServiceTagNames,
   resolveServiceTags,
 } from './features/tags/serviceTagUtils'
 import { ServiceTagMultiSelect } from './features/tags/ServiceTagMultiSelect'
@@ -359,8 +359,8 @@ type OrderFormState = {
   orderTime: string
   service: string
   orderText: string
+  /** The order's "Side notes". */
   note: string
-  status: 'active' | 'carriedOut' | 'discontinued'
 }
 
 
@@ -428,7 +428,6 @@ const initialOrderForm = (): OrderFormState => ({
   service: '',
   orderText: '',
   note: '',
-  status: 'active',
 })
 
 declare const __APP_VERSION__: string;
@@ -518,12 +517,6 @@ const MEDICATION_STATUS_LABELS: Record<MedicationEntry['status'], string> = {
   active: 'Active',
   discontinued: 'Discontinued',
   completed: 'Completed',
-}
-
-const ORDER_STATUS_LABELS: Record<OrderEntry['status'], string> = {
-  active: 'Active',
-  carriedOut: 'Carried Out',
-  discontinued: 'Discontinued',
 }
 
 // Device-local UI preference (not clinical data), same rationale as patientTabSettings.
@@ -2022,12 +2015,19 @@ function App() {
   // exit-then-opposite-edge-entry animation (at/above threshold) driven by a handful of state
   // updates rather than per-frame ones. Ignored when the gesture starts on a control or an
   // explicitly opted-out area (see data-no-swipe, used by the thumbnail strip).
-  const photoSwipeStartRef = useRef<{ x: number; y: number; locked: boolean } | null>(null)
+  //
+  // A mostly-vertical downward drag locks the other axis instead: the photo follows the finger and
+  // fades, and releasing past the threshold closes the viewer (otherwise it springs back). Pinch and
+  // pan-while-zoomed are owned by PhotoZoomImage, which tells us (resetPhotoSwipe) to drop any
+  // one-finger gesture we had started tracking.
+  const photoSwipeStartRef = useRef<{ x: number; y: number; axis: 'x' | 'y' | null } | null>(null)
   const photoSwipeVisualRef = useRef<HTMLDivElement | null>(null)
   const photoSwipeExitTimeoutRef = useRef<number | null>(null)
   const photoSwipeRafRef = useRef<number | null>(null)
   const photoSwipePendingDeltaXRef = useRef(0)
+  const photoSwipePendingDeltaYRef = useRef(0)
   const [photoSwipeOffsetX, setPhotoSwipeOffsetX] = useState(0)
+  const [photoSwipeOffsetY, setPhotoSwipeOffsetY] = useState(0)
   const [photoSwipeTransitionOn, setPhotoSwipeTransitionOn] = useState(false)
   const [photoSwipeReleaseActive, setPhotoSwipeReleaseActive] = useState(false)
 
@@ -2036,14 +2036,19 @@ function App() {
   const PHOTO_SWIPE_EXIT_DISTANCE_PX = 300
   const PHOTO_SWIPE_ENTRY_DISTANCE_PX = 56
   const PHOTO_SWIPE_EXIT_DURATION_MS = 180
+  const PHOTO_SWIPE_DISMISS_DISTANCE_PX = 110
 
-  const photoSwipeOpacityForOffset = (offsetX: number) => 1 - Math.min(Math.abs(offsetX) / 250, 0.85)
+  const photoSwipeOpacityForOffset = (offsetX: number, offsetY = 0) =>
+    1 - Math.min(Math.max(Math.abs(offsetX) / 250, offsetY / 400), 0.85)
 
-  const applyPhotoSwipeVisualTransform = (offsetX: number) => {
+  const photoSwipeTransformForOffset = (offsetX: number, offsetY: number) =>
+    offsetY === 0 ? `translateX(${offsetX}px)` : `translate(${offsetX}px, ${offsetY}px)`
+
+  const applyPhotoSwipeVisualTransform = (offsetX: number, offsetY = 0) => {
     const node = photoSwipeVisualRef.current
     if (!node) return
-    node.style.transform = `translateX(${offsetX}px)`
-    node.style.opacity = String(photoSwipeOpacityForOffset(offsetX))
+    node.style.transform = photoSwipeTransformForOffset(offsetX, offsetY)
+    node.style.opacity = String(photoSwipeOpacityForOffset(offsetX, offsetY))
   }
 
   const resetPhotoSwipe = () => {
@@ -2055,6 +2060,7 @@ function App() {
     setPhotoSwipeReleaseActive(false)
     setPhotoSwipeTransitionOn(false)
     setPhotoSwipeOffsetX(0)
+    setPhotoSwipeOffsetY(0)
     applyPhotoSwipeVisualTransform(0)
   }
 
@@ -2071,7 +2077,7 @@ function App() {
     const touch = event.touches[0]
     if (!touch) return
     resetPhotoSwipe()
-    photoSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, locked: false }
+    photoSwipeStartRef.current = { x: touch.clientX, y: touch.clientY, axis: null }
   }
 
   const handlePhotoSwipeTouchMove = (event: TouchEvent<HTMLDivElement>) => {
@@ -2082,21 +2088,33 @@ function App() {
     const deltaX = touch.clientX - start.x
     const deltaY = touch.clientY - start.y
 
-    if (!start.locked) {
+    if (!start.axis) {
       if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > PHOTO_SWIPE_LOCK_DEADZONE_PX) {
-        photoSwipeStartRef.current = null
+        // Only a downward drag does anything (close); an upward one is ignored.
+        if (deltaY < 0) {
+          photoSwipeStartRef.current = null
+          return
+        }
+        start.axis = 'y'
+      } else if (Math.abs(deltaX) >= PHOTO_SWIPE_LOCK_DEADZONE_PX) {
+        start.axis = 'x'
+      } else {
         return
       }
-      if (Math.abs(deltaX) < PHOTO_SWIPE_LOCK_DEADZONE_PX) return
-      start.locked = true
     }
 
     event.preventDefault()
-    photoSwipePendingDeltaXRef.current = deltaX
+    if (start.axis === 'y') {
+      photoSwipePendingDeltaXRef.current = deltaX
+      photoSwipePendingDeltaYRef.current = Math.max(deltaY, 0)
+    } else {
+      photoSwipePendingDeltaXRef.current = deltaX
+      photoSwipePendingDeltaYRef.current = 0
+    }
     if (photoSwipeRafRef.current !== null) return
     photoSwipeRafRef.current = requestAnimationFrame(() => {
       photoSwipeRafRef.current = null
-      applyPhotoSwipeVisualTransform(photoSwipePendingDeltaXRef.current)
+      applyPhotoSwipeVisualTransform(photoSwipePendingDeltaXRef.current, photoSwipePendingDeltaYRef.current)
     })
   }
 
@@ -2107,8 +2125,35 @@ function App() {
       cancelAnimationFrame(photoSwipeRafRef.current)
       photoSwipeRafRef.current = null
     }
-    if (!start?.locked) {
+    if (!start?.axis) {
       resetPhotoSwipe()
+      return
+    }
+
+    if (start.axis === 'y') {
+      const touch = event.changedTouches[0]
+      const deltaY = touch ? touch.clientY - start.y : photoSwipePendingDeltaYRef.current
+      const deltaX = touch ? touch.clientX - start.x : photoSwipePendingDeltaXRef.current
+      setPhotoSwipeReleaseActive(true)
+      setPhotoSwipeTransitionOn(false)
+      setPhotoSwipeOffsetX(deltaX)
+      setPhotoSwipeOffsetY(Math.max(deltaY, 0))
+      if (deltaY < PHOTO_SWIPE_DISMISS_DISTANCE_PX) {
+        requestAnimationFrame(() => {
+          setPhotoSwipeTransitionOn(true)
+          setPhotoSwipeOffsetX(0)
+          setPhotoSwipeOffsetY(0)
+        })
+        return
+      }
+      requestAnimationFrame(() => {
+        setPhotoSwipeTransitionOn(true)
+        setPhotoSwipeOffsetY(window.innerHeight)
+      })
+      photoSwipeExitTimeoutRef.current = window.setTimeout(() => {
+        setSelectedAttachmentId(null)
+        resetPhotoSwipe()
+      }, PHOTO_SWIPE_EXIT_DURATION_MS)
       return
     }
 
@@ -2248,12 +2293,15 @@ function App() {
     const query = searchQuery.trim().toLowerCase()
     const matchesQuery = (patient: Patient) => {
       if (!query) return true
-      const serviceNames = [
-        ...resolveServiceTagNames(patient.mainServiceTagIds, tagsById),
-        ...resolveServiceTagNames(patient.referralServiceTagIds, tagsById),
-      ]
-      const wardName = patient.wardTagId !== undefined ? tagsById.get(patient.wardTagId)?.name ?? '' : ''
-      return [patient.roomNumber, wardName, patient.lastName, patient.firstName, ...serviceNames]
+      // Services and ward are searchable by both their full name and their badge shorthand
+      // (displayText), e.g. "TCVS" or "thoracic".
+      const tagTerms = (tag: TagDefinition | undefined) => (tag ? [tag.name, tag.displayText ?? ''] : [])
+      const serviceTerms = [
+        ...resolveServiceTags(patient.mainServiceTagIds, tagsById),
+        ...resolveServiceTags(patient.referralServiceTagIds, tagsById),
+      ].flatMap((tag) => tagTerms(tag))
+      const wardTerms = tagTerms(patient.wardTagId !== undefined ? tagsById.get(patient.wardTagId) : undefined)
+      return [patient.roomNumber, ...wardTerms, patient.lastName, patient.firstName, ...serviceTerms]
         .join(' ')
         .toLowerCase()
         .includes(query)
@@ -4532,7 +4580,7 @@ function App() {
   const renderProblemsTabContent = () => (
     <div className='space-y-3'>
       {renderDailyDateHeader('problems')}
-      <FieldTip>A new date starts with the latest entry already carried forward: unresolved problem blocks with their notes, subjective, objective, assessment, and plan. Only pending checklist items carry over. "Clear all entries" blanks every note and field for this date, and "Copy latest entry" re-copies the latest one over it.</FieldTip>
+      <FieldTip>A new date starts with the latest entry already carried forward: unresolved problem blocks with their notes (and whether each is collapsed), subjective, objective, assessment, and plan. Only pending checklist items carry over. "Clear all entries" blanks every note and field for this date, and "Copy latest entry" re-copies the latest one over it.</FieldTip>
       <ProblemListEditor
         dailyProblems={dailyUpdateForm.problems}
         onChangeDailyProblems={(problems) => {
@@ -5032,7 +5080,6 @@ function App() {
       service: entry.service,
       orderText: entry.orderText,
       note: entry.note,
-      status: entry.status,
     })
   }
 
@@ -5086,17 +5133,6 @@ function App() {
     }
     ordersSelection.exit()
     setNotice(`Deleted ${ids.length} order${ids.length === 1 ? '' : 's'}.`)
-  }
-
-  const setSelectedOrdersStatus = async (status: OrderEntry['status']) => {
-    const ids = [...ordersSelection.selectedIds]
-    if (ids.length === 0) return
-    await db.transaction('rw', [db.orders], async () => {
-      await Promise.all(ids.map((id) => db.orders.update(id, { status })))
-    })
-    await touchPatientLastModified(selectedPatientId)
-    ordersSelection.exit()
-    setNotice(`Marked ${ids.length} order${ids.length === 1 ? '' : 's'} as ${ORDER_STATUS_LABELS[status]}.`)
   }
 
   const saveVitalDraft = useCallback(
@@ -5164,7 +5200,6 @@ function App() {
         service: orderForm.service.trim(),
         orderText: orderForm.orderText.trim(),
         note: orderForm.note.trim(),
-        status: orderForm.status,
       }
 
       try {
@@ -5813,7 +5848,11 @@ function App() {
           await db.tagEvents.bulkPut(parsed.tagEvents ?? [])
         }
         if ((parsed.reportTemplates ?? []).length > 0) {
-          await db.reportTemplates.bulkPut(parsed.reportTemplates ?? [])
+          // Backups made before orders lost their status may still reference a Status field.
+          await db.reportTemplates.bulkPut((parsed.reportTemplates ?? []).map((template) => ({
+            ...template,
+            variables: stripRemovedOrderStatusFromVariables(template.variables ?? {}).next,
+          })))
         }
         if ((parsed.dateTimeFormats ?? []).length > 0) {
           await db.dateTimeFormats.bulkPut(parsed.dateTimeFormats ?? [])
@@ -6356,7 +6395,6 @@ function App() {
           service: 'Pulmo',
           orderText: 'Repeat chest x-ray PA/Lateral on hospital day 3',
           note: 'Assess interval resolution of infiltrates',
-          status: 'active',
           createdAt: now,
         },
         {
@@ -6366,7 +6404,6 @@ function App() {
           service: 'CV',
           orderText: 'CBC and electrolytes tomorrow 6 AM',
           note: 'Monitor response to treatment',
-          status: 'active',
           createdAt: now,
         },
       ])
@@ -7350,7 +7387,7 @@ function App() {
                                   })
                                 }}
                               >
-                                <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                                <ChevronUp className='h-3.5 w-3.5' aria-hidden='true' />
                                 Done
                               </Button>
                             </div>
@@ -7407,7 +7444,7 @@ function App() {
                                 })
                               }}
                             >
-                              <Pencil className='h-3.5 w-3.5' aria-hidden='true' />
+                              <ChevronUp className='h-3.5 w-3.5' aria-hidden='true' />
                             </Button>
                           ) : null}
                         </div>
@@ -8579,6 +8616,29 @@ function App() {
                             />
                           </div>
                           <div className='space-y-1 col-span-2'>
+                            <Label>Side notes</Label>
+                            <TapToEditField
+                              ariaLabel='Order side notes'
+                              emptyText='Tap to add side notes'
+                              value={orderForm.note}
+                              onCommit={(nextValue) => updateOrderField('note', nextValue)}
+                              renderView={(text) => (
+                                <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                              )}
+                              renderEditor={({ value, onChange }) => (
+                                <PhotoMentionField
+                                  ariaLabel='Order side notes'
+                                  placeholder='Side notes'
+                                  value={value}
+                                  onChange={onChange}
+                                  attachments={mentionableAttachments}
+                                  attachmentByTitle={mentionableAttachmentByTitle}
+                                  onOpenPhotoById={openPhotoById}
+                                />
+                              )}
+                            />
+                          </div>
+                          <div className='space-y-1 col-span-2'>
                             <Label>Order</Label>
                             <TapToEditField
                               ariaLabel='Order text'
@@ -8600,40 +8660,6 @@ function App() {
                                 />
                               )}
                             />
-                          </div>
-                          <div className='space-y-1'>
-                            <Label>Note</Label>
-                            <TapToEditField
-                              ariaLabel='Order note'
-                              emptyText='Tap to add a note'
-                              value={orderForm.note}
-                              onCommit={(nextValue) => updateOrderField('note', nextValue)}
-                              renderView={(text) => (
-                                <MentionText text={text} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
-                              )}
-                              renderEditor={({ value, onChange }) => (
-                                <PhotoMentionField
-                                  ariaLabel='Order note'
-                                  placeholder='Note'
-                                  value={value}
-                                  onChange={onChange}
-                                  attachments={mentionableAttachments}
-                                  attachmentByTitle={mentionableAttachmentByTitle}
-                                  onOpenPhotoById={openPhotoById}
-                                />
-                              )}
-                            />
-                          </div>
-                          <div className='space-y-1'>
-                            <Label>Status</Label>
-                            <Select value={orderForm.status} onValueChange={(v) => updateOrderField('status', v as 'active' | 'carriedOut' | 'discontinued')}>
-                              <SelectTrigger><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value='active'>Active</SelectItem>
-                                <SelectItem value='carriedOut'>Carried out</SelectItem>
-                                <SelectItem value='discontinued'>Discontinued</SelectItem>
-                              </SelectContent>
-                            </Select>
                           </div>
                         </div>
                         <div className='flex gap-2 flex-wrap'>
@@ -8685,9 +8711,6 @@ function App() {
                                   <Button size='sm' variant='outline' className='h-7 text-xs' onClick={() => ordersSelection.toggleSelectAll(selectedPatientOrders.map((entry) => entry.id))}>
                                     {selectedPatientOrders.length > 0 && selectedPatientOrders.every((entry) => ordersSelection.isSelected(entry.id)) ? 'Deselect All' : 'Select All'}
                                   </Button>
-                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('active')}>Mark Active</Button>
-                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('carriedOut')}>Mark Carried Out</Button>
-                                  <Button size='sm' variant='outline' className='h-7 text-xs' disabled={ordersSelection.selectedIds.size === 0} onClick={() => void setSelectedOrdersStatus('discontinued')}>Mark Discontinued</Button>
                                   <Button
                                     size='sm'
                                     variant='destructive'
@@ -8735,20 +8758,31 @@ function App() {
                                     <span className='text-clay italic'>(Editing above...)</span>
                                   ) : (
                                     <>
-                                      <span className='min-w-0 flex-1 flex items-center gap-1.5 whitespace-pre-wrap text-left'>
-                                        {entry.service.trim() ? (
-                                          orderServiceTag ? (
-                                            <TagChip tag={orderServiceTag} className='shrink-0' />
-                                          ) : (
-                                            <span className='shrink-0 rounded-full bg-blush-sand px-2 py-0.5 text-[11px] font-semibold text-espresso'>{entry.service}</span>
-                                          )
-                                        ) : null}
-                                        <MentionText
-                                          text={formatOrderEntryWithoutService(entry)}
-                                          attachmentByTitle={mentionableAttachmentByTitle}
-                                          onOpenPhotoById={openPhotoById}
-                                        />
-                                      </span>
+                                      <div className='min-w-0 flex-1 space-y-0.5 text-left'>
+                                        <p className='flex flex-wrap items-center gap-1.5 text-xs font-medium text-clay'>
+                                          <span>{formatOrderWhen(entry)}</span>
+                                          {entry.service.trim() ? (
+                                            <>
+                                              <span aria-hidden='true'>—</span>
+                                              {orderServiceTag ? (
+                                                <TagChip tag={orderServiceTag} className='shrink-0' />
+                                              ) : (
+                                                <span className='shrink-0 rounded-full bg-blush-sand px-2 py-0.5 text-[11px] font-semibold text-espresso'>{entry.service}</span>
+                                              )}
+                                            </>
+                                          ) : null}
+                                        </p>
+                                        <div className='grid grid-cols-2 gap-x-4 whitespace-pre-wrap'>
+                                          <div className='min-w-0 break-words'>
+                                            {entry.note.trim() ? (
+                                              <MentionText text={entry.note} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                                            ) : null}
+                                          </div>
+                                          <div className='min-w-0 break-words'>
+                                            <MentionText text={entry.orderText} attachmentByTitle={mentionableAttachmentByTitle} onOpenPhotoById={openPhotoById} />
+                                          </div>
+                                        </div>
+                                      </div>
                                       {!ordersSelection.selectionMode ? (
                                         <Button size='sm' variant='edit' onClick={() => startEditingOrder(entry)}>Edit</Button>
                                       ) : null}
@@ -9405,7 +9439,7 @@ function App() {
                     ['Navigate on mobile', 'The bottom bar shows your visible patient tabs in a scrollable row — swipe or tap to switch. Use ← Back to return to the patient list.'],
                     ['Customize your tabs', 'Go to Settings → Patient Tabs to hide tabs you don\'t use and drag the rest into your preferred order. Hiding a tab only hides it — the data underneath is never deleted.'],
                     ['Switch patients', 'Tap the patient name at the top of any tab to jump to a different patient while staying on the same section. This quick-switch list matches whatever Status/Tag/Ward filter and sort order you last used on the Patients tab (not its search box), and you can scroll through it when many patients are present. On mobile, swipe left or right anywhere on the patient view to move to the next or previous patient in that same order instead.'],
-                    ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes, then fill in Subjective, Objective, Assessment, and Plan below them. Drag blocks to set their priority. Unresolved problems carry forward to the next date automatically — mark one Resolved once it no longer needs tracking. Tap Copy latest entry to copy the previous problem blocks in order, subjective, objective, assessment, and plan.'],
+                    ['Write daily notes', 'Open Problems, pick today\'s date, and add one block per problem with a title and free-text notes, then fill in Subjective, Objective, Assessment, and Plan below them. Drag blocks to set their priority. Tap the arrow beside a problem to hide its notes (or Collapse all to fold the whole list down to just the problem titles) — collapsed problems stay collapsed and carry forward to the next date. Unresolved problems carry forward to the next date automatically — mark one Resolved once it no longer needs tracking. Tap Copy latest entry to copy the previous problem blocks in order, subjective, objective, assessment, and plan.'],
                     ['Track a daily checklist', 'Open Checklist, add short tasks for the date, and check them off as you go. Pending items carry forward automatically to the next date; completed items move to the bottom. Drag any item to override that order.'],
                     ['Review all checklist items', 'Open Checklist from the main navigation to see checklist items for active patients on one date, including pending and completed entries with Created/Completed dates shown in short format (e.g., Feb 10). Completing an item moves it to the bottom; reopening it moves it before the first completed item. Drag any item to override that order.'],
                     ['Generate reports', 'Open Report, configure filters, tap any export button to preview, then Copy full text to paste into a handoff or chart.'],
@@ -9443,13 +9477,16 @@ function App() {
                     'ABG: pO2/FiO2 is auto-calculated from pO2 and Actual FiO2. Desired FiO2 only appears when FiO2 > 21% or pO2 < 60 mmHg.',
                     'Report Labs: two entries from the same lab template are auto-compared, except Others entries which are always shown as separate plain results.',
                     'Type @ in any text field to link a photo by title — tap the highlighted @title to open the photo viewer.',
+                    'In the photo viewer, pinch (or double-tap, or use the mouse wheel) to zoom and drag to pan around a zoomed photo; swipe down on a photo to close the viewer.',
+                    'On the Profile tab, the pencil beside the patient details or tags means "edit"; when that area is open the arrow collapses it again — your changes save either way.',
+                    'Service, Referral and Ward pickers (and the Patients search box) find a tag by its full name or by the short badge text you set in Tag Settings — "TCVS" and "thoracic" find the same service.',
                     'Large note text boxes include an expand button when content overflows; tap again to collapse back to default height.',
                     'Problems exports preserve problem and checklist order and include a daily vitals range line (BP, HR, RR, Temp, SpO2%) for the selected date.',
                     'All patient exports: select and reorder active patients before generating Multiple Census or Multiple Vitals.',
                     'Photos: upload multiple images at once — they are grouped into one block and keep your picker selection order. Tap the block to open a carousel, then use < / >, keyboard arrows, Home/End, thumbnails, or swipe the thumbnail row on phone to jump quickly in large sets.',
                     'Settings → Review all photos lets you find linked/orphan photos and reassign, delete, or export each photo.',
                     'Meds: use the drag handle to match medication order with the standing order sheet (on mobile, press and hold then drag).',
-                    'Orders: use Edit on any order to update its status (active, carried out, discontinued) or remove it.',
+                    'Orders: type any side notes first, then the order itself — registered orders list the date and time and the service as a header, with the side notes on the left and the order on the right. Use Edit on any order to change or remove it.',
                     'The report preview popup supports manual text selection — select only what you need, or use Copy full text.',
                   ] as string[]).map((tip, i) => (
                     <li key={i} className='flex gap-2 items-start text-xs text-espresso'>
@@ -9588,13 +9625,15 @@ function App() {
                     'flex h-full w-full items-center justify-center',
                     photoSwipeTransitionOn && 'transition-transform duration-200 ease-out',
                   )}
-                  style={photoSwipeReleaseActive ? { transform: `translateX(${photoSwipeOffsetX}px)`, opacity: photoSwipeOpacityForOffset(photoSwipeOffsetX) } : undefined}
+                  style={photoSwipeReleaseActive ? { transform: photoSwipeTransformForOffset(photoSwipeOffsetX, photoSwipeOffsetY), opacity: photoSwipeOpacityForOffset(photoSwipeOffsetX, photoSwipeOffsetY) } : undefined}
                 >
                   {carouselPreviewUrls[selectedAttachmentCarouselEntry.id] ? (
-                    <img
+                    <PhotoZoomImage
+                      key={selectedAttachmentCarouselEntry.id}
                       src={carouselPreviewUrls[selectedAttachmentCarouselEntry.id]}
                       alt={selectedAttachmentCarouselEntry.title || 'Attachment preview'}
-                      className='max-h-full max-w-full object-contain'
+                      onTap={() => setIsCarouselChromeVisible((previous) => !previous)}
+                      onGestureTakeover={resetPhotoSwipe}
                     />
                   ) : (
                     <p className='text-sm text-white/70'>Preview unavailable.</p>

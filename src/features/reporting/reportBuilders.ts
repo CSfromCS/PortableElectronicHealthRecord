@@ -34,26 +34,9 @@ export const formatStructuredMedication = (entry: MedicationEntry) => {
   return withNote
 }
 
-export const formatOrderStatus = (status: OrderEntry['status']) => {
-  if (status === 'carriedOut') return 'carried out'
-  return status
-}
-
-export const formatOrderEntry = (entry: OrderEntry) => {
-  const serviceText = (entry.service ?? '').trim()
-  const whenText = [entry.orderDate ?? '', entry.orderTime ?? ''].filter(Boolean).join(' ')
-  const header = [serviceText, whenText, entry.orderText].filter(Boolean).join(' • ')
-  const withNote = [header, entry.note].filter(Boolean).join(' — ')
-  return `${withNote || entry.orderText} (${formatOrderStatus(entry.status)})`
-}
-
-/** Same as `formatOrderEntry` but omits the service segment — for UI that already shows the service as its own chip. */
-export const formatOrderEntryWithoutService = (entry: OrderEntry) => {
-  const whenText = [entry.orderDate ?? '', entry.orderTime ?? ''].filter(Boolean).join(' ')
-  const header = [whenText, entry.orderText].filter(Boolean).join(' • ')
-  const withNote = [header, entry.note].filter(Boolean).join(' — ')
-  return `${withNote || entry.orderText} (${formatOrderStatus(entry.status)})`
-}
+/** "2026-10-18 20:17" — the date-and-time half of a registered order's header line ("2026-10-18 20:17 — GS"). */
+export const formatOrderWhen = (entry: OrderEntry) =>
+  [entry.orderDate ?? '', entry.orderTime ?? ''].filter(Boolean).join(' ')
 
 export const buildStructuredLabLines = (entries: LabEntry[]) => {
   return entries.map((entry) => {

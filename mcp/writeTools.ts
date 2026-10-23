@@ -261,10 +261,10 @@ export const registerWriteTools = (server: McpServer, room: RoomFollower): void 
   server.registerTool('update_medication', { description: 'Edit a medication, including setting its status to discontinued or completed.', inputSchema: { ...patientShape, medicationId: z.number().int(), ...medicationShape } },
     ({ room: r, lastName, patientId, medicationId, ...input }) => act(room, 'update_medication', (world) => updateMedication(resolvePatientForWrite(world, { room: r, lastName, patientId }), medicationId, input)))
 
-  const orderShape = { orderText: z.string().optional(), service: z.string().optional(), status: z.enum(['active', 'carriedOut', 'discontinued']).optional(), date: z.string().optional(), time: z.string().optional(), note: z.string().optional() }
+  const orderShape = { orderText: z.string().optional(), service: z.string().optional(), date: z.string().optional(), time: z.string().optional(), note: z.string().optional().describe('Side notes shown beside the order.') }
   server.registerTool('add_order', { description: 'Add a doctor\'s order for a patient.', inputSchema: { ...patientShape, ...orderShape } },
     ({ room: r, lastName, patientId, ...input }) => act(room, 'add_order', (world) => addOrder(resolvePatientForWrite(world, { room: r, lastName, patientId }), input)))
-  server.registerTool('update_order', { description: 'Edit an order, including marking it carriedOut or discontinued.', inputSchema: { ...patientShape, orderId: z.number().int(), ...orderShape } },
+  server.registerTool('update_order', { description: 'Edit an order.', inputSchema: { ...patientShape, orderId: z.number().int(), ...orderShape } },
     ({ room: r, lastName, patientId, orderId, ...input }) => act(room, 'update_order', (world) => updateOrder(resolvePatientForWrite(world, { room: r, lastName, patientId }), orderId, input)))
 
   server.registerTool('add_lab', {

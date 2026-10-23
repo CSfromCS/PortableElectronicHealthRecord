@@ -1,5 +1,5 @@
 import { useState, type DragEvent, type TouchEvent } from 'react'
-import { CheckCircle2, Circle, GripVertical, Plus, Trash2 } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Circle, GripVertical, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
@@ -138,6 +138,27 @@ export function ProblemListEditor({
     )))
   }
 
+  const setCollapsed = (masterProblemIds: Set<number>, collapsed: boolean) => {
+    onChangeDailyProblems(dailyProblems.map((entry) => {
+      if (!masterProblemIds.has(entry.masterProblemId)) return entry
+      const next: DailyProblemNote = { ...entry }
+      if (collapsed) next.collapsed = true
+      else delete next.collapsed
+      return next
+    }))
+  }
+
+  const toggleCollapsed = (entry: DailyProblemNote) => {
+    setCollapsed(new Set([entry.masterProblemId]), entry.collapsed !== true)
+  }
+
+  // One button for the whole list: collapses everything, or — once everything is already collapsed —
+  // expands it all again.
+  const allCollapsed = groupedDailyProblems.length > 0 && groupedDailyProblems.every((entry) => entry.collapsed === true)
+  const toggleAllCollapsed = () => {
+    setCollapsed(new Set(groupedDailyProblems.map((entry) => entry.masterProblemId)), !allCollapsed)
+  }
+
   const removeProblem = (masterProblemId: number) => {
     onChangeDailyProblems(dailyProblems.filter((entry) => entry.masterProblemId !== masterProblemId))
     setPendingRemovalId(null)
@@ -202,12 +223,26 @@ export function ProblemListEditor({
       <div className='flex items-center justify-between gap-2'>
         <div>
           <Label>Problems List</Label>
-          <FieldTip>Drag blocks to set priority. Unresolved problems carry forward to the next date automatically; mark a problem Resolved once it no longer needs daily tracking.</FieldTip>
+          <FieldTip>Drag blocks to set priority. Tap the arrow beside a problem to hide its notes, or Collapse all to see just the problem titles; collapsed problems stay collapsed on later dates. Unresolved problems carry forward to the next date automatically; mark a problem Resolved once it no longer needs daily tracking.</FieldTip>
         </div>
-        <Button type='button' variant='secondary' size='sm' onClick={onAddProblem}>
-          <Plus className='h-4 w-4' aria-hidden='true' />
-          Add problem
-        </Button>
+        <div className='flex shrink-0 items-center gap-1.5'>
+          {groupedDailyProblems.length > 0 ? (
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              aria-label={allCollapsed ? 'Expand all problems' : 'Collapse all problems'}
+              onClick={toggleAllCollapsed}
+            >
+              {allCollapsed ? <ChevronsUpDown className='h-4 w-4' aria-hidden='true' /> : <ChevronsDownUp className='h-4 w-4' aria-hidden='true' />}
+              <span className='hidden sm:inline'>{allCollapsed ? 'Expand all' : 'Collapse all'}</span>
+            </Button>
+          ) : null}
+          <Button type='button' variant='secondary' size='sm' onClick={onAddProblem}>
+            <Plus className='h-4 w-4' aria-hidden='true' />
+            Add problem
+          </Button>
+        </div>
       </div>
 
       <div className='space-y-2'>
@@ -215,6 +250,7 @@ export function ProblemListEditor({
           const problem = masterProblemsById.get(entry.masterProblemId)
           const isResolved = problem?.status === 'resolved'
           const label = labels.get(entry.masterProblemId) ?? String(index + 1)
+          const isCollapsed = entry.collapsed === true
           const colorSourceId = problem ? resolveColorSourceId(problem, masterProblemsById) : null
           const color = colorSourceId !== null ? getMasterProblemColor(colorSourceId) : null
           return (
@@ -222,7 +258,8 @@ export function ProblemListEditor({
               key={entry.masterProblemId}
               data-problem-index={index}
               className={cn(
-                'border-b border-clay/25 pb-3 last:border-b-0',
+                'border-b border-clay/25 last:border-b-0',
+                isCollapsed ? 'pb-0' : 'pb-3',
                 draggingIndex === index && 'opacity-60',
                 dropIndicatorClassName(dropTarget?.index === index && draggingIndex !== null ? dropTarget.position : null),
               )}
@@ -247,107 +284,124 @@ export function ProblemListEditor({
               }}
             >
               <div
-                className='flex items-start gap-2 rounded-md border-l-4 p-1.5'
+                className={cn('rounded-md border-l-4', isCollapsed ? 'p-0.5' : 'p-1.5')}
                 style={color ? { borderLeftColor: color, backgroundColor: `${color}1f` } : { borderLeftColor: 'transparent' }}
               >
-                <Button
-                  type='button'
-                  variant='ghost'
-                  className='mt-3.5 h-8 w-8 shrink-0 cursor-grab p-0 text-clay active:cursor-grabbing touch-none'
-                  aria-label={`Reorder problem ${label}`}
-                  draggable
-                  onDragStart={(event: DragEvent<HTMLButtonElement>) => {
-                    event.dataTransfer.effectAllowed = 'move'
-                    setDraggingIndex(index)
-                  }}
-                  onDragEnd={resetDragState}
-                  onTouchStart={(event) => startTouchDrag(event, index)}
-                  onTouchMove={updateTouchTarget}
-                  onTouchEnd={finishTouchDrag}
-                  onTouchCancel={resetDragState}
-                  onKeyDown={(event) => {
-                    if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
-                    event.preventDefault()
-                    const targetIndex = event.key === 'ArrowUp' ? index - 1 : index + 1
-                    if (targetIndex >= 0 && targetIndex < groupedDailyProblems.length) moveProblem(index, targetIndex, event.key === 'ArrowUp' ? 'before' : 'after')
-                  }}
-                >
-                  <GripVertical className='h-4 w-4' aria-hidden='true' />
-                </Button>
-                <div className='min-w-0 flex-1'>
-                  <div className='flex items-center gap-2'>
-                    <span className='shrink-0 text-sm font-medium text-espresso' aria-hidden='true'>{label}.</span>
-                    <div className='min-w-0 flex-1'>
-                      <TapToEditField
-                        ariaLabel={`Problem ${label} title`}
-                        emptyText='Tap to name this problem'
-                        className='px-1.5'
-                        value={problem?.currentTitle ?? ''}
-                        onCommit={(nextValue) => onRenameProblem(entry.masterProblemId, nextValue)}
-                        onEnterEditMode={() => onBeginRename(entry.masterProblemId)}
-                        onFinalCommit={(finalValue) => onFinalizeRename(entry.masterProblemId, finalValue)}
-                        renderView={(text) => (
-                          <span className={isResolved ? 'line-through text-clay' : undefined}>{text}</span>
-                        )}
-                        renderEditor={({ value, onChange }) => (
-                          <AutoGrowTextField
-                            id={`problem-title-${entry.masterProblemId}`}
-                            aria-label={`Problem ${label} title`}
-                            value={value}
-                            onChange={onChange}
-                            placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
-                            className={cn(isResolved && 'line-through text-clay')}
-                          />
-                        )}
+                <div className='flex items-center gap-1'>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    className='h-7 w-7 shrink-0 cursor-grab p-0 text-clay active:cursor-grabbing touch-none'
+                    aria-label={`Reorder problem ${label}`}
+                    draggable
+                    onDragStart={(event: DragEvent<HTMLButtonElement>) => {
+                      event.dataTransfer.effectAllowed = 'move'
+                      setDraggingIndex(index)
+                    }}
+                    onDragEnd={resetDragState}
+                    onTouchStart={(event) => startTouchDrag(event, index)}
+                    onTouchMove={updateTouchTarget}
+                    onTouchEnd={finishTouchDrag}
+                    onTouchCancel={resetDragState}
+                    onKeyDown={(event) => {
+                      if (!(event.ctrlKey || event.metaKey) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+                      event.preventDefault()
+                      const targetIndex = event.key === 'ArrowUp' ? index - 1 : index + 1
+                      if (targetIndex >= 0 && targetIndex < groupedDailyProblems.length) moveProblem(index, targetIndex, event.key === 'ArrowUp' ? 'before' : 'after')
+                    }}
+                  >
+                    <GripVertical className='h-4 w-4' aria-hidden='true' />
+                  </Button>
+                  <span className='shrink-0 text-sm font-medium text-espresso' aria-hidden='true'>{label}.</span>
+                  <div className='min-w-0 flex-1'>
+                    <TapToEditField
+                      ariaLabel={`Problem ${label} title`}
+                      emptyText='Tap to name this problem'
+                      className={isCollapsed ? 'px-1.5 py-0.5' : 'px-1.5'}
+                      value={problem?.currentTitle ?? ''}
+                      onCommit={(nextValue) => onRenameProblem(entry.masterProblemId, nextValue)}
+                      onEnterEditMode={() => onBeginRename(entry.masterProblemId)}
+                      onFinalCommit={(finalValue) => onFinalizeRename(entry.masterProblemId, finalValue)}
+                      renderView={(text) => (
+                        <span className={isResolved ? 'line-through text-clay' : undefined}>{text}</span>
+                      )}
+                      renderEditor={({ value, onChange }) => (
+                        <AutoGrowTextField
+                          id={`problem-title-${entry.masterProblemId}`}
+                          aria-label={`Problem ${label} title`}
+                          value={value}
+                          onChange={onChange}
+                          placeholder='e.g., AKI, CAP-MR, Hyperkalemia'
+                          className={cn(isResolved && 'line-through text-clay')}
+                        />
+                      )}
+                    />
+                  </div>
+                  {isCollapsed && entry.notes.trim() ? (
+                    <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-clay/60' role='img' aria-label='Has notes' title='Has notes' />
+                  ) : null}
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    className='h-8 w-8 shrink-0 p-0 text-clay'
+                    aria-expanded={!isCollapsed}
+                    aria-label={isCollapsed ? `Expand problem ${label}` : `Collapse problem ${label}`}
+                    onClick={() => toggleCollapsed(entry)}
+                  >
+                    {isCollapsed ? <ChevronRight className='h-5 w-5' aria-hidden='true' /> : <ChevronDown className='h-5 w-5' aria-hidden='true' />}
+                  </Button>
+                </div>
+              </div>
+              {isCollapsed ? null : (
+                <div className='mt-2 space-y-1 pl-1.5'>
+                  <TapToEditField
+                    ariaLabel={`Notes for problem ${label}`}
+                    emptyText='Tap to add notes'
+                    className='px-1.5'
+                    value={entry.notes}
+                    onCommit={(value) => updateNotes(entry.masterProblemId, value)}
+                    renderView={(text) => (
+                      <MentionText text={text} attachmentByTitle={attachmentByTitle} onOpenPhotoById={onOpenPhotoById} />
+                    )}
+                    renderEditor={({ value, onChange }) => (
+                      <PhotoMentionField
+                        ariaLabel={`Notes for problem ${label}`}
+                        placeholder='Plan, trend, pending workup, or other notes'
+                        value={value}
+                        onChange={onChange}
+                        attachments={attachments}
+                        attachmentByTitle={attachmentByTitle}
+                        onOpenPhotoById={onOpenPhotoById}
                       />
-                    </div>
+                    )}
+                  />
+                  <div className='flex items-center justify-between gap-2'>
                     <Button
                       type='button'
                       variant='ghost'
                       size='sm'
-                      className={cn('h-5 shrink-0 gap-0.5 px-1 text-[11px]', isResolved ? 'text-action-edit' : 'text-clay')}
+                      className={cn('h-7 gap-1 px-1.5 text-xs', isResolved ? 'text-action-edit' : 'text-clay')}
                       aria-pressed={isResolved}
                       aria-label={isResolved ? `Mark problem ${label} as unresolved` : `Mark problem ${label} as resolved`}
                       onClick={() => onToggleResolved(entry.masterProblemId)}
                     >
-                      {isResolved ? <CheckCircle2 className='h-3 w-3' aria-hidden='true' /> : <Circle className='h-3 w-3' aria-hidden='true' />}
-                      Resolved
+                      {isResolved ? <CheckCircle2 className='h-3.5 w-3.5' aria-hidden='true' /> : <Circle className='h-3.5 w-3.5' aria-hidden='true' />}
+                      {isResolved ? 'Resolved' : 'Mark resolved'}
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      className='h-7 gap-1 px-1.5 text-xs text-action-danger'
+                      aria-label={`Remove problem ${label}`}
+                      onClick={() => requestRemoveProblem(entry)}
+                    >
+                      <Trash2 className='h-3.5 w-3.5' aria-hidden='true' />
+                      Remove
                     </Button>
                   </div>
                 </div>
-                <Button
-                  type='button'
-                  variant='ghost'
-                  className='h-8 w-8 shrink-0 p-0 text-action-danger'
-                  aria-label={`Remove problem ${label}`}
-                  onClick={() => requestRemoveProblem(entry)}
-                >
-                  <Trash2 className='h-4 w-4' aria-hidden='true' />
-                </Button>
-              </div>
-              <div className='mt-2 space-y-1 pl-1.5'>
-                <TapToEditField
-                  ariaLabel={`Notes for problem ${label}`}
-                  emptyText='Tap to add notes'
-                  className='px-1.5'
-                  value={entry.notes}
-                  onCommit={(value) => updateNotes(entry.masterProblemId, value)}
-                  renderView={(text) => (
-                    <MentionText text={text} attachmentByTitle={attachmentByTitle} onOpenPhotoById={onOpenPhotoById} />
-                  )}
-                  renderEditor={({ value, onChange }) => (
-                    <PhotoMentionField
-                      ariaLabel={`Notes for problem ${label}`}
-                      placeholder='Plan, trend, pending workup, or other notes'
-                      value={value}
-                      onChange={onChange}
-                      attachments={attachments}
-                      attachmentByTitle={attachmentByTitle}
-                      onOpenPhotoById={onOpenPhotoById}
-                    />
-                  )}
-                />
-              </div>
+              )}
             </div>
           )
         })}

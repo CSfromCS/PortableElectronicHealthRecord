@@ -18,6 +18,7 @@ import {
   buildGroupVariableInstanceForField,
   buildVariableToken,
   createVariableId,
+  stripRemovedOrderStatusFromVariables,
   tokenizePatternText,
   type GroupFieldId,
 } from './features/templates/templateEngine'
@@ -1639,6 +1640,44 @@ db.version(32).stores({
   simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
   syncTombstones: 'uid, table, deletedAt',
   changeLog: '++id, at, patientId',
+})
+
+db.version(33).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+  simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
+  syncTombstones: 'uid, table, deletedAt',
+  changeLog: '++id, at, patientId',
+}).upgrade(async (tx) => {
+  // Orders no longer have a status. Their `status` field stays on existing rows (and in the
+  // `orders` index above) but is no longer shown or written, so only the saved Orders Block
+  // variables that referenced a Status field need touching: drop that field — and the "(…)" the old
+  // default pattern wrapped around it — from their entry patterns so the template editor doesn't
+  // show an orphaned chip and generated text doesn't keep stray brackets. Every other field id
+  // (including `note`, now labelled "Side notes") is unchanged, so nothing else in a saved
+  // template is affected.
+  const reportTemplateTable = tx.table<ReportTemplate, number>('reportTemplates')
+  for (const template of await reportTemplateTable.toArray()) {
+    if (template.id === undefined) continue
+    const { next, changed } = stripRemovedOrderStatusFromVariables(template.variables)
+    if (changed) await reportTemplateTable.update(template.id, { variables: next })
+  }
 })
 
 registerSyncMetaHooks(db)

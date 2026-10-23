@@ -53,11 +53,11 @@ Each open patient has eight focused tabs:
 | Tab | Purpose |
 |---|---|
 | **Profile** | Demographics plus case-review notes (clinical summary, chief complaint, HPI, PMH, PE), diagnosis, and clinical details |
-| **Problems** | Ordered, user-defined problem blocks with a title and free-text notes, plus assessment/plan and a per-date checklist |
+| **Problems** | Ordered, user-defined problem blocks with a title and free-text notes (collapsible to a titles-only list, one at a time or all at once; the collapsed state carries forward to later dates), plus assessment/plan and a per-date checklist |
 | **Vitals** | Temp, BP, HR, RR, O₂ saturation with history |
 | **Labs** | CBC, urinalysis, Blood Chemistry, ABG (with auto-calculated pO2/FiO2 and conditional Desired FiO2 when FiO2 > 21% or pO2 < 60; target PaO2 = 60), and Others (custom label + freeform result); trend comparison applies to structured templates, while Others stays plain |
 | **Medications** | Structured medication list with status tracking and drag-to-reorder support |
-| **Orders** | Doctor's orders — add, edit status, remove in one place |
+| **Orders** | Doctor's orders — side notes plus the order itself, listed under a date/time/service header; add, edit, remove in one place |
 | **Photos** | Camera capture or gallery pick, organized by section category |
 | **Reporting** | Profile/problems/vitals/labs/orders/census exports with lab instance selection and comparison support |
 
@@ -86,6 +86,7 @@ Each open patient has eight focused tabs:
 - Photos inside the same upload batch preserve the order returned by your picker selection.
 - Photo title is auto-prefilled as `Category + date/time`; editable before saving.
 - Tapping a gallery block opens an in-app carousel for that upload set with Previous/Next buttons, keyboard shortcuts (Left/Right + Home/End), and thumbnail jump navigation for large groups.
+- In the carousel, pinch (or double-tap, or use the mouse wheel) to zoom a photo and drag to pan while zoomed; swipe down to close it.
 - Use `@photo-title` mentions in long-form notes to link directly to an attached photo.
 - Compressed copies stored in IndexedDB for offline viewing.
 - Deleting a photo removes only the in-app copy — the original phone gallery file is untouched.

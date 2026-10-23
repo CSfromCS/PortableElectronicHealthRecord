@@ -2,6 +2,7 @@ import { useMemo, useState, type KeyboardEvent } from 'react'
 import { Input } from '@/components/ui/input'
 import type { TagDefinition } from '@/types'
 import { findServiceTagByName } from './serviceTagParsing'
+import { filterTagsByQuery } from './tagUtils'
 import { TagChip } from './TagChip'
 
 type ServiceTagSelectProps = {
@@ -20,9 +21,7 @@ export const ServiceTagSelect = ({ ariaLabel, placeholder, value, availableTags,
   const matchedTag = useMemo(() => findServiceTagByName(value, availableTags), [value, availableTags])
 
   const suggestions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
-    return availableTags
-      .filter((tag) => !normalizedQuery || tag.name.toLowerCase().includes(normalizedQuery))
+    return filterTagsByQuery(availableTags, query)
   }, [availableTags, query])
 
   const selectSuggestion = (tag: TagDefinition) => {
