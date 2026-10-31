@@ -8888,7 +8888,10 @@ function App() {
                         <Input
                           ref={galleryPhotoInputRef}
                           type='file'
-                          accept='image/*'
+                          // Listing the types, HEIC included, instead of 'image/*': iOS converts every
+                          // HEIC photo to JPEG after the ✓ is tapped when the filter is the wildcard, and
+                          // the picker looks frozen meanwhile — which reads as the ✓ ignoring taps.
+                          accept='image/jpeg,image/png,image/webp,image/heic,image/heif'
                           multiple
                           className='hidden'
                           onChange={(event) => void handleGallerySelection(event)}
