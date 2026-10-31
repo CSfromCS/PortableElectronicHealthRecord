@@ -1,5 +1,5 @@
 import type { DailyUpdate, SyncMeta, SyncTombstone } from '@/types'
-import { SYNCED_TABLE_NAMES, type SyncedTableName } from './syncMeta'
+import { SYNCED_TABLE_NAMES, type SyncedTableName, isTombstoneExpired } from './syncMeta'
 
 export type MergeRow = SyncMeta & { id?: number; createdAt?: string } & Record<string, unknown>
 export type MergeTables = Record<SyncedTableName, MergeRow[]>
@@ -191,6 +191,10 @@ const signature = (tables: Partial<Record<SyncedTableName, MergeRow[]>>, tombsto
  */
 export const mergeSyncSnapshots = (local: MergeSide, remote: MergeSide, now = new Date()): MergeResult => {
   const tombstones = mergeTombstones(local.tombstones, remote.tombstones)
+  // Deletions every device has long since applied stop travelling, so the room doesn't carry them forever.
+  for (const [uid, tombstone] of tombstones) {
+    if (isTombstoneExpired(tombstone, now)) tombstones.delete(uid)
+  }
   const tombstonesByRecord = new Map<string, SyncTombstone>()
   for (const tombstone of tombstones.values()) {
     if (tombstone.recordId !== undefined) tombstonesByRecord.set(`${tombstone.table}:${tombstone.recordId}`, tombstone)

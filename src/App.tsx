@@ -25,6 +25,7 @@ import type {
   Patient,
   PhotoAttachment,
   PhotoCategory,
+  SimpleProblemItem,
   VitalEntry,
 } from './types'
 import { Button } from '@/components/ui/button'
@@ -163,6 +164,11 @@ import { PhotoZoomImage } from './features/photos/PhotoZoomImage'
 import { SyncButton, type SyncStatus } from './features/sync/SyncButton'
 import { SyncSetupDialog, type SetupDeviceName, type SetupUsername } from './features/sync/SyncSetupDialog'
 import { VersionPickerDialog } from './features/sync/VersionPickerDialog'
+import { ResetRoomDialog } from './features/sync/ResetRoomDialog'
+import { resetRoomData, type ResetSelection } from './features/sync/syncReset'
+import { pruneExpiredTombstones } from './features/sync/syncPrune'
+import { SyncSizeBreakdown } from './features/sync/SyncSizeBreakdown'
+import { ARCHIVE_AFTER_DAYS, findPatientsToArchive } from './features/patients/archiveUtils'
 import {
   buildSyncConfig,
   getDefaultSyncEndpoint,
@@ -378,6 +384,10 @@ type BackupPayload = {
   reportTemplates?: ReportTemplate[]
   dateTimeFormats?: DateTimeFormatDefinition[]
   customViews?: CustomView[]
+  // Added after the first backups: absent from older files, which leave these tables as they are.
+  customActions?: CustomAction[]
+  masterProblems?: MasterProblem[]
+  simpleProblemItems?: SimpleProblemItem[]
 }
 
 const initialDailyUpdateForm: DailyUpdateFormState = {
@@ -463,7 +473,10 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
   const validReportTemplates = candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates)
   const validDateTimeFormats = candidate.dateTimeFormats === undefined || Array.isArray(candidate.dateTimeFormats)
   const validCustomViews = candidate.customViews === undefined || Array.isArray(candidate.customViews)
-  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates && validDateTimeFormats && validCustomViews
+  const validCustomActions = candidate.customActions === undefined || Array.isArray(candidate.customActions)
+  const validMasterProblems = candidate.masterProblems === undefined || Array.isArray(candidate.masterProblems)
+  const validSimpleProblemItems = candidate.simpleProblemItems === undefined || Array.isArray(candidate.simpleProblemItems)
+  return validCustomActions && validMasterProblems && validSimpleProblemItems && validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates && validDateTimeFormats && validCustomViews
 }
 
 const isConflictSyncResult = (result: SyncNowResult): result is ConflictResult => {
@@ -845,6 +858,7 @@ function App() {
   const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(() => readSyncConfig())
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => (readSyncConfig() ? 'idle' : 'not-configured'))
   const [syncSetupOpen, setSyncSetupOpen] = useState(false)
+  const [resetRoomOpen, setResetRoomOpen] = useState(false)
   const [syncSetupMode, setSyncSetupMode] = useState<'setup' | 'edit'>('setup')
   const [isSyncBusy, setIsSyncBusy] = useState(false)
   const [conflictVersions, setConflictVersions] = useState<SyncVersion[]>([])
@@ -1273,10 +1287,12 @@ function App() {
     void refreshSyncInsight(syncConfig)
   }, [refreshSyncInsight, syncConfig])
 
-  // Changes older than the retention window (30 days) are dropped, and older-format entries that
-  // still hold whole records are shrunk to the fields that changed.
+  // Changes older than the retention window (7 days) are dropped, and older-format entries that
+  // still hold whole records are shrunk to the fields that changed. Deletion records every device
+  // has long since applied are dropped too.
   useEffect(() => {
     void pruneChangeLog()
+    void pruneExpiredTombstones()
   }, [])
 
   const savedDailyEntryDates = useLiveQuery(async () => {
@@ -5673,6 +5689,15 @@ function App() {
     }
   }, [applySyncResult, isSyncBusy, refreshSyncInsight, syncConfig])
 
+  // Clears the chosen data here, then syncs right away so the room (and with it every other
+  // device) gets the reset marker instead of waiting for the next background sync.
+  const handleResetRoom = useCallback(async (selection: ResetSelection) => {
+    await resetRoomData(selection, syncConfig?.deviceTag ?? 'this device')
+    resetFocusedEditorState()
+    setNotice('Room data reset.')
+    if (syncConfig) await runSyncNow()
+  }, [resetFocusedEditorState, runSyncNow, syncConfig])
+
   useAutoSync({
     config: syncConfig,
     // A patient being open means a form may hold unsaved text, so room changes wait until it's closed.
@@ -5776,6 +5801,9 @@ function App() {
       reportTemplates: await db.reportTemplates.toArray(),
       dateTimeFormats: await db.dateTimeFormats.toArray(),
       customViews: await db.customViews.toArray(),
+      customActions: await db.customActions.toArray(),
+      masterProblems: await db.masterProblems.toArray(),
+      simpleProblemItems: await db.simpleProblemItems.toArray(),
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -5803,7 +5831,7 @@ function App() {
 
       await db.transaction(
         'rw',
-        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates, db.dateTimeFormats, db.customViews],
+        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates, db.dateTimeFormats, db.customViews, db.customActions, db.masterProblems, db.simpleProblemItems],
         async () => {
         // A restore, not a batch of edits: keep the backup's record uids and don't log every
         // cleared record as a deletion to sync.
@@ -5860,6 +5888,19 @@ function App() {
         if ((parsed.customViews ?? []).length > 0) {
           await db.customViews.bulkPut(parsed.customViews ?? [])
         }
+        // Only replaced when the backup carries them, so an older backup doesn't wipe what it never had.
+        if (parsed.customActions !== undefined) {
+          await db.customActions.clear()
+          if (parsed.customActions.length > 0) await db.customActions.bulkPut(parsed.customActions)
+        }
+        if (parsed.masterProblems !== undefined) {
+          await db.masterProblems.clear()
+          if (parsed.masterProblems.length > 0) await db.masterProblems.bulkPut(parsed.masterProblems)
+        }
+        if (parsed.simpleProblemItems !== undefined) {
+          await db.simpleProblemItems.clear()
+          if (parsed.simpleProblemItems.length > 0) await db.simpleProblemItems.bulkPut(parsed.simpleProblemItems)
+        }
       },
       )
 
@@ -5906,9 +5947,11 @@ function App() {
 
     await db.transaction(
       'rw',
-      [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments, db.tagEvents, db.customActionRuns],
+      [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments, db.tagEvents, db.customActionRuns, db.masterProblems, db.simpleProblemItems],
       async () => {
       await db.patients.bulkDelete(patientIds)
+      await db.masterProblems.where('patientId').anyOf(patientIds).delete()
+      await db.simpleProblemItems.where('patientId').anyOf(patientIds).delete()
       await db.dailyUpdates.where('patientId').anyOf(patientIds).delete()
       await db.vitals.where('patientId').anyOf(patientIds).delete()
       await db.medications.where('patientId').anyOf(patientIds).delete()
@@ -5962,6 +6005,33 @@ function App() {
 
     await deletePatientsAndRelatedData(dischargedIds)
     setNotice('Cleared inactive patients.')
+  }
+
+  // Same removal as "Clear inactive patients", but only for patients discharged more than
+  // ARCHIVE_AFTER_DAYS ago, and a full backup is downloaded first (so the archive can be restored
+  // from it). Keeps the room's size following the patients still on the ward, not all history.
+  const requestArchiveOldDischarged = async () => {
+    const [allPatients, allTagEvents] = await Promise.all([db.patients.toArray(), db.tagEvents.toArray()])
+    const candidates = findPatientsToArchive(allPatients, tagsById, allTagEvents)
+    const patientIds = candidates.map((patient) => patient.id).filter((id): id is number => id !== undefined)
+
+    if (patientIds.length === 0) {
+      setNotice(`No patients were discharged more than ${ARCHIVE_AFTER_DAYS} days ago.`)
+      return
+    }
+
+    const names = candidates.slice(0, 10).map((patient) => `${patient.roomNumber} ${patient.lastName}`.trim())
+    const more = candidates.length > names.length ? ` and ${candidates.length - names.length} more` : ''
+    requestDeleteConfirmation({
+      title: 'Archive old discharged patients?',
+      message: `${candidates.length} patient${candidates.length === 1 ? '' : 's'} discharged more than ${ARCHIVE_AFTER_DAYS} days ago (${names.join(', ')}${more}) will be removed from this device and the sync room, with all of their notes, vitals, medications, labs, orders and photos. A backup file downloads first; restoring it replaces your current data.`,
+      confirmLabel: 'Back up and archive',
+      onConfirm: async () => {
+        await exportBackup()
+        await deletePatientsAndRelatedData(patientIds)
+        setNotice(`Archived ${patientIds.length} patient${patientIds.length === 1 ? '' : 's'}.`)
+      },
+    })
   }
 
   // Delete via the Patients-list selection mode (single or multiple patients) — always routed
@@ -8852,7 +8922,10 @@ function App() {
                         <Input
                           ref={galleryPhotoInputRef}
                           type='file'
-                          accept='image/*'
+                          // Listing the types, HEIC included, instead of 'image/*': iOS converts every
+                          // HEIC photo to JPEG after the ✓ is tapped when the filter is the wildcard, and
+                          // the picker looks frozen meanwhile — which reads as the ✓ ignoring taps.
+                          accept='image/jpeg,image/png,image/webp,image/heic,image/heif'
                           multiple
                           className='hidden'
                           onChange={(event) => void handleGallerySelection(event)}
@@ -9215,6 +9288,7 @@ function App() {
                     <div className='h-px bg-clay/15 my-1' />
                     <p><strong>Last room upload:</strong> {formatSyncDateTime(syncInsight?.remoteLatestPushAt)} by {latestUploadOwnerLabel}</p>
                   </div>
+                  {syncConfig ? <SyncSizeBreakdown deviceTag={syncConfig.deviceTag} roomCode={syncConfig.roomCode} /> : null}
                 </div>
               </div>
 
@@ -9284,6 +9358,32 @@ function App() {
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-action-danger'>Clear inactive patients</p>
                       <FieldTip className='mt-0.5'>Permanently removes all patient records with a Terminal tag applied</FieldTip>
+                    </div>
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => void requestArchiveOldDischarged()}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-edit/10 flex items-center justify-center shrink-0'>
+                      <Upload className='h-4 w-4 text-action-edit' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-espresso'>Archive old discharged patients</p>
+                      <FieldTip className='mt-0.5'>Backs up, then removes patients discharged over {ARCHIVE_AFTER_DAYS} days ago to keep sync small</FieldTip>
+                    </div>
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => setResetRoomOpen(true)}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-red-50 hover:bg-red-100 border border-action-danger/25 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-danger/10 flex items-center justify-center shrink-0'>
+                      <Trash2 className='h-4 w-4 text-action-danger' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-action-danger'>Reset room data</p>
+                      <FieldTip className='mt-0.5'>Clear patients, photos and history everywhere; keeps templates, tags, views and actions</FieldTip>
                     </div>
                   </button>
                   <button
@@ -10079,6 +10179,14 @@ function App() {
           initialDeviceName={syncConfig?.deviceName ?? 'Phone'}
           onOpenChange={setSyncSetupOpen}
           onSubmit={handleSyncSetupSubmit}
+        />
+
+        <ResetRoomDialog
+          open={resetRoomOpen}
+          onOpenChange={setResetRoomOpen}
+          syncEnabled={syncConfig !== null}
+          onExportBackup={exportBackup}
+          onReset={handleResetRoom}
         />
 
         <VersionPickerDialog

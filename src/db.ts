@@ -45,6 +45,7 @@ import type {
   PhotoAttachment,
   ReportTemplate,
   SimpleProblemItem,
+  SyncReset,
   SyncTombstone,
   TagAutomationRole,
   TagDefinition,
@@ -76,6 +77,7 @@ const db = new Dexie('roundingAppDatabase_v1') as Dexie & {
   masterProblems: EntityTable<MasterProblem, 'id'>
   simpleProblemItems: EntityTable<SimpleProblemItem, 'id'>
   syncTombstones: EntityTable<SyncTombstone, 'uid'>
+  syncResets: EntityTable<SyncReset, 'id'>
   changeLog: EntityTable<ChangeLogEntry, 'id'>
 }
 
@@ -1678,6 +1680,33 @@ db.version(33).stores({
     const { next, changed } = stripRemovedOrderStatusFromVariables(template.variables)
     if (changed) await reportTemplateTable.update(template.id, { variables: next })
   }
+})
+
+// Reset markers (see SyncReset). Not a synced table: they travel in the sync payload's own
+// `syncResets` list, so they carry no uid/updatedAt bookkeeping.
+db.version(34).stores({
+  patients:
+    '++id, lastName, roomNumber, admitDate, referralDate, *tagIds, *mainServiceTagIds, *referralServiceTagIds',
+  dailyUpdates: '++id, patientId, date, [patientId+date]',
+  vitals: '++id, patientId, date, [patientId+date], time',
+  medications: '++id, patientId, sortOrder, [patientId+sortOrder], medication, status, [patientId+status], createdAt',
+  labs: '++id, patientId, date, templateId, [patientId+date], [patientId+templateId], createdAt',
+  orders: '++id, patientId, status, [patientId+status], createdAt',
+  photoAttachments:
+    '++id, patientId, category, [patientId+category], createdAt, uploadGroupId, selectionOrderInGroup, [uploadGroupId+selectionOrderInGroup]',
+  tagGroups: '++id, sortOrder',
+  tagDefinitions: '++id, groupId, sortOrder, automationRole, terminal',
+  tagEvents: '++id, patientId, tagId, at, [patientId+at]',
+  customActions: '++id, sortOrder, triggerType, triggerTagId',
+  customActionRuns: '++id, actionId, patientId, date, [actionId+patientId+date]',
+  reportTemplates: '++id, sortOrder',
+  dateTimeFormats: '++id, sortOrder',
+  customViews: '++id, sortOrder',
+  masterProblems: '++id, patientId, parentId, [patientId+sortOrder]',
+  simpleProblemItems: '++id, patientId, sortOrder, [patientId+sortOrder]',
+  syncTombstones: 'uid, table, deletedAt',
+  syncResets: 'id, at',
+  changeLog: '++id, at, patientId',
 })
 
 registerSyncMetaHooks(db)

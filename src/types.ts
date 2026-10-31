@@ -20,6 +20,26 @@ export interface SyncTombstone {
   recordId?: number
 }
 
+/**
+ * A "reset the room" marker. Clearing data on one device isn't enough — sync keeps every record that
+ * either side has, so the next merge would bring it all back. The marker travels with the room
+ * instead: a device that sees one it hasn't applied clears the same data, and a room that lacks one
+ * a device has applied gets that device's version of those tables. Markers only ever accumulate.
+ */
+export interface SyncReset {
+  id: string
+  /** ISO time of the reset, on the device that ran it. */
+  at: string
+  /** Device tag of the device that ran it. */
+  by: string
+  /** Synced tables the reset emptied. */
+  tables: string[]
+  /** Also clear this device's photos (photos never sync, so each device clears its own). */
+  photos: boolean
+  /** Also forget every deletion record, not just those of the emptied tables. */
+  allTombstones: boolean
+}
+
 /** One field a change touched, as text for reading back (long values shortened). `from` is absent for
  * an added record, `to` for a deleted one. */
 export interface ChangeLogField {
