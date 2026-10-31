@@ -25,6 +25,7 @@ import type {
   Patient,
   PhotoAttachment,
   PhotoCategory,
+  SimpleProblemItem,
   VitalEntry,
 } from './types'
 import { Button } from '@/components/ui/button'
@@ -163,6 +164,8 @@ import { PhotoZoomImage } from './features/photos/PhotoZoomImage'
 import { SyncButton, type SyncStatus } from './features/sync/SyncButton'
 import { SyncSetupDialog, type SetupDeviceName, type SetupUsername } from './features/sync/SyncSetupDialog'
 import { VersionPickerDialog } from './features/sync/VersionPickerDialog'
+import { ResetRoomDialog } from './features/sync/ResetRoomDialog'
+import { resetRoomData, type ResetSelection } from './features/sync/syncReset'
 import {
   buildSyncConfig,
   getDefaultSyncEndpoint,
@@ -378,6 +381,10 @@ type BackupPayload = {
   reportTemplates?: ReportTemplate[]
   dateTimeFormats?: DateTimeFormatDefinition[]
   customViews?: CustomView[]
+  // Added after the first backups: absent from older files, which leave these tables as they are.
+  customActions?: CustomAction[]
+  masterProblems?: MasterProblem[]
+  simpleProblemItems?: SimpleProblemItem[]
 }
 
 const initialDailyUpdateForm: DailyUpdateFormState = {
@@ -463,7 +470,10 @@ const isBackupPayload = (value: unknown): value is BackupPayload => {
   const validReportTemplates = candidate.reportTemplates === undefined || Array.isArray(candidate.reportTemplates)
   const validDateTimeFormats = candidate.dateTimeFormats === undefined || Array.isArray(candidate.dateTimeFormats)
   const validCustomViews = candidate.customViews === undefined || Array.isArray(candidate.customViews)
-  return validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates && validDateTimeFormats && validCustomViews
+  const validCustomActions = candidate.customActions === undefined || Array.isArray(candidate.customActions)
+  const validMasterProblems = candidate.masterProblems === undefined || Array.isArray(candidate.masterProblems)
+  const validSimpleProblemItems = candidate.simpleProblemItems === undefined || Array.isArray(candidate.simpleProblemItems)
+  return validCustomActions && validMasterProblems && validSimpleProblemItems && validVitals && validMedications && validLabs && validOrders && validTagGroups && validTagDefinitions && validTagEvents && validReportTemplates && validDateTimeFormats && validCustomViews
 }
 
 const isConflictSyncResult = (result: SyncNowResult): result is ConflictResult => {
@@ -845,6 +855,7 @@ function App() {
   const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(() => readSyncConfig())
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => (readSyncConfig() ? 'idle' : 'not-configured'))
   const [syncSetupOpen, setSyncSetupOpen] = useState(false)
+  const [resetRoomOpen, setResetRoomOpen] = useState(false)
   const [syncSetupMode, setSyncSetupMode] = useState<'setup' | 'edit'>('setup')
   const [isSyncBusy, setIsSyncBusy] = useState(false)
   const [conflictVersions, setConflictVersions] = useState<SyncVersion[]>([])
@@ -5673,6 +5684,15 @@ function App() {
     }
   }, [applySyncResult, isSyncBusy, refreshSyncInsight, syncConfig])
 
+  // Clears the chosen data here, then syncs right away so the room (and with it every other
+  // device) gets the reset marker instead of waiting for the next background sync.
+  const handleResetRoom = useCallback(async (selection: ResetSelection) => {
+    await resetRoomData(selection, syncConfig?.deviceTag ?? 'this device')
+    resetFocusedEditorState()
+    setNotice('Room data reset.')
+    if (syncConfig) await runSyncNow()
+  }, [resetFocusedEditorState, runSyncNow, syncConfig])
+
   useAutoSync({
     config: syncConfig,
     // A patient being open means a form may hold unsaved text, so room changes wait until it's closed.
@@ -5776,6 +5796,9 @@ function App() {
       reportTemplates: await db.reportTemplates.toArray(),
       dateTimeFormats: await db.dateTimeFormats.toArray(),
       customViews: await db.customViews.toArray(),
+      customActions: await db.customActions.toArray(),
+      masterProblems: await db.masterProblems.toArray(),
+      simpleProblemItems: await db.simpleProblemItems.toArray(),
     }
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -5803,7 +5826,7 @@ function App() {
 
       await db.transaction(
         'rw',
-        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates, db.dateTimeFormats, db.customViews],
+        [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.tagGroups, db.tagDefinitions, db.tagEvents, db.reportTemplates, db.dateTimeFormats, db.customViews, db.customActions, db.masterProblems, db.simpleProblemItems],
         async () => {
         // A restore, not a batch of edits: keep the backup's record uids and don't log every
         // cleared record as a deletion to sync.
@@ -5859,6 +5882,19 @@ function App() {
         }
         if ((parsed.customViews ?? []).length > 0) {
           await db.customViews.bulkPut(parsed.customViews ?? [])
+        }
+        // Only replaced when the backup carries them, so an older backup doesn't wipe what it never had.
+        if (parsed.customActions !== undefined) {
+          await db.customActions.clear()
+          if (parsed.customActions.length > 0) await db.customActions.bulkPut(parsed.customActions)
+        }
+        if (parsed.masterProblems !== undefined) {
+          await db.masterProblems.clear()
+          if (parsed.masterProblems.length > 0) await db.masterProblems.bulkPut(parsed.masterProblems)
+        }
+        if (parsed.simpleProblemItems !== undefined) {
+          await db.simpleProblemItems.clear()
+          if (parsed.simpleProblemItems.length > 0) await db.simpleProblemItems.bulkPut(parsed.simpleProblemItems)
         }
       },
       )
@@ -9288,6 +9324,19 @@ function App() {
                   </button>
                   <button
                     type='button'
+                    onClick={() => setResetRoomOpen(true)}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-red-50 hover:bg-red-100 border border-action-danger/25 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-danger/10 flex items-center justify-center shrink-0'>
+                      <Trash2 className='h-4 w-4 text-action-danger' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-action-danger'>Reset room data</p>
+                      <FieldTip className='mt-0.5'>Clear patients, photos and history everywhere; keeps templates, tags, views and actions</FieldTip>
+                    </div>
+                  </button>
+                  <button
+                    type='button'
                     onClick={() => {
                       setSyncSetupMode('edit')
                       setSyncSetupOpen(true)
@@ -10079,6 +10128,14 @@ function App() {
           initialDeviceName={syncConfig?.deviceName ?? 'Phone'}
           onOpenChange={setSyncSetupOpen}
           onSubmit={handleSyncSetupSubmit}
+        />
+
+        <ResetRoomDialog
+          open={resetRoomOpen}
+          onOpenChange={setResetRoomOpen}
+          syncEnabled={syncConfig !== null}
+          onExportBackup={exportBackup}
+          onReset={handleResetRoom}
         />
 
         <VersionPickerDialog

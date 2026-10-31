@@ -13,6 +13,7 @@ import type {
   ReportTemplate,
   SimpleProblemItem,
   SyncMeta,
+  SyncReset,
   SyncTombstone,
   TagDefinition,
   TagEvent,
@@ -22,6 +23,14 @@ import type {
 import { normalizeDailyUpdate } from '@/features/problems/problemUtils'
 import { decryptBlobToPayload, encryptPayloadToBlob, sha256Hex } from './crypto'
 import { type MergeRow, type MergeSide, mergeSyncSnapshots } from './syncMerge'
+import {
+  applyResetData,
+  applyResetLocalOnlyData,
+  discardResetData,
+  getSyncStateScope,
+  resetsMissingFrom,
+  unionResets,
+} from './syncReset'
 import { SYNCED_TABLE_NAMES, type SyncedTableName, deriveSyncUpdatedAt, markSyncImportTransaction } from './syncMeta'
 
 const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
@@ -35,7 +44,9 @@ const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
 // v5 adds the change log (what an MCP client changed, field by field). Older snapshots are
 // still readable; an app on v4 refuses a v5 snapshot and asks to update, so a device that cannot
 // carry those changes never takes part once an MCP client is writing.
-const SYNC_DATA_VERSION = 5
+// v6 adds reset markers (Settings → Reset room data). An app that predates them would merge the
+// cleared data straight back in, so it refuses a v6 snapshot and asks to update instead.
+const SYNC_DATA_VERSION = 6
 const OLDEST_READABLE_SYNC_DATA_VERSION = 3
 const DEFAULT_SYNC_ENDPOINT = 'https://puhr-sync.csfromcs.workers.dev'
 const LEGACY_SYNC_HOSTS = new Set([
@@ -66,6 +77,7 @@ type SyncPayload = {
   simpleProblemItems?: SimpleProblemItem[]
   changeLog?: ChangeLogEntry[]
   syncTombstones?: SyncTombstone[]
+  syncResets?: SyncReset[]
 }
 
 type RemoteDescription = {
@@ -227,9 +239,10 @@ const toIsoNow = (): string => new Date().toISOString()
 // Every synced record's updatedAt is bumped by the hooks in syncMeta.ts on any real edit, and
 // every deletion leaves a tombstone, so creates, edits and deletes all count as local changes.
 export const getLatestLocalChangeAt = async (): Promise<string | null> => {
-  const [recordsByTable, tombstones] = await Promise.all([
+  const [recordsByTable, tombstones, resets] = await Promise.all([
     Promise.all(SYNCED_TABLE_NAMES.map((tableName) => db.table<SyncMeta>(tableName).toArray())),
     db.syncTombstones.toArray(),
+    db.syncResets.toArray(),
   ])
 
   let latestTimestamp = 0
@@ -250,13 +263,19 @@ export const getLatestLocalChangeAt = async (): Promise<string | null> => {
     considerTimestamp(tombstone.deletedAt)
   }
 
+  // A reset leaves no record behind to carry its time, so the marker does.
+  for (const reset of resets) {
+    considerTimestamp(reset.at)
+  }
+
   return latestTimestamp > 0 ? new Date(latestTimestamp).toISOString() : null
 }
 
 const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
-  const [recordsByTable, syncTombstones] = await Promise.all([
+  const [recordsByTable, syncTombstones, syncResets] = await Promise.all([
     Promise.all(SYNCED_TABLE_NAMES.map((tableName) => db.table(tableName).toArray())),
     db.syncTombstones.toArray(),
+    db.syncResets.toArray(),
   ])
 
   return {
@@ -265,6 +284,7 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     deviceTag,
     ...(Object.fromEntries(SYNCED_TABLE_NAMES.map((tableName, index) => [tableName, recordsByTable[index]])) as Pick<SyncPayload, SyncedTableName>),
     syncTombstones,
+    syncResets,
   }
 }
 
@@ -289,6 +309,7 @@ const isSyncPayload = (value: unknown): value is SyncPayload => {
     && Array.isArray(candidate.dailyUpdates)
     && SYNCED_TABLE_NAMES.every((tableName) => candidate[tableName] === undefined || Array.isArray(candidate[tableName]))
     && (candidate.syncTombstones === undefined || Array.isArray(candidate.syncTombstones))
+    && (candidate.syncResets === undefined || Array.isArray(candidate.syncResets))
   )
 }
 
@@ -345,9 +366,18 @@ const replaceSyncedTables = async (payload: SyncPayload): Promise<void> => {
 
   await db.transaction(
     'rw',
-    [...SYNCED_TABLE_NAMES.map((tableName) => db.table(tableName)), db.syncTombstones],
+    getSyncStateScope(),
     async () => {
       markSyncImportTransaction()
+
+      // Markers are only ever added: a device that replaces its data with an older room version
+      // keeps the resets it has already applied, so they aren't applied (or lost) a second time.
+      if (payload.syncResets !== undefined) {
+        const localResets = await db.syncResets.toArray()
+        for (const reset of resetsMissingFrom(payload.syncResets, localResets)) await applyResetLocalOnlyData(reset)
+        await db.syncResets.clear()
+        await db.syncResets.bulkPut(unionResets(localResets, payload.syncResets))
+      }
 
       for (const tableName of SYNCED_TABLE_NAMES) {
         const incoming = payload[tableName] as unknown[] | undefined
@@ -655,25 +685,35 @@ const toMergeSide = (payload: SyncPayload): MergeSide => {
 const mergeRemoteIntoLocal = async (
   remotePayload: SyncPayload,
 ): Promise<{ changedLocal: boolean; changedRemote: boolean }> => {
-  const syncedTables = [...SYNCED_TABLE_NAMES.map((tableName) => db.table(tableName)), db.syncTombstones]
+  return db.transaction('rw', getSyncStateScope(), async () => {
+    // A reset the room has and this device doesn't is applied here first, so what it cleared
+    // never reaches the merge. One this device has and the room lacks is applied to the room's
+    // side: its copy of the cleared tables is dropped, not merged back in.
+    markSyncImportTransaction()
+    const localResets = await db.syncResets.toArray()
+    const remoteResets = remotePayload.syncResets ?? []
+    const pendingHere = resetsMissingFrom(remoteResets, localResets)
+    const missingFromRoom = resetsMissingFrom(localResets, remoteResets)
+    for (const reset of pendingHere) await applyResetData(reset)
 
-  return db.transaction('rw', syncedTables, async () => {
     const localTables: MergeSide['tables'] = {}
     for (const tableName of SYNCED_TABLE_NAMES) {
       localTables[tableName] = await db.table<MergeRow>(tableName).toArray()
     }
     const local: MergeSide = { tables: localTables, tombstones: await db.syncTombstones.toArray() }
 
-    const merged = mergeSyncSnapshots(local, toMergeSide(remotePayload))
-    if (merged.changedLocal) {
+    const merged = mergeSyncSnapshots(local, discardResetData(toMergeSide(remotePayload), missingFromRoom))
+    const changedLocal = merged.changedLocal || pendingHere.length > 0
+    if (changedLocal) {
       await replaceSyncedTables({
         ...remotePayload,
         ...(Object.fromEntries(SYNCED_TABLE_NAMES.map((tableName) => [tableName, merged.tables[tableName]])) as Record<SyncedTableName, never>),
         syncTombstones: merged.tombstones,
+        syncResets: unionResets(localResets, remoteResets),
       })
     }
 
-    return { changedLocal: merged.changedLocal, changedRemote: merged.changedRemote }
+    return { changedLocal, changedRemote: merged.changedRemote || missingFromRoom.length > 0 }
   })
 }
 
