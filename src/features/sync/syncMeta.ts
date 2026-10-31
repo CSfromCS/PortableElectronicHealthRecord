@@ -24,6 +24,16 @@ export const SYNCED_TABLE_NAMES = [
 
 export type SyncedTableName = typeof SYNCED_TABLE_NAMES[number]
 
+/** How long a deletion record is kept. It only has to outlive the last device that still holds the
+ * deleted record, and every device syncs far more often than this; a device that was offline for
+ * longer than this and then syncs may bring a record deleted in the meantime back. */
+export const SYNC_TOMBSTONE_RETENTION_DAYS = 60
+
+export const isTombstoneExpired = (tombstone: SyncTombstone, now = new Date()): boolean => {
+  const deletedAt = Date.parse(tombstone.deletedAt)
+  return Number.isFinite(deletedAt) && deletedAt < now.getTime() - SYNC_TOMBSTONE_RETENTION_DAYS * 86_400_000
+}
+
 const EPOCH_ISO = new Date(0).toISOString()
 const SYNC_IMPORT_FLAG = '__puhrrSyncImport'
 

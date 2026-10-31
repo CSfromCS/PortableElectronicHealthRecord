@@ -2,7 +2,9 @@ import { db } from '@/db'
 import { SYNCED_TABLE_NAMES, beginChangeRecording } from '@/features/sync/syncMeta'
 import type { ChangeLogEntry, ChangeLogField, ChangeLogOp } from '@/types'
 
-export const CHANGE_LOG_RETENTION_DAYS = 30
+// Every entry rides along in each sync snapshot, so the window is kept short: a week is plenty to
+// read back what the MCP server changed, and heavy use no longer adds a month of entries to the room.
+export const CHANGE_LOG_RETENTION_DAYS = 7
 
 /** Fields that change on every write or only identify a record: not worth logging. */
 const BOOKKEEPING = new Set(['id', 'uid', 'updatedAt', 'lastModified'])

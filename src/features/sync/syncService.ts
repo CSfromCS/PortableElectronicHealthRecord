@@ -31,7 +31,7 @@ import {
   resetsMissingFrom,
   unionResets,
 } from './syncReset'
-import { SYNCED_TABLE_NAMES, type SyncedTableName, deriveSyncUpdatedAt, markSyncImportTransaction } from './syncMeta'
+import { SYNCED_TABLE_NAMES, type SyncedTableName, deriveSyncUpdatedAt, isTombstoneExpired, markSyncImportTransaction } from './syncMeta'
 
 const SYNC_CONFIG_STORAGE_KEY = 'puhrr.sync.config'
 // v3 was bumped for the Master Problem List: DailyUpdate.problems changed shape from embedded
@@ -283,7 +283,7 @@ const exportSyncPayload = async (deviceTag: string): Promise<SyncPayload> => {
     exportedAt: toIsoNow(),
     deviceTag,
     ...(Object.fromEntries(SYNCED_TABLE_NAMES.map((tableName, index) => [tableName, recordsByTable[index]])) as Pick<SyncPayload, SyncedTableName>),
-    syncTombstones,
+    syncTombstones: syncTombstones.filter((tombstone) => !isTombstoneExpired(tombstone)),
     syncResets,
   }
 }
@@ -823,6 +823,40 @@ export const getLocalSyncVersionMeta = async (currentConfig: SyncConfig): Promis
   return {
     changedAt,
     sizeBytes: encryptedBlob.length,
+  }
+}
+
+export type SyncSizeRow = { table: string; records: number; bytes: number }
+
+export type SyncSizeBreakdown = {
+  /** Largest first. */
+  rows: SyncSizeRow[]
+  /** Size of the snapshot as plain JSON, before compression and encryption. */
+  totalBytes: number
+  /** Size of what is actually uploaded (compressed, encrypted, base64), when the room key is known. */
+  uploadBytes: number | null
+}
+
+/** How much of the snapshot each table takes, so growth can be traced to its source. */
+export const getSyncSizeBreakdown = async (deviceTag: string, roomCode?: string): Promise<SyncSizeBreakdown> => {
+  const payload = await exportSyncPayload(deviceTag)
+  const encoder = new TextEncoder()
+  const measure = (table: string, records: unknown[]): SyncSizeRow => ({
+    table,
+    records: records.length,
+    bytes: encoder.encode(JSON.stringify(records)).length,
+  })
+
+  const rows = [
+    ...SYNCED_TABLE_NAMES.map((tableName) => measure(tableName, (payload[tableName] as unknown[] | undefined) ?? [])),
+    measure('syncTombstones', payload.syncTombstones ?? []),
+    measure('syncResets', payload.syncResets ?? []),
+  ].sort((a, b) => b.bytes - a.bytes)
+
+  return {
+    rows,
+    totalBytes: encoder.encode(JSON.stringify(payload)).length,
+    uploadBytes: roomCode ? (await encryptPayloadToBlob(payload, roomCode)).length : null,
   }
 }
 

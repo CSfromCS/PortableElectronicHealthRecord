@@ -166,6 +166,9 @@ import { SyncSetupDialog, type SetupDeviceName, type SetupUsername } from './fea
 import { VersionPickerDialog } from './features/sync/VersionPickerDialog'
 import { ResetRoomDialog } from './features/sync/ResetRoomDialog'
 import { resetRoomData, type ResetSelection } from './features/sync/syncReset'
+import { pruneExpiredTombstones } from './features/sync/syncPrune'
+import { SyncSizeBreakdown } from './features/sync/SyncSizeBreakdown'
+import { ARCHIVE_AFTER_DAYS, findPatientsToArchive } from './features/patients/archiveUtils'
 import {
   buildSyncConfig,
   getDefaultSyncEndpoint,
@@ -1284,10 +1287,12 @@ function App() {
     void refreshSyncInsight(syncConfig)
   }, [refreshSyncInsight, syncConfig])
 
-  // Changes older than the retention window (30 days) are dropped, and older-format entries that
-  // still hold whole records are shrunk to the fields that changed.
+  // Changes older than the retention window (7 days) are dropped, and older-format entries that
+  // still hold whole records are shrunk to the fields that changed. Deletion records every device
+  // has long since applied are dropped too.
   useEffect(() => {
     void pruneChangeLog()
+    void pruneExpiredTombstones()
   }, [])
 
   const savedDailyEntryDates = useLiveQuery(async () => {
@@ -5942,9 +5947,11 @@ function App() {
 
     await db.transaction(
       'rw',
-      [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments, db.tagEvents, db.customActionRuns],
+      [db.patients, db.dailyUpdates, db.vitals, db.medications, db.labs, db.orders, db.photoAttachments, db.tagEvents, db.customActionRuns, db.masterProblems, db.simpleProblemItems],
       async () => {
       await db.patients.bulkDelete(patientIds)
+      await db.masterProblems.where('patientId').anyOf(patientIds).delete()
+      await db.simpleProblemItems.where('patientId').anyOf(patientIds).delete()
       await db.dailyUpdates.where('patientId').anyOf(patientIds).delete()
       await db.vitals.where('patientId').anyOf(patientIds).delete()
       await db.medications.where('patientId').anyOf(patientIds).delete()
@@ -5998,6 +6005,33 @@ function App() {
 
     await deletePatientsAndRelatedData(dischargedIds)
     setNotice('Cleared inactive patients.')
+  }
+
+  // Same removal as "Clear inactive patients", but only for patients discharged more than
+  // ARCHIVE_AFTER_DAYS ago, and a full backup is downloaded first (so the archive can be restored
+  // from it). Keeps the room's size following the patients still on the ward, not all history.
+  const requestArchiveOldDischarged = async () => {
+    const [allPatients, allTagEvents] = await Promise.all([db.patients.toArray(), db.tagEvents.toArray()])
+    const candidates = findPatientsToArchive(allPatients, tagsById, allTagEvents)
+    const patientIds = candidates.map((patient) => patient.id).filter((id): id is number => id !== undefined)
+
+    if (patientIds.length === 0) {
+      setNotice(`No patients were discharged more than ${ARCHIVE_AFTER_DAYS} days ago.`)
+      return
+    }
+
+    const names = candidates.slice(0, 10).map((patient) => `${patient.roomNumber} ${patient.lastName}`.trim())
+    const more = candidates.length > names.length ? ` and ${candidates.length - names.length} more` : ''
+    requestDeleteConfirmation({
+      title: 'Archive old discharged patients?',
+      message: `${candidates.length} patient${candidates.length === 1 ? '' : 's'} discharged more than ${ARCHIVE_AFTER_DAYS} days ago (${names.join(', ')}${more}) will be removed from this device and the sync room, with all of their notes, vitals, medications, labs, orders and photos. A backup file downloads first; restoring it replaces your current data.`,
+      confirmLabel: 'Back up and archive',
+      onConfirm: async () => {
+        await exportBackup()
+        await deletePatientsAndRelatedData(patientIds)
+        setNotice(`Archived ${patientIds.length} patient${patientIds.length === 1 ? '' : 's'}.`)
+      },
+    })
   }
 
   // Delete via the Patients-list selection mode (single or multiple patients) — always routed
@@ -9254,6 +9288,7 @@ function App() {
                     <div className='h-px bg-clay/15 my-1' />
                     <p><strong>Last room upload:</strong> {formatSyncDateTime(syncInsight?.remoteLatestPushAt)} by {latestUploadOwnerLabel}</p>
                   </div>
+                  {syncConfig ? <SyncSizeBreakdown deviceTag={syncConfig.deviceTag} roomCode={syncConfig.roomCode} /> : null}
                 </div>
               </div>
 
@@ -9323,6 +9358,19 @@ function App() {
                     <div className='min-w-0'>
                       <p className='text-sm font-semibold text-action-danger'>Clear inactive patients</p>
                       <FieldTip className='mt-0.5'>Permanently removes all patient records with a Terminal tag applied</FieldTip>
+                    </div>
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => void requestArchiveOldDischarged()}
+                    className='flex items-center gap-3 px-3.5 py-3 rounded-xl bg-blush-sand/50 hover:bg-blush-sand border border-clay/20 text-left transition-colors active:scale-[0.98]'
+                  >
+                    <div className='w-9 h-9 rounded-lg bg-action-edit/10 flex items-center justify-center shrink-0'>
+                      <Upload className='h-4 w-4 text-action-edit' />
+                    </div>
+                    <div className='min-w-0'>
+                      <p className='text-sm font-semibold text-espresso'>Archive old discharged patients</p>
+                      <FieldTip className='mt-0.5'>Backs up, then removes patients discharged over {ARCHIVE_AFTER_DAYS} days ago to keep sync small</FieldTip>
                     </div>
                   </button>
                   <button
