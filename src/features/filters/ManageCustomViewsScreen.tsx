@@ -338,21 +338,25 @@ export const ManageCustomViewsScreen = ({
                 <Button variant='ghost' onClick={closeEdit}>Cancel</Button>
                 <Button onClick={() => void saveDraft()} disabled={!canSaveDraft(draft)}>Save</Button>
               </div>
+              {/* Rendered inside this DialogContent (not as a sibling Dialog) so Radix treats taps in
+                  the sort dialog as "inside" the edit dialog. As a sibling, a touch tap on Done only
+                  reaches the edit dialog's outside-click handler on the follow-up `click` — after the
+                  sort dialog has already closed — so on a phone it dismissed the whole edit dialog
+                  and discarded the draft before Save could be pressed. */}
+              {draft.sortConfig ? (
+                <PatientSortConfigDialog
+                  open={sortDialogOpen}
+                  onOpenChange={setSortDialogOpen}
+                  config={draft.sortConfig}
+                  onChange={(sortConfig) => setDraft({ ...draft, sortConfig })}
+                  tags={tags}
+                  groups={groups}
+                />
+              ) : null}
             </>
           ) : null}
         </DialogContent>
       </Dialog>
-
-      {draft?.sortConfig ? (
-        <PatientSortConfigDialog
-          open={sortDialogOpen}
-          onOpenChange={setSortDialogOpen}
-          config={draft.sortConfig}
-          onChange={(sortConfig) => setDraft(draft ? { ...draft, sortConfig } : draft)}
-          tags={tags}
-          groups={groups}
-        />
-      ) : null}
 
       <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent>

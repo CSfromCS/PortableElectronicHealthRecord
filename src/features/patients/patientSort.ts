@@ -39,9 +39,11 @@ const fullName = (patient: Patient) => `${patient.lastName} ${patient.firstName}
 
 /** Index of the earliest tag (in the level's own `tagIds` order) the patient carries — patients
  * matching none of the listed tags sort after everyone who matches at least one, tied among
- * themselves. */
+ * themselves. The patient's ward counts as one of their tags here: it lives in `wardTagId`, not
+ * in `tagIds`, but Ward tags are offered in the Tag order picker so a level can order by ward. */
 const tagOrderRank = (patient: Patient, tagIds: number[]): number => {
   const applied = new Set(patient.tagIds ?? [])
+  if (patient.wardTagId !== undefined) applied.add(patient.wardTagId)
   const index = tagIds.findIndex((tagId) => applied.has(tagId))
   return index === -1 ? tagIds.length : index
 }
