@@ -3,7 +3,7 @@ import { type DateTimeWindow, type PatientPoolContext, matchesPatientPool } from
 import { composeDiagnosisTextConfigurable } from '@/features/patients/serviceDiagnosis'
 import { buildLabReportBlockPieces } from '@/features/reporting/reportBuilders'
 import { resolveServiceTagNames } from '@/features/tags/serviceTagUtils'
-import { getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
+import { getAllCarriedPatientTags, getAppliedPatientTags, orderTagsCanonically, patientHasTagAnywhere, renderTagDisplayText } from '@/features/tags/tagUtils'
 import {
   formatClock,
   formatClockCompact,
@@ -770,7 +770,11 @@ const resolveFlatVariable = (
  * from patient cards but still included here, or vice versa — so "include all" means every
  * currently-applied tag, not just the ones visibleOnPatientCard would show. */
 const resolveTagsVariable = (config: TagsVariableConfig, patient: Patient, ctx: TemplateRenderContext): string => {
-  const applied = getAppliedPatientTags(patient, ctx.tagsById)
+  // "Include all" stays general-tags-only: Ward and Service already have their own dedicated
+  // variables, so folding them in would silently duplicate them in every existing report. An
+  // explicit pick of a Ward/Service tag (or the whole group) does look at those slots too —
+  // otherwise it could never match anything.
+  const applied = config.includeAll ? getAppliedPatientTags(patient, ctx.tagsById) : getAllCarriedPatientTags(patient, ctx.tagsById)
   const selected = config.includeAll
     ? applied
     : applied.filter((tag) =>
@@ -1021,7 +1025,7 @@ const resolveMedicationsBlock = (config: BlockVariableConfig, patient: Patient, 
 }
 
 const patientHasAutomationRole = (patient: Patient, tagsById: Map<number, TagDefinition>, role: TagAutomationRole): boolean =>
-  (patient.tagIds ?? []).some((tagId) => tagsById.get(tagId)?.automationRole === role)
+  getAllCarriedPatientTags(patient, tagsById).some((tag) => tag.automationRole === role)
 
 const resolveBlockVariable = (
   variableId: BlockVariableId,
@@ -1263,7 +1267,7 @@ export type GroupRenderTemplate = Pick<
   ReportTemplate,
   | 'patternText' | 'variables' | 'patientSeparator' | 'customPatientSeparator'
   | 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupAutomaticLabels' | 'groupManualCombos'
-  | 'groupLookbackHours' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'
+  | 'groupLookbackHours' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty' | 'groupHideEmpty'
   | 'groupPatternText' | 'groupVariables' | 'groupSeparator' | 'customGroupSeparator'
   | 'mainTemplateGroupKeys' | 'extraMainTemplates'
 >
@@ -1352,9 +1356,13 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
         customPatientSeparator: claimedBy.customPatientSeparator ?? template.customPatientSeparator,
       }
     }
+    // A group's tags can be general tags, a Ward tag or a Service tag — see `patientHasTagAnywhere`.
     const patientsInGroup = patientsForBody.filter((patient) =>
-      group.tagIds.every((tagId) => (patient.tagIds ?? []).includes(tagId)),
+      group.tagIds.every((tagId) => patientHasTagAnywhere(patient, tagId)),
     )
+    // Opt-in: drop a group that no patient in this report belongs to, instead of rendering it with
+    // an empty list / zero tallies.
+    if (template.groupHideEmpty && patientsInGroup.length === 0) return []
     // Defensive fallback: a template persisted before this field existed (stale local dev
     // IndexedDB) would otherwise carry `undefined` here, producing an Invalid Date below and
     // crashing report generation entirely.

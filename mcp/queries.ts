@@ -12,7 +12,7 @@ import { buildMasterProblemLabels } from '@/features/problems/problemUtils'
 import { DEFAULT_PATIENT_SORT_CONFIG, type PatientSortConfig, sortPatientsByConfig } from '@/features/patients/patientSort'
 import { buildTemplateRenderContext, generateTemplateOutput } from '@/features/reporting/templateReport'
 import { WARD_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
-import { isPatientActive } from '@/features/tags/tagUtils'
+import { isPatientActive, patientHasTagAnywhere } from '@/features/tags/tagUtils'
 import { buildSamplePreviewContext, buildSamplePreviewPatient } from '@/features/templates/samplePreviewData'
 import {
   classifyTemplateRepeatMode,
@@ -110,10 +110,7 @@ export const listTags = (world: World) => world.tagGroups
         id: tag.id,
         name: tag.name,
         terminal: Boolean(tag.terminal),
-        patientsWithTag: world.patients.filter((patient) => (patient.tagIds ?? []).includes(tag.id as number)
-          || (patient.mainServiceTagIds ?? []).includes(tag.id as number)
-          || (patient.referralServiceTagIds ?? []).includes(tag.id as number)
-          || patient.wardTagId === tag.id).length,
+        patientsWithTag: world.patients.filter((patient) => patientHasTagAnywhere(patient, tag.id as number)).length,
       })),
   }))
 

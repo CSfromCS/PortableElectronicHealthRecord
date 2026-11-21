@@ -134,6 +134,9 @@ export interface Patient extends SyncMeta {
   medications: string
   labs: string
   pendings: string
+  /** General tags only — NOT every tag a patient carries. Ward lives in `wardTagId` and Service in
+   * `mainServiceTagIds`/`referralServiceTagIds`. To test whether a patient has a given tag, use
+   * `patientHasTagAnywhere` (tagUtils.ts), never `tagIds.includes`. */
   tagIds: number[]
 }
 
@@ -784,6 +787,10 @@ export interface ReportTemplate extends SyncMeta {
   groupListOpenText: string
   groupListCloseText: string
   groupShowListBracketsWhenEmpty: boolean
+  /** Opt-in: leave out any output group that has no patients in the report, rather than rendering
+   * it with an empty list/zero tallies. Unset/false (templates saved before this existed) keeps
+   * every group. */
+  groupHideEmpty?: boolean
   groupPatternText: string
   groupVariables: Record<string, GroupVariableInstance>
   groupSeparator: BlockJoinMode

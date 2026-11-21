@@ -1,4 +1,5 @@
 import { getEffectiveAdmitDate } from '@/lib/dateTime'
+import { patientHasTagAnywhere } from '@/features/tags/tagUtils'
 import type { Patient, PatientSortConfig, PatientSortDirection, PatientSortField, PatientSortLevel, TagDefinition } from '@/types'
 
 export type { PatientSortConfig, PatientSortDirection, PatientSortField, PatientSortLevel }
@@ -42,9 +43,7 @@ const fullName = (patient: Patient) => `${patient.lastName} ${patient.firstName}
  * themselves. The patient's ward counts as one of their tags here: it lives in `wardTagId`, not
  * in `tagIds`, but Ward tags are offered in the Tag order picker so a level can order by ward. */
 const tagOrderRank = (patient: Patient, tagIds: number[]): number => {
-  const applied = new Set(patient.tagIds ?? [])
-  if (patient.wardTagId !== undefined) applied.add(patient.wardTagId)
-  const index = tagIds.findIndex((tagId) => applied.has(tagId))
+  const index = tagIds.findIndex((tagId) => patientHasTagAnywhere(patient, tagId))
   return index === -1 ? tagIds.length : index
 }
 
