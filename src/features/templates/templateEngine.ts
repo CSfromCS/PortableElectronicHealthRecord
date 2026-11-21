@@ -3,7 +3,7 @@ import { type DateTimeWindow, type PatientPoolContext, matchesPatientPool } from
 import { composeDiagnosisTextConfigurable } from '@/features/patients/serviceDiagnosis'
 import { buildLabReportBlockPieces } from '@/features/reporting/reportBuilders'
 import { resolveServiceTagNames } from '@/features/tags/serviceTagUtils'
-import { getAppliedPatientTags, orderTagsCanonically, renderTagDisplayText } from '@/features/tags/tagUtils'
+import { getAppliedPatientTags, orderTagsCanonically, patientCarriesTag, renderTagDisplayText } from '@/features/tags/tagUtils'
 import {
   formatClock,
   formatClockCompact,
@@ -1263,7 +1263,7 @@ export type GroupRenderTemplate = Pick<
   ReportTemplate,
   | 'patternText' | 'variables' | 'patientSeparator' | 'customPatientSeparator'
   | 'groupSelectionMode' | 'groupTagIds' | 'groupCombineMode' | 'groupAutomaticLabels' | 'groupManualCombos'
-  | 'groupLookbackHours' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty'
+  | 'groupLookbackHours' | 'groupListOpenText' | 'groupListCloseText' | 'groupShowListBracketsWhenEmpty' | 'groupHideEmpty'
   | 'groupPatternText' | 'groupVariables' | 'groupSeparator' | 'customGroupSeparator'
   | 'mainTemplateGroupKeys' | 'extraMainTemplates'
 >
@@ -1352,9 +1352,14 @@ export const renderGroupedBody = (template: GroupRenderTemplate, patientsForBody
         customPatientSeparator: claimedBy.customPatientSeparator ?? template.customPatientSeparator,
       }
     }
+    // A group's tags can be general tags, a Ward tag or a Service tag — the latter two are stored
+    // outside `patient.tagIds`, so match through `patientCarriesTag` rather than `tagIds` alone.
     const patientsInGroup = patientsForBody.filter((patient) =>
-      group.tagIds.every((tagId) => (patient.tagIds ?? []).includes(tagId)),
+      group.tagIds.every((tagId) => patientCarriesTag(patient, tagId)),
     )
+    // Opt-in: drop a group that no patient in this report belongs to, instead of rendering it with
+    // an empty list / zero tallies.
+    if (template.groupHideEmpty && patientsInGroup.length === 0) return []
     // Defensive fallback: a template persisted before this field existed (stale local dev
     // IndexedDB) would otherwise carry `undefined` here, producing an Invalid Date below and
     // crashing report generation entirely.

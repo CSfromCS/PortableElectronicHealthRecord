@@ -784,6 +784,10 @@ export interface ReportTemplate extends SyncMeta {
   groupListOpenText: string
   groupListCloseText: string
   groupShowListBracketsWhenEmpty: boolean
+  /** Opt-in: leave out any output group that has no patients in the report, rather than rendering
+   * it with an empty list/zero tallies. Unset/false (templates saved before this existed) keeps
+   * every group. */
+  groupHideEmpty?: boolean
   groupPatternText: string
   groupVariables: Record<string, GroupVariableInstance>
   groupSeparator: BlockJoinMode

@@ -88,6 +88,16 @@ export const patientHasTagAnywhere = (
   || (patient.mainServiceTagIds ?? []).includes(tagId)
   || (patient.referralServiceTagIds ?? []).includes(tagId)
 
+/** True if the patient carries `tagId` in ANY of the places a tag can live: the general `tagIds`
+ * pool, the single `wardTagId` slot, or either service tag slot. Ward and Service tags are stored
+ * outside `tagIds`, so anything that matches patients by tag (e.g. Tag Combo Grouping) must use
+ * this rather than checking `tagIds` alone, or those tags never match anyone. */
+export const patientCarriesTag = (
+  patient: Pick<Patient, 'tagIds' | 'wardTagId' | 'mainServiceTagIds' | 'referralServiceTagIds'>,
+  tagId: number,
+): boolean =>
+  patient.wardTagId === tagId || patientHasTagAnywhere(patient, tagId)
+
 /** A patient is active iff they have zero Terminal-flagged tags applied (point 6). */
 export const isPatientActive = (
   patient: Pick<Patient, 'tagIds'>,

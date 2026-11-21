@@ -8,15 +8,30 @@ const BulkTagPickerGroups = ({
   buckets,
   selectedTagIds,
   onToggle,
+  onToggleGroup,
 }: {
   buckets: TagGroupBucket[]
   selectedTagIds: Set<number>
   onToggle: (tag: TagDefinition) => void
+  onToggleGroup?: (tags: TagDefinition[], select: boolean) => void
 }) => (
   <div className='space-y-4'>
-    {buckets.map((bucket) => (
+    {buckets.map((bucket) => {
+      const allSelected = bucket.tags.every((tag) => tag.id !== undefined && selectedTagIds.has(tag.id))
+      return (
       <div key={bucket.groupId ?? 'ungrouped'} className='space-y-1.5'>
-        <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>{bucket.groupName}</p>
+        <div className='flex items-center justify-between gap-2'>
+          <p className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>{bucket.groupName}</p>
+          {onToggleGroup ? (
+            <button
+              type='button'
+              className='text-[11px] font-semibold text-action-primary hover:underline'
+              onClick={() => onToggleGroup(bucket.tags, !allSelected)}
+            >
+              {allSelected ? 'Clear all' : 'Select all'}
+            </button>
+          ) : null}
+        </div>
         <div className='flex flex-col gap-1 rounded-xl border border-clay/20 bg-warm-ivory px-3 py-2'>
           {bucket.tags.map((tag) => {
             const checked = tag.id !== undefined && selectedTagIds.has(tag.id)
@@ -36,7 +51,8 @@ const BulkTagPickerGroups = ({
           })}
         </div>
       </div>
-    ))}
+      )
+    })}
   </div>
 )
 
@@ -46,12 +62,17 @@ export const BulkTagPicker = ({
   groups,
   selectedTagIds,
   onToggle,
+  onToggleGroup,
   collapsible = false,
 }: {
   tags: TagDefinition[]
   groups: TagGroupDefinition[]
   selectedTagIds: Set<number>
   onToggle: (tag: TagDefinition) => void
+  /** When provided, each Tag Group's header gets a "Select all"/"Clear all" button that calls this
+   * with every (visible) tag in that group and whether to select or clear them. Omitted by callers
+   * that don't want bulk selection, so they look exactly as before. */
+  onToggleGroup?: (tags: TagDefinition[], select: boolean) => void
   /** When true, the whole picker (every Tag Group together) starts collapsed to a single read-only
    * summary row of every currently selected tag if there's already something to summarize, or
    * expanded if there's nothing selected yet to pick from — same idea as the Profile tab's
@@ -67,7 +88,7 @@ export const BulkTagPicker = ({
     return <p className='text-xs text-clay'>No tags defined yet. Create tags in Settings → Manage Tags.</p>
   }
 
-  if (!collapsible) return <BulkTagPickerGroups buckets={buckets} selectedTagIds={selectedTagIds} onToggle={onToggle} />
+  if (!collapsible) return <BulkTagPickerGroups buckets={buckets} selectedTagIds={selectedTagIds} onToggle={onToggle} onToggleGroup={onToggleGroup} />
 
   const selectedTags = tags.filter((tag) => tag.id !== undefined && selectedTagIds.has(tag.id))
 
@@ -87,7 +108,7 @@ export const BulkTagPicker = ({
         <span className='text-[11px] font-bold uppercase tracking-widest text-clay/55'>Tags</span>
         {!expanded && selectedTags.length > 0 ? <TagChipRow tags={selectedTags} className='justify-start' /> : null}
       </button>
-      {expanded ? <BulkTagPickerGroups buckets={buckets} selectedTagIds={selectedTagIds} onToggle={onToggle} /> : null}
+      {expanded ? <BulkTagPickerGroups buckets={buckets} selectedTagIds={selectedTagIds} onToggle={onToggle} onToggleGroup={onToggleGroup} /> : null}
     </div>
   )
 }

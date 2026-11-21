@@ -120,6 +120,7 @@ type TemplateFormState = {
   groupListOpenText: string
   groupListCloseText: string
   groupShowListBracketsWhenEmpty: boolean
+  groupHideEmpty: boolean
   groupPatternText: string
   groupVariables: Record<string, GroupVariableInstance>
   groupSeparator: BlockJoinMode
@@ -151,6 +152,7 @@ const templateToForm = (template: ReportTemplate): TemplateFormState => ({
   groupListOpenText: template.groupListOpenText,
   groupListCloseText: template.groupListCloseText,
   groupShowListBracketsWhenEmpty: template.groupShowListBracketsWhenEmpty,
+  groupHideEmpty: template.groupHideEmpty ?? false,
   groupPatternText: template.groupPatternText,
   groupVariables: { ...template.groupVariables },
   groupSeparator: template.groupSeparator,
@@ -179,6 +181,7 @@ const blankForm = (): TemplateFormState => ({
   groupListOpenText: ' (',
   groupListCloseText: ')',
   groupShowListBracketsWhenEmpty: false,
+  groupHideEmpty: false,
   groupPatternText: '',
   groupVariables: {},
   groupSeparator: 'blankLine',
@@ -194,14 +197,37 @@ const GroupAssignmentPicker = ({
   templateIndex,
   keyLists,
   onToggle,
+  onSetAll,
 }: {
   groups: { key: string; label: string }[]
   templateIndex: number
   keyLists: string[][]
   onToggle: (groupKey: string) => void
-}) => (
+  /** Replaces this template's whole selection with `groupKeys`. */
+  onSetAll: (groupKeys: string[]) => void
+}) => {
+  // Groups this template could own: its own plus any no other main template has claimed.
+  const selectableKeys = groups
+    .filter((group) => {
+      const ownerIndex = keyLists.findIndex((keys) => keys.includes(group.key))
+      return ownerIndex === -1 || ownerIndex === templateIndex
+    })
+    .map((group) => group.key)
+  const allSelected = selectableKeys.length > 0 && selectableKeys.every((key) => keyLists[templateIndex]?.includes(key))
+  return (
   <div className='space-y-1.5 border-t border-clay/15 pt-2.5'>
-    <Label className='text-xs'>Apply to:</Label>
+    <div className='flex items-center justify-between gap-2'>
+      <Label className='text-xs'>Apply to:</Label>
+      {selectableKeys.length > 0 ? (
+        <button
+          type='button'
+          className='text-[11px] font-semibold text-action-primary hover:underline'
+          onClick={() => onSetAll(allSelected ? [] : selectableKeys)}
+        >
+          {allSelected ? 'Clear all' : 'Select all'}
+        </button>
+      ) : null}
+    </div>
     {groups.length === 0 ? (
       <p className='text-xs text-clay'>No groups defined yet — set them up under Group-level formatting.</p>
     ) : (
@@ -226,7 +252,8 @@ const GroupAssignmentPicker = ({
       </div>
     )}
   </div>
-)
+  )
+}
 
 const MainTemplatePreview = ({ text }: { text: string }) => (
   <div className='space-y-1 border-t border-clay/15 pt-2.5'>
@@ -505,6 +532,17 @@ const GroupFormatCard = ({
     onChange({ groupTagIds: form.groupTagIds.includes(tagId) ? form.groupTagIds.filter((id) => id !== tagId) : [...form.groupTagIds, tagId] })
   }
 
+  const toggleAutomaticTagGroup = (groupTags: TagDefinition[], select: boolean) => {
+    const groupTagIds = groupTags.map((tag) => tag.id).filter((id): id is number => id !== undefined)
+    if (select) {
+      const alreadySelected = new Set(form.groupTagIds)
+      onChange({ groupTagIds: [...form.groupTagIds, ...groupTagIds.filter((id) => !alreadySelected.has(id))] })
+    } else {
+      const toClear = new Set(groupTagIds)
+      onChange({ groupTagIds: form.groupTagIds.filter((id) => !toClear.has(id)) })
+    }
+  }
+
   const automaticCombos = computeAutomaticGroupCombos(form, tagsById)
   const automaticGroups = mergeAutomaticGroupLabels(automaticCombos, form.groupAutomaticLabels)
   const commitAutomaticGroups = (next: typeof automaticGroups) => {
@@ -586,7 +624,7 @@ const GroupFormatCard = ({
                 <div className='space-y-3'>
                   <div className='space-y-1.5'>
                     <Label className='text-xs'>Which tags group patients</Label>
-                    <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(form.groupTagIds)} onToggle={toggleAutomaticTag} collapsible />
+                    <BulkTagPicker tags={tags} groups={groups} selectedTagIds={new Set(form.groupTagIds)} onToggle={toggleAutomaticTag} onToggleGroup={toggleAutomaticTagGroup} collapsible />
                     <FieldTip>Each selected tag becomes its own output group, covering patients currently carrying that tag.</FieldTip>
                   </div>
 
@@ -683,6 +721,22 @@ const GroupFormatCard = ({
               </Button>
             </div>
           )}
+
+          <div className='space-y-1'>
+            <label className='flex items-center gap-2.5 py-1 cursor-pointer'>
+              <input
+                type='checkbox'
+                className='h-4 w-4 accent-action-primary'
+                checked={form.groupHideEmpty}
+                onChange={(event) => onChange({ groupHideEmpty: event.target.checked })}
+              />
+              <span className='text-sm text-espresso'>Hide groups with no patients</span>
+            </label>
+            <FieldTip>
+              Leave out any group that has no patients in the report, so only groups with actual patients
+              appear. Off by default — every group is shown, even an empty one (its tallies read 0).
+            </FieldTip>
+          </div>
 
           <div className='space-y-1.5 border-t border-clay/15 pt-3'>
             <Label className='text-xs'>Group format — one evaluation per output group</Label>
@@ -2157,6 +2211,15 @@ const TemplateEditor = ({
     }
   })
 
+  const setMainTemplateAllGroupKeys = (index: number, groupKeys: string[]) => setForm((previous) => {
+    if (index === 0) return { ...previous, mainTemplateGroupKeys: groupKeys }
+    return {
+      ...previous,
+      mainTemplateGroupKeys: previous.mainTemplateGroupKeys ?? outputGroups.map((group) => group.key),
+      extraMainTemplates: previous.extraMainTemplates.map((extra, extraIndex) => (extraIndex === index - 1 ? { ...extra, groupKeys } : extra)),
+    }
+  })
+
   const repeatMode = useMemo(
     () => classifyTemplateRepeatMode({ patternText: form.patternText, variables: form.variables, groupingEnabled: form.groupingEnabled }),
     [form.patternText, form.variables, form.groupingEnabled],
@@ -2242,7 +2305,7 @@ const TemplateEditor = ({
                 onChange={(patternText, variables) => setForm((previous) => ({ ...previous, patternText, variables }))}
               />
               {form.groupingEnabled ? (
-                <GroupAssignmentPicker groups={outputGroups} templateIndex={0} keyLists={mainTemplateKeyLists} onToggle={(groupKey) => setMainTemplateGroupKeys(0, groupKey)} />
+                <GroupAssignmentPicker groups={outputGroups} templateIndex={0} keyLists={mainTemplateKeyLists} onToggle={(groupKey) => setMainTemplateGroupKeys(0, groupKey)} onSetAll={(groupKeys) => setMainTemplateAllGroupKeys(0, groupKeys)} />
               ) : null}
               {repeatMode === 'per-patient' ? (
                 <JoinModePicker
@@ -2286,7 +2349,7 @@ const TemplateEditor = ({
                     extraMainTemplates: previous.extraMainTemplates.map((item) => (item.id === extra.id ? { ...item, patternText, variables } : item)),
                   }))}
                 />
-                <GroupAssignmentPicker groups={outputGroups} templateIndex={extraIndex + 1} keyLists={mainTemplateKeyLists} onToggle={(groupKey) => setMainTemplateGroupKeys(extraIndex + 1, groupKey)} />
+                <GroupAssignmentPicker groups={outputGroups} templateIndex={extraIndex + 1} keyLists={mainTemplateKeyLists} onToggle={(groupKey) => setMainTemplateGroupKeys(extraIndex + 1, groupKey)} onSetAll={(groupKeys) => setMainTemplateAllGroupKeys(extraIndex + 1, groupKeys)} />
                 <JoinModePicker
                   label='Between patients'
                   mode={extra.patientSeparator}
@@ -2422,6 +2485,7 @@ export const ManageTemplatesScreen = ({
       groupListOpenText: form.groupListOpenText,
       groupListCloseText: form.groupListCloseText,
       groupShowListBracketsWhenEmpty: form.groupShowListBracketsWhenEmpty,
+      groupHideEmpty: form.groupHideEmpty,
       groupPatternText: form.groupPatternText,
       groupVariables: form.groupVariables,
       groupSeparator: form.groupSeparator,
@@ -2531,6 +2595,7 @@ export const ManageTemplatesScreen = ({
       groupListOpenText: template.groupListOpenText,
       groupListCloseText: template.groupListCloseText,
       groupShowListBracketsWhenEmpty: template.groupShowListBracketsWhenEmpty,
+      groupHideEmpty: template.groupHideEmpty ?? false,
       groupPatternText: group.patternText,
       groupVariables: group.variables,
       groupSeparator: template.groupSeparator,
