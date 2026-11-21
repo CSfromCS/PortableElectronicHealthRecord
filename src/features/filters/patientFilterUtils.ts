@@ -1,5 +1,5 @@
 import { toLocalISODate, toLocalTime, isWithinDateTimeWindow, getEffectiveAdmitDate, resolveEffectiveDate, resolveEffectiveTime, formatDateMMDD, formatClock } from '@/lib/dateTime'
-import { getAppliedPatientTags } from '@/features/tags/tagUtils'
+import { getAppliedPatientTags, patientHasTagAnywhere, type PatientTagFields } from '@/features/tags/tagUtils'
 import { WARD_TAG_GROUP_NAME } from '@/features/tags/tagConstants'
 import type { Patient, TagDefinition, TagEvent, TagGroupDefinition } from '@/types'
 
@@ -20,10 +20,12 @@ export const isTagWardFilterActive = (filter: TagWardFilterState): boolean =>
 export const countTagWardSelections = (filter: TagWardFilterState): number =>
   filter.tagIds.length + filter.wardTagIds.length
 
-export const matchesTagFacet = (patient: Pick<Patient, 'tagIds'>, tagIds: number[], mode: TagFilterMode): boolean => {
+/** Matches by `patientHasTagAnywhere`, not `tagIds` alone: this facet's list includes Service tags
+ * (stored in the service slots), and a ward tag arriving via a saved view or the MCP server would
+ * live in `wardTagId`. */
+export const matchesTagFacet = (patient: PatientTagFields, tagIds: number[], mode: TagFilterMode): boolean => {
   if (tagIds.length === 0) return true
-  const applied = new Set(patient.tagIds ?? [])
-  return mode === 'AND' ? tagIds.every((id) => applied.has(id)) : tagIds.some((id) => applied.has(id))
+  return mode === 'AND' ? tagIds.every((id) => patientHasTagAnywhere(patient, id)) : tagIds.some((id) => patientHasTagAnywhere(patient, id))
 }
 
 /** Ward facet is always OR across selections — a patient can only be in one ward at a time, so AND would always match zero. */
@@ -33,7 +35,7 @@ export const matchesWardFacet = (patient: Pick<Patient, 'wardTagId'>, wardTagIds
 }
 
 export const matchesTagWardFilter = (
-  patient: Pick<Patient, 'tagIds' | 'wardTagId'>,
+  patient: PatientTagFields,
   filter: TagWardFilterState,
 ): boolean => matchesTagFacet(patient, filter.tagIds, filter.tagMode) && matchesWardFacet(patient, filter.wardTagIds)
 

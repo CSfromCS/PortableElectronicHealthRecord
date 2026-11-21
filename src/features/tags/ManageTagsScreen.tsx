@@ -151,6 +151,7 @@ export const ManageTagsScreen = ({
             ? Promise.resolve()
             : db.patients.update(patient.id, {
                 tagIds: (patient.tagIds ?? []).filter((id) => id !== tagId),
+                wardTagId: patient.wardTagId === tagId ? undefined : patient.wardTagId,
                 mainServiceTagIds: (patient.mainServiceTagIds ?? []).filter((id) => id !== tagId),
                 referralServiceTagIds: (patient.referralServiceTagIds ?? []).filter((id) => id !== tagId),
               }),

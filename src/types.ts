@@ -134,6 +134,9 @@ export interface Patient extends SyncMeta {
   medications: string
   labs: string
   pendings: string
+  /** General tags only — NOT every tag a patient carries. Ward lives in `wardTagId` and Service in
+   * `mainServiceTagIds`/`referralServiceTagIds`. To test whether a patient has a given tag, use
+   * `patientHasTagAnywhere` (tagUtils.ts), never `tagIds.includes`. */
   tagIds: number[]
 }
 

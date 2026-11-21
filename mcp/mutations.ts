@@ -30,7 +30,7 @@ import {
   removeMainServiceTagFromPatient,
   removeReferralServiceTagFromPatient,
 } from '@/features/tags/serviceTagUtils'
-import { applyTagToPatient, isPatientActive, removeTagFromPatient } from '@/features/tags/tagUtils'
+import { applyTagToPatient, isPatientActive, patientHasTagAnywhere, removeTagFromPatient } from '@/features/tags/tagUtils'
 import { clearPatientWardTag, getOrCreateWardTag, setPatientWardTag } from '@/features/tags/wardTagUtils'
 import { tokenizePatternText } from '@/features/templates/templateEngine'
 import { toLocalISODate, toLocalTime } from '@/lib/dateTime'
@@ -987,7 +987,7 @@ const tagNames = (world: World, ids: number[]): string[] => ids.map((id) => worl
 
 const missingTagsHint = (world: World, patient: Patient, action: CustomAction): string => {
   const options = action.conditions.map((condition) => {
-    const missing = condition.requiredTagIds.filter((id) => !(patient.tagIds ?? []).includes(id) && !(patient.mainServiceTagIds ?? []).includes(id) && !(patient.referralServiceTagIds ?? []).includes(id))
+    const missing = condition.requiredTagIds.filter((id) => !patientHasTagAnywhere(patient, id))
     return missing.length > 0 ? `needs ${tagNames(world, missing).join(' + ')}` : 'is limited to certain days'
   })
   return options.length > 0 ? ` Its conditions: ${options.join('; ')}.` : ''

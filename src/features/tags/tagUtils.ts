@@ -79,24 +79,38 @@ export const getAppliedPatientTags = (
     .map((tagId) => tagsById.get(tagId))
     .filter((tag): tag is TagDefinition => tag !== undefined)
 
-/** True if `tagId` is applied to the patient anywhere — the general tagIds pool, or either service tag slot. */
-export const patientHasTagAnywhere = (
-  patient: Pick<Patient, 'tagIds' | 'mainServiceTagIds' | 'referralServiceTagIds'>,
-  tagId: number,
-): boolean =>
-  (patient.tagIds ?? []).includes(tagId)
+/** The fields on a patient that can hold a tag reference. Ward and Service tags are stored outside
+ * the general `tagIds` pool, so any code that matches patients by tag must read all of them. */
+export type PatientTagFields = Pick<Patient, 'tagIds' | 'wardTagId' | 'mainServiceTagIds' | 'referralServiceTagIds'>
+
+/**
+ * THE way to ask "does this patient carry this tag?" — true if `tagId` is in the general `tagIds`
+ * pool, is the patient's `wardTagId`, or is in either service slot. Never test `patient.tagIds`
+ * directly for this: Ward and Service tags live outside it, so such a check silently matches
+ * nobody for any tag from those two Tag Groups (this is what broke ward grouping and the
+ * Service filter). The only legitimate direct `tagIds` reads are code that applies/removes
+ * *general* tags, whose pickers deliberately exclude Ward and Service.
+ */
+export const patientHasTagAnywhere = (patient: PatientTagFields, tagId: number): boolean =>
+  patient.wardTagId === tagId
+  || (patient.tagIds ?? []).includes(tagId)
   || (patient.mainServiceTagIds ?? []).includes(tagId)
   || (patient.referralServiceTagIds ?? []).includes(tagId)
 
-/** True if the patient carries `tagId` in ANY of the places a tag can live: the general `tagIds`
- * pool, the single `wardTagId` slot, or either service tag slot. Ward and Service tags are stored
- * outside `tagIds`, so anything that matches patients by tag (e.g. Tag Combo Grouping) must use
- * this rather than checking `tagIds` alone, or those tags never match anyone. */
-export const patientCarriesTag = (
-  patient: Pick<Patient, 'tagIds' | 'wardTagId' | 'mainServiceTagIds' | 'referralServiceTagIds'>,
-  tagId: number,
-): boolean =>
-  patient.wardTagId === tagId || patientHasTagAnywhere(patient, tagId)
+/** Every tag the patient carries across all four places (general, ward, main service, referral
+ * service) — unlike `getAppliedPatientTags`, which is general tags only. */
+export const getAllCarriedPatientTags = (
+  patient: PatientTagFields,
+  tagsById: Map<number, TagDefinition>,
+): TagDefinition[] => {
+  const ids = new Set<number>([
+    ...(patient.tagIds ?? []),
+    ...(patient.mainServiceTagIds ?? []),
+    ...(patient.referralServiceTagIds ?? []),
+    ...(patient.wardTagId !== undefined ? [patient.wardTagId] : []),
+  ])
+  return [...ids].map((id) => tagsById.get(id)).filter((tag): tag is TagDefinition => tag !== undefined)
+}
 
 /** A patient is active iff they have zero Terminal-flagged tags applied (point 6). */
 export const isPatientActive = (
